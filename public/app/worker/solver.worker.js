@@ -36,16 +36,34 @@ async function doWarmup() {
     pyodide = await loadPyodide({ indexURL: PYODIDE_BASE });
 
     progress('packages', 'Installing the spreadsheet engine…');
-    await pyodide.loadPackage('micropip');
     const origin = self.location.origin;
-    // deps=False (keyword — the 2nd positional is keep_going, not deps) installs
-    // both pure-Python wheels locally with no PyPI round-trip.
-    await pyodide.runPythonAsync(
-      'import micropip\n'
-      + 'await micropip.install([\n'
-      + `    "${origin}/pyodide/et_xmlfile-2.0.0-py3-none-any.whl",\n`
-      + `    "${origin}/pyodide/openpyxl-3.1.5-py2.py3-none-any.whl",\n`
-      + '], deps=False)\n',
+    const wheels = [
+      'et_xmlfile-2.0.0-py3-none-any.whl',
+      'openpyxl-3.1.5-py2.py3-none-any.whl',
+    ];
+    // Fetch each wheel ourselves and verify it's a real zip (starts with 'PK').
+    // This avoids micropip's URL downloader (which failed with an internal
+    // "attempted to install wheel before downloading it" error), and gives a
+    // clear message if the files somehow aren't deployed.
+    pyodide.FS.mkdirTree('/wheels');
+    for (const wname of wheels) {
+      const resp = await fetch(`${origin}/pyodide/${wname}`);
+      if (!resp.ok) throw new Error(`Could not download ${wname} (HTTP ${resp.status}).`);
+      const buf = new Uint8Array(await resp.arrayBuffer());
+      if (buf.length < 100 || buf[0] !== 0x50 || buf[1] !== 0x4b) {
+        throw new Error(`${wname} did not download correctly — the engine files may not be deployed.`);
+      }
+      pyodide.FS.writeFile(`/wheels/${wname}`, buf);
+    }
+    // A wheel is just a zip; these are pure-Python, so extracting them straight
+    // into site-packages makes them importable — no installer needed.
+    pyodide.runPython(
+      'import sys, zipfile\n'
+      + 'site = next((p for p in sys.path if "site-packages" in p), sys.path[-1])\n'
+      + 'for w in ["/wheels/et_xmlfile-2.0.0-py3-none-any.whl", "/wheels/openpyxl-3.1.5-py2.py3-none-any.whl"]:\n'
+      + '    with zipfile.ZipFile(w) as z:\n'
+      + '        z.extractall(site)\n'
+      + 'import openpyxl  # fail fast here if extraction did not work\n',
     );
 
     progress('solver', 'Loading the schedule builder…');
