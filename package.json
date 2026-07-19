@@ -1,0 +1,13 @@
+{
+  "name": "jajb-schedule-builder",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Web app that builds JAJB's weekly DSP driver schedule (Netlify + in-browser Pyodide solver).",
+  "scripts": {
+    "build": "node scripts/copy-solver.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}

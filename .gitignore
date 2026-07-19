@@ -1,0 +1,8 @@
+node_modules/
+.netlify/
+tests/fixtures/*.xlsx
+tests/fixtures/*.csv
+tests/fixtures/*.json
+__pycache__/
+*.pyc
+.DS_Store

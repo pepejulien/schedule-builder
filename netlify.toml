@@ -1,0 +1,45 @@
+# Netlify config for the DSP Weekly Schedule Builder.
+#
+# The frontend is build-free (plain ES modules under public/), so the only build
+# step copies the canonical solver into public/solver/. Netlify's cloud build
+# environment has Node, so this runs there even though the local machine has none.
+
+[build]
+  command = "node scripts/copy-solver.mjs"
+  publish = "public"
+  functions = "netlify/functions"
+
+[functions]
+  # Bundle the Pyodide/solver assets? No — functions are Node only. Blobs + Anthropic.
+  node_bundler = "esbuild"
+
+# Route /api/* to the Netlify Functions.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+# SPA fallback: every non-file route serves index.html.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Pyodide + WASM need permissive-enough headers; no COOP/COEP (single-threaded
+# Pyodide doesn't need SharedArrayBuffer, and COEP would block the Google Sheets
+# board fetch).
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[headers]]
+  for = "/pyodide/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/vendor/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
