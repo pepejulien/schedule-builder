@@ -54,7 +54,14 @@ export function setWizard(patch) {
 
 // Restore a saved draft (merged onto a fresh wizard so new fields exist).
 export function hydrateWizard(wizard) {
-  setState({ wizard: { ...freshWizard(), ...wizard } });
+  const merged = { ...freshWizard(), ...wizard };
+  // A 'building' status saved mid-build has no live engine after a page reload,
+  // so nothing would ever finish it — reset to 'idle' so the user sees the
+  // Build button instead of a frozen spinner.
+  if (merged.build && merged.build.status === 'building') {
+    merged.build = { status: 'idle', report: null, xlsx: null, error: null, savedName: null };
+  }
+  setState({ wizard: merged });
 }
 
 // Continue the current draft.

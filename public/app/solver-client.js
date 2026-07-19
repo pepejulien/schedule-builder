@@ -32,20 +32,44 @@ export function isReady() { return ready; }
 
 export function onProgress(cb) { progressCb = cb; }
 
+// Kill a stuck worker so the next attempt starts cleanly.
+function resetWorker() {
+  if (worker) { try { worker.terminate(); } catch { /* ignore */ } }
+  worker = null;
+  ready = false;
+  readyWaiters = [];
+}
+
+const LOAD_TIMEOUT_MS = 120000; // 2 min — generous for a slow first load
+
 // files: { availBytes:ArrayBuffer, prevBytes:ArrayBuffer|null, prefsText:string|null, configJson:string }
 export function build(files, onProgress) {
   const w = ensureWorker();
   if (onProgress) progressCb = onProgress;
   w.postMessage({ type: 'warmup' }); // no-op if already warming/ready
   return new Promise((resolve) => {
+    let done = false;
+    let timer;
+    const finish = (msg) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      w.removeEventListener('message', handler);
+      resolve(msg);
+    };
     const handler = (e) => {
-      const msg = e.data || {};
-      if (msg.type === 'result') {
-        w.removeEventListener('message', handler);
-        resolve(msg);
-      }
+      if (e.data && e.data.type === 'result') finish(e.data);
     };
     w.addEventListener('message', handler);
+    // Safeguard: if the engine never loads (slow/blocked network), don't spin
+    // forever — give up and surface a clear, actionable error.
+    timer = setTimeout(() => {
+      resetWorker();
+      finish({ ok: false, error: { kind: 'runtime',
+        message: 'The in-browser engine took too long to load (over 2 minutes). '
+          + 'This is almost always a slow or blocked internet connection. '
+          + 'Try again, use Chrome or Edge, or switch to a different network (some work/school networks block it).' } });
+    }, LOAD_TIMEOUT_MS);
     w.postMessage({ type: 'build', files });
   });
 }
