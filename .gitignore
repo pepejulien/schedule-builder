@@ -3,6 +3,11 @@ node_modules/
 tests/fixtures/*.xlsx
 tests/fixtures/*.csv
 tests/fixtures/*.json
+# Real schedule / roster files at the repo root contain employee names + IDs —
+# never commit them (they'd end up in your GitHub source).
+/*.xlsx
+/*.csv
 __pycache__/
 *.pyc
 .DS_Store
+_parsetest.mjs
