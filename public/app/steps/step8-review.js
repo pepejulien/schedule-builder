@@ -1,6 +1,6 @@
 import { html } from '../preact-setup.js';
 import { useState } from 'preact/hooks';
-import { useStore, setWizard } from '../store.js';
+import { useStore } from '../store.js';
 import { StepNav } from '../app.js';
 import { Banner } from '../ui.js';
 import { assembleFromWizard } from '../build-inputs.js';
@@ -16,8 +16,6 @@ export function Step8Review() {
   const opDays = DAYS.filter((d) => config.waves[d]);
   const routeTotal = capacity.routeTotal;
   const canBuild = nameProblems.length === 0 && opDays.length > 0;
-
-  const raise = () => setWizard((w) => ({ advanced: { ...w.advanced, free_primary_cap: 4 } }));
 
   return html`
     <div class="card">
@@ -65,10 +63,7 @@ export function Step8Review() {
       ${config.exclude.length ? html`<p class="muted">Excluded from the sheet: ${config.exclude.join(', ')}</p>` : ''}
 
       <h3>Capacity check</h3>
-      <${Banner} kind=${capacity.ok ? 'ok' : 'warn'}>
-        ${capacity.message}
-        ${!capacity.ok ? html`<div style="margin-top:8px"><button class="small" onClick=${raise}>Raise free-pool cap to 4</button></div>` : ''}
-      <//>
+      <${Banner} kind=${capacity.ok ? 'ok' : 'warn'}>${capacity.message}<//>
       ${!config.prev_week_file ? html`<${Banner} kind="warn">Building without a prior week — the consecutive-day rule
         won't span the week boundary.<//>` : ''}
 

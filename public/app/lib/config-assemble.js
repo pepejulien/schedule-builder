@@ -158,7 +158,7 @@ export function assembleConfig(state) {
     max_consecutive: adv.max_consecutive ?? 5,
     primary_hours: adv.primary_hours ?? 10,
     backup_hours: adv.backup_hours ?? 2,
-    free_primary_cap: adv.free_primary_cap ?? 3,
+    free_primary_cap: adv.free_primary_cap ?? 4,
     max_primary_days: adv.max_primary_days ?? 4,
     weekly_hours_cap: adv.weekly_hours_cap ?? 40,
     max_total_days: adv.max_total_days ?? 5,
@@ -218,20 +218,23 @@ export function capacityCheck(config, rosterNames) {
   const reduced = new Set(config.reduced_days.names);
   const exact = config.exact_days;
 
+  const roadCap = config.max_primary_days || 4;
+  // Max road-days each group can supply: Top/Solid & Fair up to the road cap (4),
+  // discipline up to its target (2), explicit exacts at their value.
   let fixedRoad = 0;
-  for (const n of most) fixedRoad += config.max_primary_days || 4;
+  for (const n of most) fixedRoad += roadCap;
   for (const n of reduced) fixedRoad += config.reduced_days.target || 2;
   for (const [n, v] of Object.entries(exact)) fixedRoad += v;
 
   const assigned = new Set([...most, ...reduced, ...Object.keys(exact), ...exclude]);
   const freeCount = rosterNames.filter((n) => !assigned.has(n)).length;
-  const freeMin = freeCount * 2;
-  const freeMax = freeCount * (config.free_primary_cap || 3);
+  const freeMin = freeCount * 2;       // Fair target is 3, but 2 in a tight week
+  const freeMax = freeCount * roadCap; // Fair can reach 4 when volume is high
 
   const reachable = fixedRoad + freeMax;
   const ok = reachable >= routeTotal;
   const message = ok
-    ? `Fixed groups cover ${fixedRoad} road-days; the free pool (${freeCount} drivers) can add ${freeMin}–${freeMax}. Week needs ${routeTotal} routes.`
-    : `The fixed groups + free pool can reach at most ${reachable} road-days but the week needs ${routeTotal}. Consider raising the free-pool cap to 4.`;
+    ? `Top/Solid + Fair + discipline can supply up to ${reachable} road-days (Fair aims for 3). The week needs ${routeTotal} routes.`
+    : `Even at full capacity the fleet can reach only ${reachable} road-days but the week needs ${routeTotal} — there aren't enough available drivers.`;
   return { routeTotal, fixedRoad, freeMin, freeMax, freeCount, ok, message };
 }

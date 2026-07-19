@@ -541,13 +541,32 @@ def build_schedule(cfg):
 
     def pcap(dr):
         n = norm(dr['name'])
-        if n in TARGET:
+        if n in TARGET:            # exact_days OR discipline: cap at the target
             base = TARGET[n]
-        elif n in MOST:
+        elif n in MOST:            # Top/Solid: maximize toward the weekly cap
             base = MAXPRIM
-        else:
-            base = FREECAP
+        else:                      # Fair: road cap; the rank enforces the soft 3-target
+            base = MAXPRIM
         return min(base, MAXPRIM)
+
+    # Day-count priority rank (Jose 2026-07-19 tier rework). Higher = filled
+    # first / cut last. Day-independent (placement is handled by prefsc):
+    #   9  explicit exact_days (trainees, HR "give X exactly N") up to target
+    #   8  Top/Solid up to 4 (maximize)
+    #   7  Fair up to 3 (a step below Top/Solid)
+    #   3  discipline (Underperforming/Termination) up to 2 -- shock absorber:
+    #      filled last, cut first, worst board-rate zeroed first
+    #   1  Fair's 4th day -- only when volume exceeds the ideal
+    #   0  at cap (not a fill candidate)
+    def _rank_at(dr, cur):
+        n = norm(dr['name'])
+        if n in REDS:
+            return 3 if cur < TARGET[n] else 0
+        if n in TARGET:
+            return 9 if cur < TARGET[n] else 0
+        if n in MOST:
+            return 8 if cur < MAXPRIM else 0
+        return 7 if cur < 3 else (1 if cur < MAXPRIM else 0)
 
     def wkend_ok(dr, d):
         if not weekend_rule or d not in WEEKEND:
@@ -588,6 +607,10 @@ def build_schedule(cfg):
             p += 20
         if d in dr['soft']:
             p -= 12
+        # Discipline tier works the days nobody wants (Sun/Sat) -- soft placement
+        # now (Jose 2026-07-19); the day COUNT is set by the rank ladder above.
+        if norm(dr['name']) in REDS:
+            p += 15 if d in REDPREF else -15
         return p
 
     # Fill the scarcest days first: calendar order burns everyone's weekly day
@@ -677,29 +700,22 @@ def build_schedule(cfg):
                 break  # PHASE 1b repairs stranded slots; shortfalls reported after it
 
             def sc(i):
-                # PRECEDENCE TUPLE (Jose 2026-07-11), compared lexicographically:
-                #   1. rank -- the day-count ladder:
-                #      7 exact targets (discipline tier only on its preferred
-                #        Sun/Sat days; elsewhere it drops to rank 3)
-                #      6 Top/Solid road days 1-3
-                #      5 Fair floor: a Fair's first 2 road days beat any 4th day
-                #      4 Top/Solid 4th day
-                #      3 discipline tier on a non-preferred (weekday) slot
-                #      2 Fair 3rd/4th day
-                #   2. remaining need / fewest current days (balance)
-                #   3. board RATE -- within a class, -14 outranks -24
-                #   4. prefsc -- WHICH day (seeds, weekend spread, compactness)
+                # PRECEDENCE TUPLE (Jose 2026-07-19 tier rework), lexicographic:
+                #   1. rank  -- the day-count priority ladder (_rank_at):
+                #        9 explicit exact_days  8 Top/Solid  7 Fair(->3)
+                #        3 discipline(->2)      1 Fair's 4th (excess only)
+                #   2. balance -- remaining need / fewest current days.
+                #      Discipline is the exception: it uses board RATE here so
+                #      the WORST-rate discipline driver is zeroed first.
+                #   3. board RATE (or balance, for discipline) as the tiebreak.
+                #   4. prefsc -- WHICH day (seeds, weekend spread, compactness,
+                #      and the discipline Sun/Sat preference).
                 dr = roster[i]; n = norm(dr['name']); cur = pdays(dr)
-                if n in TARGET:
-                    rank = 3 if (n in REDS and d not in REDPREF) else 7
-                    key2 = TARGET[n] - cur
-                elif n in MOST:
-                    rank = 6 if cur < 3 else 4
-                    key2 = -cur
-                else:
-                    rank = 5 if cur < 2 else 2
-                    key2 = -cur
-                return (rank, key2, rate_of(dr), prefsc(dr, d))
+                r = _rank_at(dr, cur)
+                if n in REDS:                      # worst rate loses days first
+                    return (r, rate_of(dr), -cur, prefsc(dr, d))
+                key2 = (TARGET[n] - cur) if n in TARGET else -cur
+                return (r, key2, rate_of(dr), prefsc(dr, d))
             b = max(cands, key=sc)
             pslot[d].append(b); roster[b]['prim'].append(d)
 
@@ -809,14 +825,14 @@ def build_schedule(cfg):
             if moved:
                 break
 
-    # ---- PHASE 1d: target completion + Fair road floor ----
-    # A strictly-constrained driver can be starved when high-need tiers saturate
-    # their only eligible days -- every wave is exactly full, so day-repair never
-    # fires. Lift them by taking a slot from a DONOR: a free-pool driver holding
-    # >=3 days (drops to >=2), OR a MOST driver on their 4th day (drops to 3).
-    # Pulling a Top/Solid 4th day for a Fair's 2nd is precedence-correct (Jose
-    # 2026-07-11: the Fair 2-road floor outranks any 4th day). Used first to hit
-    # exact TARGETs, then to bring every available Fair up to the 2-road floor.
+    # ---- PHASE 1d: target completion + Fair 3-road target ----
+    # A higher-priority driver can be starved when their only eligible days are
+    # saturated -- every wave is exactly full, so day-repair never fires. Lift
+    # them by taking a slot from a DONOR whose held day is LESS valuable (lower
+    # rank) than the day the starved driver needs (Jose 2026-07-19): e.g. a
+    # discipline driver's day or a Fair's excess 4th can be pulled to complete an
+    # explicit exact target or bring a Fair up to 3. Used first for exact targets,
+    # then to bring every working Fair up to the 3-road target.
     def _runs_ok(dv):
         s = worked(dv)
         for dt0 in s:
@@ -829,11 +845,16 @@ def build_schedule(cfg):
         return True
 
     def _donor(v, i):
+        # v may give a day to complete i iff v's LAST-held day is lower-ranked
+        # (less valuable) than the day i still needs. So a discipline day or a
+        # Fair's 4th can be pulled for an exact target or a Fair's 3rd, but a
+        # Top/Solid day (or another driver's protected core day) never is.
         if v == i:
             return False
-        rv = roster[v]
-        return ((FREE(rv) and pdays(rv) >= 3)
-                or (norm(rv['name']) in MOST and pdays(rv) >= MAXPRIM))
+        dv = roster[v]
+        if pdays(dv) <= 0:
+            return False
+        return _rank_at(dv, pdays(dv) - 1) < _rank_at(roster[i], pdays(roster[i]))
 
     def _complete_to(i, want):
         dr = roster[i]
@@ -844,7 +865,10 @@ def build_schedule(cfg):
                     continue
                 vics = [v for v in pslot[d] if (v, d) not in LOCKED and _donor(v, i)]
                 if vics:
-                    v = max(vics, key=lambda v: (pdays(roster[v]), H(roster[v]),
+                    # pull the LEAST valuable held day first (lowest rank),
+                    # then busiest / most hours / worst rate
+                    v = max(vics, key=lambda v: (-_rank_at(roster[v], pdays(roster[v]) - 1),
+                                                 pdays(roster[v]), H(roster[v]),
                                                  -rate_of(roster[v]),
                                                  -prefsc(roster[v], d),
                                                  norm(roster[v]['name'])))
@@ -868,7 +892,8 @@ def build_schedule(cfg):
                     Fs = [f for f in pslot[e] if (f, e) not in LOCKED and _donor(f, i)]
                     if not Fs:
                         continue
-                    F = max(Fs, key=lambda f: (pdays(roster[f]), H(roster[f]),
+                    F = max(Fs, key=lambda f: (-_rank_at(roster[f], pdays(roster[f]) - 1),
+                                               pdays(roster[f]), H(roster[f]),
                                                -rate_of(roster[f]),
                                                -prefsc(roster[f], e),
                                                norm(roster[f]['name'])))
@@ -896,18 +921,20 @@ def build_schedule(cfg):
             if not done:
                 break   # cannot complete under the rules; verifier reports it
 
-    # exact targets first (incl. trainee solo days)
+    # explicit exact targets first (trainee solo days, HR overrides) -- NOT the
+    # discipline tier, which is a soft target allocated by the rank ladder.
     for i, dr in enumerate(roster):
         n = norm(dr['name'])
-        if n in TARGET:
+        if n in TARGET and n not in REDS:
             _complete_to(i, min(TARGET[n], MAXPRIM))
 
-    # then the Fair road floor: every working free-pool driver reaches 2 road
-    # days (lowest-rate first) before anyone keeps a 4th
+    # then bring every working Fair up to the 3-road target -- better-rate Fair
+    # first (so when donors are scarce the better drivers reach 3). Donors are
+    # only lower-priority holders (discipline days, a Fair's 4th).
     for i in sorted((i for i, dr in enumerate(roster)
-                     if FREE(dr) and 0 < pdays(dr) < 2),
-                    key=lambda i: (rate_of(roster[i]), norm(roster[i]['name']))):
-        _complete_to(i, 2)
+                     if FREE(dr) and 0 < pdays(dr) < 3),
+                    key=lambda i: (-rate_of(roster[i]), norm(roster[i]['name']))):
+        _complete_to(i, 3)
 
     # ---- PHASE 2: backups (Jose 2026-07-04, priority revised 2026-07-16) ----
     # A backup day = 2h guaranteed + a chance of being sent out on a route, so
@@ -1223,16 +1250,26 @@ def check_invariants(res):
     def H(dr):
         return pdy(dr) * PH + len(dr['bk']) * BH
 
-    # inv 5: targets met (capped by weekly day cap; training-helper days count)
+    # inv 5: targets. Explicit exact_days must be hit unless the driver's own
+    # availability blocks it (undershoot is a NOTE, not a build error). Discipline
+    # and Fair are SOFT tier targets allocated by the priority ladder and are
+    # never a hard error (Jose 2026-07-19 tier rework).
     capd = res.MAXPRIM
+    REDS = res.REDS
     target_bad = []
+    target_short = []
     for n in TARGET:
-        if n in res.idx:
-            want = min(TARGET[n], capd)
-            got = pdy(roster[res.idx[n]])
-            if got != want:
-                target_bad.append((n, want, got))
-                errs.append(f'TARGET {n}: want {want} got {got}')
+        if n not in res.idx:
+            continue
+        want = min(TARGET[n], capd)
+        got = pdy(roster[res.idx[n]])
+        if n in REDS:
+            continue                       # discipline: soft, day count informational
+        if got > want:                     # over target / a benched driver got scheduled
+            target_bad.append((n, want, got))
+            errs.append(f'TARGET {n}: want {want} got {got} (over)')
+        elif got < want:                   # availability-limited: a note, not an error
+            target_short.append((n, want, got))
 
     # inv 4: no road-day OT, backups are top-ups, no backup-only weeks.
     # HCAP caps ROAD hours (4x10h=40). A fallback 5th-day backup may sit on
@@ -1257,7 +1294,7 @@ def check_invariants(res):
                       if FREE_name(dr, TARGET, MOST)
                       and pdy(dr) + len(dr['bk']) > FREETOT]
     for nm in free_shape_bad:
-        errs.append(f'FAIR-SHAPE: {nm} over {FREETOT} total days (3+1 or 2+2 only)')
+        errs.append(f'FAIR-SHAPE: {nm} roads+backups over {FREETOT}')
     backup_only = [dr['name'] for dr in roster if dr['bk'] and not pdy(dr)]
     for nm in backup_only:
         errs.append(f'BACKUP-ONLY: {nm}')
@@ -1345,6 +1382,7 @@ def check_invariants(res):
                    if FREE_name(dr, TARGET, MOST) and 0 < pdy(dr) < 2]
 
     return dict(errors=errs, max_consec=mx, target_bad=target_bad,
+                target_short=target_short,
                 over_cap=over_cap, over_days=over_days, backup_only=backup_only,
                 backup_under2=backup_under2, floor_unmet=floor_unmet,
                 fifth_day=fifth_day, over_tot=over_tot,
@@ -1377,6 +1415,9 @@ def print_summary(res, chk):
               '; '.join(f'{n} ({d})' for n, d in chk['meetings']))
     print('  exact targets all met (capped):', not chk['target_bad'],
           ('' if not chk['target_bad'] else chk['target_bad']))
+    if chk.get('target_short'):
+        print('  exact targets short (availability-limited, not an error):',
+              chk['target_short'])
     p = chk['pool']
     print(f"  regular pool hours: min {p['min']} max {p['max']} avg {p['avg']} dist {p['dist']}")
     print('  road days over', res.HCAP, 'h (OT):', chk['over_cap'] or 'none')

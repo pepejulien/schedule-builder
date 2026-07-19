@@ -10,7 +10,7 @@ who works which day and wave, plus backups, honoring availability, the consecuti
 law, and Jose's per-driver day targets. Output is a `Shifts & Availability` xlsx in the
 same shape as the inputs (ready to enter into the system) + a `By Day` sheet.
 
-## RULE PRECEDENCE (canonical, Jose 2026-07-11 — when rules collide, higher wins)
+## RULE PRECEDENCE (canonical, Jose 2026-07-19 tier rework — when rules collide, higher wins)
 
 1. **Hard rules** — never violated, the build fails instead: submitted
    `Unavailable` + standing days off · meeting cells (do-not-touch) · max 5
@@ -18,25 +18,29 @@ same shape as the inputs (ready to enter into the system) + a `By Day` sheet.
    hours (sole exception: the 5th-day fallback backup, 42h) · 5 total worked
    days · backups only on >=2 road days, no backup-only weeks · training-pair
    mechanics (back-to-back, same trainer, solo AFTER training) · exclusions.
-2. **Jose's named per-week overrides** ("give X 2 days") — beat every tier
-   rule, but **die with the week**: every build starts from fresh board tiers
-   and Jose restates anything he still wants.
-3. **Exact quotas**: discipline tier 2 days (**preferring Sun+Sat** — see
-   below) · new hires 3 (2 training + 1 solo) · benched/all-unavailable 0.
-4. **Top/Solid road days 1–3.**
-5. **Fair ROAD floor: every available Fair gets 2 road days** before any
-   driver gets a 4th. (The tier ladder is also an hours ladder — a Fair must
-   never end below the discipline tier; when demand shrinks, the top degrades
-   gracefully: Top/Solid drop to 3+backup before Fair drops below 2, and the
-   discipline tier drops to 1 first.)
-6. **Top/Solid 4th day.**
-7. **Discipline tier on a weekday** — only when Sun/Sat can't hold them.
-8. **Fair 3rd/4th day** (shapes 3+1 / 2+2).
-9. **Within a same-priority group, the better board RATE gets more hours**
-   (a -14 always outranks a -24, even in the same tier). Config `driver_rates`.
-10. **Soft placement** (which days, never how many): Jose's pre-made days →
-    weekend spread (~1 weekend day) → **compactness** (prefer days adjacent
-    to already-assigned days — no Sun-Tue-Thu-Sat zigzags) → usual days.
+2. **Jose's named per-week overrides** ("give X exactly 2 days") — beat every
+   tier rule, but **die with the week**: every build starts from fresh board
+   tiers and Jose restates anything he still wants. These are `exact_days`.
+3. **The tier day-count ladder (SOFT targets — an availability-limited
+   undershoot is reported, never a build error).** Higher = filled first,
+   cut last:
+   - **Explicit `exact_days`** (trainees 3, benched 0, Jose overrides) — respected first.
+   - **Top/Solid → maximize toward 4 road days.** Protected; the last to lose days.
+   - **Fair → 3 road days**, a step below Top/Solid. May reach **4** when route
+     volume exceeds the ideal (before any extra backups are handed out).
+   - **Underperforming + Termination review → 2 road days**, the shock absorber:
+     filled only after Top/Solid and Fair, the **first to lose days**, all the
+     way down to **0**, and cut **worst board-rate first** across both discipline
+     tiers together (a −55 loses days before a −10).
+   So when routes are tight the cut order is: Fair's bonus 4th → the discipline
+   tier (worst rate first) → Fair's 3rd → Top/Solid's 4th. When routes are
+   plentiful the fill order is: everyone to their target, then Fair to 4.
+4. **Within a tier, the better board RATE gets more hours** (a -14 outranks a
+   -24). For the discipline tier this is the primary cut order. Config `driver_rates`.
+5. **Soft placement** (which days, never how many): Jose's pre-made days →
+   weekend spread (~1 weekend day) → **compactness** (prefer days adjacent
+   to already-assigned days — no Sun-Tue-Thu-Sat zigzags) → usual days →
+   the discipline tier's Sun/Sat preference (the days nobody wants).
 
 **Tier overlaps are never resolved silently:** if a driver matches two
 day-count categories (e.g. Top performer AND <5 routes), list every such name
@@ -147,34 +151,38 @@ function** in-page — **NEVER scrape the rendered Fleet-ranking table**:
 > invites substring name collisions. The in-page function call has none of
 > these failure modes and always matches the badges Jose sees.
 
-## Tier-based day targets (standing method since Week 28, Jose 2026-07-03)
+## Tier-based day targets (priority ladder, Jose 2026-07-19)
 
-The board rows carry Tier / Driver / Routes (30d). Map tiers to config groups:
+The board rows carry Tier / Driver / Routes (30d). The tiers form a **priority
+ladder with SOFT targets** — the solver fills toward each target, and when
+routes are tight it cuts from the bottom up (never a build error). Map tiers to
+config groups:
 
-- **Top performer + Solid** -> 4 road days (40h) -> `most_days` (not `exact_days`,
-  so a driver whose own availability blocks a day is reported, not an error).
+- **Top performer + Solid** -> **maximize toward 4 road days** -> `most_days`.
+  Protected — the last tier to lose days when volume is tight.
+- **Fair** -> **3 road days**, a step below Top/Solid -> the **free pool**
+  (leave them out of `most_days`/`reduced_days`). Fair may reach **4** when route
+  volume exceeds the ideal (before extra backups are handed out). Fair is well
+  above the discipline tier and always ends with at least as many days as it.
+- **Underperforming + Termination review** -> **2 road days** -> `reduced_days`
+  target 2. This is the **shock absorber**: filled only after Top/Solid and Fair,
+  the **first to lose days**, down to **0**, and cut **worst board-rate first**
+  across both discipline tiers together. Still prefers Sun/Sat (`prefer_days`),
+  and still gets backups only as the LAST resort of the `backup_fallback` ladder
+  (leave `backup_eligible_extra` empty).
 - **<5 routes in the last 30 days** (from the board's Routes column) -> 30h ->
-  `exact_days: 3`. Applies to Top/Solid/Fair/unrated; a discipline cap below
-  still wins (an Underperforming driver with <5 routes stays at 2).
+  `exact_days: 3` (an explicit override; respected first). A discipline cap
+  below still wins (an Underperforming driver with <5 routes stays discipline).
   **Overlap = ask Jose (2026-07-11):** any driver matching two categories
   (e.g. Top performer AND <5 routes) is listed by name and Jose rules per
   driver before the build — never resolved silently.
-- **Fair** -> the shapes are **3 roads + up to 1 backup, or 2 roads + up to
-  2 backups** — total ≤ 4 worked days (`free_total_days`), never 3+2 and never
-  backups alone. Leave them in the **free pool** with `free_primary_cap` 3
-  (raise to 4 only if the fixed groups can't cover the route total). A Fair on
-  2 road days gets a **1st backup guaranteed** (22h); the **2nd backup ranks
-  below a 3-day Top/Solid's first backup** (revised 2026-07-16 — see the backup
-  priority under "The rules the builder enforces"). The verification block
-  flags any 2-road Fair left with no backup at all.
-- **Underperforming + Termination review** -> exactly 2 road days ->
-  `reduced_days` target 2, and **no backups except as the LAST resort** of the
-  fallback ladder (Jose 2026-07-04: a backup day carries a chance of being
-  sent on a route, and he does not want this tier's route exposure to grow).
-  Leave `backup_eligible_extra` empty; put them in the last `backup_fallback`
-  group instead (see below).
 - **Not on the board** (brand-new drivers) -> ask Jose; default 3 days (`exact_days`).
 - **Do-not-schedule names** -> `exact_days: 0` (kept on the sheet, no shifts).
+
+Degradation is automatic: when the week's routes can't cover every target, days
+come off the discipline tier first (worst rate first, to 0), then Fair's bonus
+4th, before Top/Solid or Fair's core are touched. When routes exceed the ideal,
+the extra road days go to Fair (3 -> 4).
 
 Sanity-check capacity before running: fixed-group route-days vs the week's route
 total — the free pool absorbs the difference, so make sure its min/max range can.
@@ -254,7 +262,8 @@ the exclude list is now just Zackary McDonald, Rachel Rhoades, Greyson Turner.
      Top/Solid has one. With abundant backups everyone is served; when scarce, the
      Fair's 2nd is what gets dropped.
   4. Everyone else eligible, lowest-hours first.
-  Fair shapes stay capped at 3+1 / 2+2 (`free_total_days: 4`); a 3-day Top/Solid
+  A Fair's roads+backups stay capped at 4 (`free_total_days: 4`) — so 3 roads +
+  1 backup, or (in a high-volume week) 4 roads + 0 backups; a 3-day Top/Solid
   takes at most 1 backup. **When this pool can't fill a day**, the `backup_fallback`
   ladder runs: **Top performers** (a 5th day = 42h, ~2h OT), then **Solid**, then
   **Underperforming / Termination review** as the LAST resort. **Nobody exceeds 5
@@ -303,7 +312,7 @@ the exclude list is now just Zackary McDonald, Rachel Rhoades, Greyson Turner.
                    "prefer_days": ["Sun","Sat"]},  // discipline tier lands here first (default Sun+Sat)
   "most_days": ["Daniel Lynch", "Cara Amos", "Matthew Dutton"],
   "max_total_days": 5,     // hard cap: roads + backups, everyone
-  "free_total_days": 4,    // free pool (Fair): 3+1 or 2+2 shapes only
+  "free_total_days": 4,    // free pool (Fair): roads+backups <= 4 (e.g. 3+1 or 4+0)
   "driver_rates": {"Cara Amos": -3.2},  // board Rate per driver (closer to 0 = better) -> within-tier hours order
   "use_premade_shifts": true,  // honor pre-filled shift days in avail_file as seeds
   "weekend_spread": true,      // soft: ~1 weekend day per driver when Sat+Sun both open
