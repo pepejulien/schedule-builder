@@ -1156,6 +1156,36 @@ def write_xlsx(res):
             elif ty == 'b':
                 c.fill = bk
     ws2.freeze_panes = 'B4'
+
+    # Training -- one row per trainer/trainee pair this week. Day 1 is the day
+    # the trainer drives (trainee rides along); Day 2 is the day the trainee
+    # drives solo with the trainer supporting. Source: res.PAIRLOG.
+    ws3 = wb.create_sheet('Training')
+    ws3.cell(1, 1, asciize(
+        f"{cfg.get('week_label', 'Week')} - {cfg.get('station', 'WWV9')} - Training pairs"
+    )).font = Font(bold=True, size=13)
+    heads = ['Trainer', 'Trainer ID', 'Trainee', 'Trainee ID',
+             'Day 1 - trainer drives', 'Day 2 - trainee drives']
+    for j, h in enumerate(heads, 1):
+        c = ws3.cell(3, j, asciize(h))
+        c.font = white; c.fill = hf; c.alignment = ctr; c.border = bd
+    tid_of = {dr['name']: dr['tid'] for dr in roster}
+    if res.PAIRLOG:
+        for k, (tnm, nnm, dA, dB) in enumerate(sorted(res.PAIRLOG)):
+            vals = [tnm, tid_of.get(tnm, ''), nnm, tid_of.get(nnm, ''),
+                    f"{dA} {DATEALL[dA].strftime('%d/%b')}" if dA in DATEALL else dA,
+                    f"{dB} {DATEALL[dB].strftime('%d/%b')}" if dB in DATEALL else dB]
+            for j, v in enumerate(vals, 1):
+                c = ws3.cell(4 + k, j, asciize(v)); c.border = bd
+                if j >= 5:
+                    c.alignment = ctr
+    else:
+        ws3.cell(4, 1, 'No training pairs scheduled this week.').font = \
+            Font(italic=True, color='808080')
+    for j, w in enumerate([24, 17, 24, 17, 22, 22]):
+        ws3.column_dimensions[chr(ord('A') + j)].width = w
+    ws3.freeze_panes = 'A4'
+
     wb.save(cfg['out'])
     print('Saved', cfg['out'])
 
