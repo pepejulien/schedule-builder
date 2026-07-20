@@ -960,27 +960,28 @@ def build_schedule(cfg):
     _rebalance()
 
     # ---- PHASE 2: backups -- fill the requested per-day count in priority order
-    # (Jose 2026-07-19, revised x2). The count HR sets (backup_per_day /
-    # backup_pct) is the fill TARGET. Slots are filled globally, one priority
-    # tier at a time:
+    # (Jose 2026-07-19, revised x3). The count HR sets (backup_per_day /
+    # backup_pct) is the fill TARGET and coverage matters: slots are filled
+    # globally, one priority tier at a time, down to a true last resort:
     #   tier 1: Top/Solid stuck at 3 road days -> backup (3 road + 1 bk = 32h),
     #           best board-rate first. Served before any Fair, so they stay ahead.
     #   tier 2: then Fair at 2-3 road days -> backup, inside their 4-total cap.
     #           Fewest road days first (lift bare 20h weeks), then best rate.
-    #           PAY-ORDER GATE (Jose 2026-07-19): while ANY Top/Solid-at-3
-    #           could not be given a backup (30h), a 3-road Fair may NOT take
-    #           one -- 32h would out-earn the Top. A 2-road Fair (->22h) still
-    #           may; they stay below every Top/Solid.
-    #   tier 3: leftover slots go to a Top/Solid at 4 road days taking a 5th
-    #           day (4 road + 1 bk = 42h, ~2h OT), best rate first -- the last
-    #           resort so the requested count is still met. Fair never take a
-    #           5th day; discipline never take a backup at all.
+    #           PAY-ORDER GATE: while ANY Top/Solid-at-3 could not be given a
+    #           backup (30h), a 3-road Fair may NOT take one -- 32h would
+    #           out-earn the Top. A 2-road Fair (->22h) still may.
+    #   tier 3: Top/Solid at 4 road days take a 5th day (4 road + 1 bk = 42h,
+    #           ~2h OT), best rate first -- but ONLY when nobody (Top or Fair)
+    #           still sits at 3 road days or less without a backup: never a
+    #           5-day Top/Solid while a Fair holds 3 days (Jose 2026-07-19).
+    #           Fair never take a 5th day.
+    #   tier 4: LAST RESORT -- the discipline tier covers whatever remains
+    #           (backup spots must be covered), best rate first, >=2 road days
+    #           only (the standing backup rule).
     # backup_eligible_extra (BKX) names join tier 1. One backup each; nobody
-    # exceeds max_total_days (5). Each tier fills greedily, then an
-    # AUGMENTING-PATH repair reassigns slot days so no tier member is stranded
-    # by another member taking their only feasible day (same technique as the
-    # Phase 1b road repair; without it, a better-rate Top could grab the slot
-    # day a colleague needed, and the leftover days fell through to Fair).
+    # exceeds max_total_days (5). Each tier is a matroid-greedy matching (see
+    # below) so under scarcity the better rate always wins and nobody is
+    # stranded by a colleague taking their only feasible day.
     bslot = {d: [] for d in DAYS}
 
     def _bk_common(i, dr, d, dt):
@@ -996,7 +997,10 @@ def build_schedule(cfg):
                 and tot < (FREETOT if FREE(dr) else MAXTOT):
             return 1                         # named per-week exception joins tier 1
         if n in REDS:
-            return None                      # discipline: never (unless named in BKX)
+            # discipline: LAST resort only (Jose 2026-07-19: backup spots must
+            # be covered -- when nobody else can, they do, best rate first).
+            # Still never below 2 road days (the >=2-roads backup rule).
+            return 4 if pdays(dr) >= 2 else None
         if n in MOST and pdays(dr) == 3:
             return 1                         # Top/Solid stuck at 3 -> 32h
         if FREE(dr) and 2 <= pdays(dr) <= 3 and tot < FREETOT:
@@ -1006,6 +1010,7 @@ def build_schedule(cfg):
         return None
 
     top3_short = []                          # tier-1 members left unserved (pay-order gate)
+    low_unserved = False                     # anyone below 4 roads still without a backup
 
     def _bk_elig(i, tier):
         dr = roster[i]
@@ -1013,6 +1018,11 @@ def build_schedule(cfg):
             return False
         if tier == 2 and top3_short and pdays(dr) >= 3:
             return False                     # gate: a 32h Fair would out-earn a 30h Top
+        if tier == 3 and low_unserved:
+            # Jose 2026-07-19: NEVER a 5-day Top/Solid while anyone -- Top or
+            # Fair -- still sits at 3 days or less without a backup. A 5th day
+            # is only handed out when everyone below 4 road days is served.
+            return False
         return True
 
     def _bk_order(i):
@@ -1068,15 +1078,27 @@ def build_schedule(cfg):
     # a better board-rate always beats a worse one for the last slot, and a
     # bare-20h 2-road Fair beats a 3-road Fair. It is also maximum-size --
     # nobody servable is left stranded by a colleague's day choice.
-    for tier in (1, 2, 3):
+    for tier in (1, 2, 3, 4):
         if tier == 2:                        # tier 1 is final now -- fix the gate
             top3_short = [i for i, dr in enumerate(roster)
                           if _bk_tier(dr) == 1 and not dr['bk']]
+        if tier == 3:                        # tiers 1+2 final -- fix the 5th-day gate
+            low_unserved = any(_bk_tier(dr) in (1, 2) and not dr['bk']
+                               for dr in roster)
         for i in sorted((i for i in range(len(roster)) if _bk_elig(i, tier)),
                         key=_bk_order):
             if _bk_filled() >= total_slots:
                 break
             _bk_augment(i, set())
+
+    # last-resort coverage is worth a line of its own in the report
+    disc_lr = sorted((dr['name'], d) for dr in roster
+                     if norm(dr['name']) in REDS and norm(dr['name']) not in BKX
+                     for d in dr['bk'])
+    if disc_lr:
+        notes.append(f'BACKUPS last resort: {len(disc_lr)} slot(s) covered by the '
+                     f'Underperforming/Termination tier (best rate first): '
+                     + ', '.join(f'{n} ({d})' for n, d in disc_lr))
 
     fallback_used = []   # legacy config ladder -- no longer drives the fill;
     #                      42h fifth-days are reported via the verifier instead
@@ -1548,7 +1570,7 @@ def print_summary(res, chk):
         print('  exact targets short (availability-limited, not an error):',
               chk['target_short'])
     p = chk['pool']
-    print(f"  regular pool hours: min {p['min']} max {p['max']} avg {p['avg']} dist {p['dist']}")
+    print(f"  Fair-driver hours: min {p['min']} max {p['max']} avg {p['avg']} dist {p['dist']}")
     print('  road days over', res.HCAP, 'h (OT):', chk['over_cap'] or 'none')
     print('  backup-only weeks:', chk['backup_only'] or 'none')
     print('  backups under 2 primary:', chk['backup_under2'] or 'none')

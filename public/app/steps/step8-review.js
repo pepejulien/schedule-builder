@@ -53,7 +53,7 @@ export function Step8Review() {
         <span class="chip green">Most days (base 3, max 4)</span> ${config.most_days.join(', ') || '—'}<br/>
         <span class="chip gray">Reduced (base 1, max 2, Sun+Sat)</span> ${config.reduced_days.names.join(', ') || '—'}<br/>
         <span class="chip blue">Exact</span> ${Object.entries(config.exact_days).map(([n, v]) => `${n}:${v}`).join(', ') || '—'}<br/>
-        <span class="chip lav">Free pool (Fair)</span> the rest
+        <span class="chip lav">Fair</span> the rest
       </p>
 
       ${config.training_pairs.length ? html`<h3>Training pairs</h3>

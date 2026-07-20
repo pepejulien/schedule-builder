@@ -139,10 +139,10 @@ export function Step9Build() {
   // hours can be eyeballed per tier at a glance. Rows arrive sorted by hours
   // desc, so each tier's block stays hours-sorted. Chip colors match the tiers.
   const TIER_META = {
-    most: { label: 'Top / Solid', chip: 'green' },
-    free: { label: 'Fair (free pool)', chip: 'lav' },
-    reduced: { label: 'Underperforming / Termination', chip: 'gray' },
-    exact: { label: 'Exact / pinned', chip: 'blue' },
+    most: { label: 'Top / Solid', chip: 'green', short: 'top/solid' },
+    free: { label: 'Fair', chip: 'lav', short: 'fair' },
+    reduced: { label: 'Underperforming / Termination', chip: 'gray', short: 'reduced' },
+    exact: { label: 'Exact / pinned', chip: 'blue', short: 'exact' },
   };
   const TIER_ORDER = ['most', 'free', 'reduced', 'exact'];
   const byTier = {};
@@ -205,7 +205,7 @@ export function Step9Build() {
                 ? `unavailable ${d.unavailable.join(' ')}` : '';
               return html`<tr>
                 <td>${d.name}</td>
-                <td><span class="chip ${meta.chip}">${d.cls}${d.target != null ? ':' + d.target : ''}</span></td>
+                <td><span class="chip ${meta.chip}">${meta.short}${d.target != null ? ':' + d.target : ''}</span></td>
                 <td>${d.road_days.join(' ') || '—'}</td>
                 <td>${d.backup_days.join(' ') || '—'}</td>
                 <td class="muted">${other || why || '—'}</td>
@@ -218,7 +218,7 @@ export function Step9Build() {
       <p class="muted">
         Pre-made schedule kept: ${chk.seed_pct == null ? 'n/a' : chk.seed_pct + '%'} ·
         Usual-day adherence: ${chk.usual_pct == null ? 'n/a' : chk.usual_pct + '%'} ·
-        Regular-pool hours: ${chk.pool ? `${chk.pool.min}–${chk.pool.max} (avg ${chk.pool.avg})` : 'n/a'}
+        Fair-driver hours: ${chk.pool ? `${chk.pool.min}–${chk.pool.max} (avg ${chk.pool.avg})` : 'n/a'}
       </p>
       ${(chk.fifth_day || []).length ? html`<p class="muted">42h fifth-day backups: ${chk.fifth_day.map((x) => x[0]).join(', ')}</p>` : ''}
       ${(r.pairlog || []).length ? html`<p class="muted">Training pairs: ${r.pairlog.map((p) => `${p[0]}→${p[1]} (${p[2]}→${p[3]})`).join('; ')}</p>` : ''}

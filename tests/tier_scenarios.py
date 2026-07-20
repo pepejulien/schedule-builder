@@ -231,7 +231,7 @@ po, po_d = pay_order_ok(res)
 print(f'BACKUPS: Top/Solid {top_bk}/{N_TOP} | Fair {fair_bk} | discipline {disc_bk} | errors {len(chk["errors"])}')
 check('backups: every Top/Solid-at-3 backed before Fair', top_bk == N_TOP, f'top {top_bk}/{N_TOP}')
 check('backups: Fair receive the remaining slots (after Top/Solid)', fair_bk > 0, fair_bk)
-check('backups: discipline never receive a backup', disc_bk == 0, disc_bk)
+check('backups: discipline get none (below 2 roads in a light week)', disc_bk == 0, disc_bk)
 check('backups: pay order holds (no Fair over a stuck Top)', po, po_d)
 check('backups: no errors', not chk['errors'], str(chk['errors'][:3]))
 
@@ -269,20 +269,49 @@ check('gate: no Fair exceeds the stuck Top (30h)', max(fair_hours) <= 30, max(fa
 check('gate: pay order holds', po, po_d)
 check('gate: no errors', not chk['errors'], str(chk['errors'][:3]))
 
-# --- 5th-day: when Top/Solid AND Fair are all at 4, leftover backups -> Top 5th day ---
+# --- 5th-day: when Top/Solid AND Fair are all at 4, leftover backups -> Top 5th day,
+# and whatever remains after that -> discipline last resort (best rate first) ---
 res, chk = run(V_FAIR4, backup_pct=0.1)
 top_fifth = sum(1 for dr in res.roster if dr['name'] in TOP
                 and len(dr['prim']) + len(dr['helper']) == 4 and len(dr['bk']) == 1)
 fair_over4 = [dr['name'] for dr in res.roster if dr['name'] in FAIR
               and len(dr['prim']) + len(dr['helper']) + len(dr['bk']) > 4]
-disc_bk2 = sum(len(dr['bk']) for dr in res.roster if dr['name'] in DISC)
+disc_srv = [dr for dr in res.roster if dr['name'] in DISC and dr['bk']]
+disc_uns = [dr for dr in res.roster if dr['name'] in DISC and not dr['bk']
+            and len(dr['prim']) + len(dr['helper']) >= 2]
+under2_bk = [dr['name'] for dr in disc_srv if len(dr['prim']) + len(dr['helper']) < 2]
+rate_ok = (not disc_srv or not disc_uns
+           or max(DISC_RATE[dr['name']] for dr in disc_uns)
+           <= min(DISC_RATE[dr['name']] for dr in disc_srv))
 po, po_d = pay_order_ok(res)
-print(f'5TH-DAY: Top 5th-day backups {top_fifth} | Fair over-4 {len(fair_over4)} | disc bk {disc_bk2} | errors {len(chk["errors"])}')
+print(f'5TH-DAY: Top 5th-day backups {top_fifth} | Fair over-4 {len(fair_over4)} | '
+      f'disc last-resort {len(disc_srv)} | errors {len(chk["errors"])}')
 check('5th-day: some Top/Solid take a 5th-day backup when everyone is maxed', top_fifth > 0, top_fifth)
 check('5th-day: Fair never exceed 4 total worked days', not fair_over4, fair_over4[:3])
-check('5th-day: discipline still get no backup', disc_bk2 == 0, disc_bk2)
+check('5th-day: discipline cover the leftovers (last resort)', len(disc_srv) > 0, len(disc_srv))
+check('5th-day: no discipline backup below 2 road days', not under2_bk, under2_bk[:3])
+check('5th-day: last-resort goes best-rate-first', rate_ok)
 check('5th-day: pay order holds', po, po_d)
 check('5th-day: no errors (42h is a note, not a violation)', not chk['errors'], str(chk['errors'][:3]))
+
+# --- NO 5-vs-3: a Fair stuck at 3 days (cannot take any backup) must BLOCK all
+# Top/Solid 5th days; the leftover slots fall to the discipline tier instead ---
+blocked_fair = FAIR[0]
+res, chk = run(V_TOP4, unavail={blocked_fair: [d for d in ALL if d not in ('Sun', 'Tue', 'Thu')]},
+               bk_per_day=4)
+bf = next(dr for dr in res.roster if dr['name'] == blocked_fair)
+fifths = [dr['name'] for dr in res.roster
+          if len(dr['prim']) + len(dr['helper']) == 4 and dr['bk']]
+disc_srv2 = [dr for dr in res.roster if dr['name'] in DISC and dr['bk']]
+po, po_d = pay_order_ok(res)
+print(f'NO-5v3: blocked Fair {len(bf["prim"])}rd/{len(bf["bk"])}bk | 5th-days {len(fifths)} | '
+      f'disc last-resort {len(disc_srv2)} | errors {len(chk["errors"])}')
+check('no-5v3: the blocked Fair sits at 3 days, no backup', len(bf['prim']) == 3 and not bf['bk'],
+      f'{len(bf["prim"])}rd {len(bf["bk"])}bk')
+check('no-5v3: ZERO 5th days while a Fair sits at 3 days', not fifths, fifths[:3])
+check('no-5v3: discipline cover the leftovers instead', len(disc_srv2) > 0, len(disc_srv2))
+check('no-5v3: pay order holds', po, po_d)
+check('no-5v3: no errors', not chk['errors'], str(chk['errors'][:3]))
 
 # --- <5 routes -> exactly 3, even at high volume (feasible: other Tops reach 4) ---
 locked = TOP[0]

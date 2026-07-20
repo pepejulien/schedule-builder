@@ -192,8 +192,6 @@ def check_case(case, res, chk):
         errs.append(f'verifier errors: {chk["errors"][:3]}')
     for dr in res.roster:
         n = dr['name']
-        if n in disc and dr['bk']:
-            errs.append(f'discipline backup: {n}')
         if len(dr['bk']) > 1:
             errs.append(f'>1 backup: {n}')
         if dr['bk'] and pdy(dr) < 2:
@@ -216,6 +214,16 @@ def check_case(case, res, chk):
                 if dr['name'] in fair and hours(dr) > worst]
         if over:
             errs.append(f'PAY ORDER: stuck Top at {worst}h, Fair over: {over[:3]}')
+    # Gate B: never a 5-day Top/Solid while any Top-at-3 or eligible Fair-at-2/3
+    # sits without a backup
+    low_unserved = any(
+        not dr['bk'] and (
+            (dr['name'] in top and pdy(dr) == 3)
+            or (dr['name'] in fair and 2 <= pdy(dr) <= 3 and pdy(dr) < 4))
+        for dr in res.roster)
+    fifths = [dr['name'] for dr in res.roster if pdy(dr) == 4 and dr['bk']]
+    if low_unserved and fifths:
+        errs.append(f'5-DAY GATE: 5th days {fifths[:3]} while sub-4 drivers unserved')
     served = {dr['name'] for dr in res.roster
               if dr['name'] in top and pdy(dr) == 3 and dr['bk']}
     want = oracle_top3(res, top, case['weekend_cap'])

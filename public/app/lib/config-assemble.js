@@ -26,7 +26,7 @@ export function hasTierOverlap(tier, routes) {
 
 export const GROUP_OPTIONS = [
   { value: 'most', label: 'Most days (Top/Solid: base 3, max 4)' },
-  { value: 'free', label: 'Free pool (Fair: base 2, max 4 road, no backup)' },
+  { value: 'free', label: 'Fair (base 2, max 4 road)' },
   { value: 'reduced', label: 'Reduced (base 1, max 2, Sun+Sat)' },
   { value: 'exact:3', label: 'Exactly 3 days' },
   { value: 'exact:2', label: 'Exactly 2 days' },
