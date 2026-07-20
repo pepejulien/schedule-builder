@@ -135,6 +135,20 @@ export function Step9Build() {
   const status = r.clean ? 'CLEAN' : (chk.errors && chk.errors.length ? 'FAILED' : 'WARNINGS');
   const statusKind = r.clean ? 'ok' : (chk.errors && chk.errors.length ? 'err' : 'warn');
 
+  // Group the per-driver rows by day-target tier, highest tier at the top, so
+  // hours can be eyeballed per tier at a glance. Rows arrive sorted by hours
+  // desc, so each tier's block stays hours-sorted. Chip colors match the tiers.
+  const TIER_META = {
+    most: { label: 'Top / Solid', chip: 'green' },
+    free: { label: 'Fair (free pool)', chip: 'lav' },
+    reduced: { label: 'Underperforming / Termination', chip: 'gray' },
+    exact: { label: 'Exact / pinned', chip: 'blue' },
+  };
+  const TIER_ORDER = ['most', 'free', 'reduced', 'exact'];
+  const byTier = {};
+  for (const d of (r.drivers || [])) (byTier[d.cls] = byTier[d.cls] || []).push(d);
+  const tierSections = TIER_ORDER.filter((t) => byTier[t]);
+
   return html`<div>
     <div class="card">
       <h2>${weekLabel}</h2>
@@ -169,17 +183,28 @@ export function Step9Build() {
       <h3>Per-driver</h3>
       <div class="scroll-x"><table>
         <thead><tr><th>Driver</th><th>Group</th><th>Road</th><th>Backup</th><th>Other</th><th>Hours</th></tr></thead>
-        <tbody>${(r.drivers || []).map((d) => {
-          const other = [...d.helper_days.map((x) => x + ' (train)'),
-            ...d.dispatch_days.map((x) => x + ' (disp)'),
-            ...d.meeting_days.map((x) => x + ' (mtg)')].join(', ');
-          return html`<tr>
-            <td>${d.name}</td>
-            <td><span class="chip gray">${d.cls}${d.target != null ? ':' + d.target : ''}</span></td>
-            <td>${d.road_days.join(' ') || '—'}</td>
-            <td>${d.backup_days.join(' ') || '—'}</td>
-            <td class="muted">${other || '—'}</td>
-            <td>${d.hours}h</td></tr>`;
+        <tbody>${tierSections.map((t) => {
+          const meta = TIER_META[t];
+          const rows = byTier[t];
+          const hrs = rows.map((x) => x.hours);
+          const lo = Math.min(...hrs), hi = Math.max(...hrs);
+          return html`
+            <tr class="tier-sep"><td colspan="6">
+              <span class="chip ${meta.chip}">${meta.label}</span>
+              <span class="muted"> · ${rows.length} driver${rows.length === 1 ? '' : 's'} · ${lo === hi ? lo + 'h' : lo + '–' + hi + 'h'}</span>
+            </td></tr>
+            ${rows.map((d) => {
+              const other = [...d.helper_days.map((x) => x + ' (train)'),
+                ...d.dispatch_days.map((x) => x + ' (disp)'),
+                ...d.meeting_days.map((x) => x + ' (mtg)')].join(', ');
+              return html`<tr>
+                <td>${d.name}</td>
+                <td><span class="chip ${meta.chip}">${d.cls}${d.target != null ? ':' + d.target : ''}</span></td>
+                <td>${d.road_days.join(' ') || '—'}</td>
+                <td>${d.backup_days.join(' ') || '—'}</td>
+                <td class="muted">${other || '—'}</td>
+                <td>${d.hours}h</td></tr>`;
+            })}`;
         })}</tbody>
       </table></div>
 
