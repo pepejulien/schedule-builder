@@ -141,18 +141,33 @@ def bk_feasible(res, dr, d, weekend_cap):
     return n <= 5
 
 
-def oracle_top3(res, top_names, weekend_cap):
-    """Matroid-greedy oracle: walk Top-at-3 candidates in the solver's tier-1
-    priority order (best board-rate first, then name) and keep each that the
-    matching can still absorb. Returns the exact SET of names that must be
-    served -- both maximum-size and priority-optimal."""
+def oracle_ladder(res, case):
+    """Independent mirror of the RATE LADDER (Jose 2026-07-20): every driver
+    under 40 road hours with >=2 roads (Fair inside their 4-total cap), sorted
+    best rate first (tie: tier, then hours, then name), served via matroid-
+    greedy matching; then the 5th-day overflow (Top/Solid at 4 roads). Returns
+    the exact SET of names that must hold a backup."""
+    top, fair, disc = set(case['top']), set(case['fair']), set(case['disc'])
+    weekend_cap = case['weekend_cap']
+
     def rate(dr):
         return res.RATE.get(B.norm(dr['name']), 0)
 
-    cands = sorted((i for i, dr in enumerate(res.roster)
-                    if dr['name'] in top_names and pdy(dr) == 3),
-                   key=lambda i: (-rate(res.roster[i]),
-                                  B.norm(res.roster[i]['name'])))
+    def trank(dr):
+        return 0 if dr['name'] in top else (1 if dr['name'] in fair else 2)
+
+    def elig(dr):
+        if pdy(dr) < 2 or pdy(dr) * 10 >= 40:
+            return False
+        if dr['name'] in fair and pdy(dr) >= 4:
+            return False
+        return True
+
+    key = lambda i: (-rate(res.roster[i]), trank(res.roster[i]),
+                     pdy(res.roster[i]) * 10, B.norm(res.roster[i]['name']))
+    ladder = sorted((i for i, dr in enumerate(res.roster) if elig(dr)), key=key)
+    overflow = sorted((i for i, dr in enumerate(res.roster)
+                       if dr['name'] in top and pdy(dr) == 4), key=key)
     assign = {d: [] for d in res.DAYS}
 
     def place(i, seen):
@@ -175,7 +190,7 @@ def oracle_top3(res, top_names, weekend_cap):
 
     total = sum(res.backup[d] for d in res.DAYS)
     served = set()
-    for i in cands:
+    for i in ladder + overflow:
         if len(served) >= total:
             break
         if place(i, set()):
@@ -206,29 +221,10 @@ def check_case(case, res, chk):
         got = sum(1 for dr in res.roster if d in dr['bk'])
         if got > res.backup[d]:
             errs.append(f'day {d}: {got} > requested {res.backup[d]}')
-    stuck = [dr for dr in res.roster
-             if dr['name'] in top and pdy(dr) == 3 and not dr['bk']]
-    if stuck:
-        worst = min(hours(dr) for dr in stuck)
-        over = [(dr['name'], hours(dr)) for dr in res.roster
-                if dr['name'] in fair and hours(dr) > worst]
-        if over:
-            errs.append(f'PAY ORDER: stuck Top at {worst}h, Fair over: {over[:3]}')
-    # Gate B: never a 5-day Top/Solid while any Top-at-3 or eligible Fair-at-2/3
-    # sits without a backup
-    low_unserved = any(
-        not dr['bk'] and (
-            (dr['name'] in top and pdy(dr) == 3)
-            or (dr['name'] in fair and 2 <= pdy(dr) <= 3 and pdy(dr) < 4))
-        for dr in res.roster)
-    fifths = [dr['name'] for dr in res.roster if pdy(dr) == 4 and dr['bk']]
-    if low_unserved and fifths:
-        errs.append(f'5-DAY GATE: 5th days {fifths[:3]} while sub-4 drivers unserved')
-    served = {dr['name'] for dr in res.roster
-              if dr['name'] in top and pdy(dr) == 3 and dr['bk']}
-    want = oracle_top3(res, top, case['weekend_cap'])
+    served = {dr['name'] for dr in res.roster if dr['bk']}
+    want = oracle_ladder(res, case)
     if served != want:
-        errs.append(f'PRIORITY SET: served {sorted(served - want)[:3]} instead of '
+        errs.append(f'LADDER SET: extra {sorted(served - want)[:3]} / missing '
                     f'{sorted(want - served)[:3]} ({len(served)} vs {len(want)})')
     return errs
 

@@ -94,19 +94,6 @@ def hours_of(res, dr):
     return (len(dr['prim']) + len(dr['helper'])) * 10 + len(dr['bk']) * 2
 
 
-def pay_order_ok(res):
-    """Jose 2026-07-19: no Fair may out-earn a Top/Solid stuck at 3 road days
-    with no backup (30h). Returns (ok, detail)."""
-    stuck = [dr for dr in res.roster if dr['name'] in TOP
-             and len(dr['prim']) + len(dr['helper']) == 3 and not dr['bk']]
-    if not stuck:
-        return True, 'no stuck Top/Solid'
-    worst = min(hours_of(res, dr) for dr in stuck)
-    over = [(dr['name'], hours_of(res, dr)) for dr in res.roster
-            if dr['name'] in FAIR and hours_of(res, dr) > worst]
-    return not over, f'stuck Top at {worst}h out-earned by {over[:3]}'
-
-
 def _bk_feasible(res, dr, d):
     """Test-side mirror of the solver's backup-day feasibility (no meetings /
     extras / weekend cap in these synthetic fleets)."""
@@ -223,34 +210,31 @@ def bktotals(res):
             sum(len(dr['bk']) for dr in res.roster if dr['name'] in FAIR),
             sum(len(dr['bk']) for dr in res.roster if dr['name'] in DISC))
 
-# --- backups: slots on every day -> ALL Top/Solid-at-3 served, THEN Fair; never discipline ---
-# Uniform per-day slots remove the placement bottleneck, so tier order is exact.
+# --- RATE LADDER (Jose 2026-07-20): backups go best-rate-first among drivers
+# under 40h. In this fleet Top/Fair have no rates (0 = best) so ties break by
+# tier: every Top/Solid-at-3, then Fair; discipline (<2 roads here) ineligible.
 res, chk = run(V_LIGHT, bk_per_day=3)
 top_bk, fair_bk, disc_bk = bktotals(res)
-po, po_d = pay_order_ok(res)
 print(f'BACKUPS: Top/Solid {top_bk}/{N_TOP} | Fair {fair_bk} | discipline {disc_bk} | errors {len(chk["errors"])}')
 check('backups: every Top/Solid-at-3 backed before Fair', top_bk == N_TOP, f'top {top_bk}/{N_TOP}')
 check('backups: Fair receive the remaining slots (after Top/Solid)', fair_bk > 0, fair_bk)
 check('backups: discipline get none (below 2 roads in a light week)', disc_bk == 0, disc_bk)
-check('backups: pay order holds (no Fair over a stuck Top)', po, po_d)
 check('backups: no errors', not chk['errors'], str(chk['errors'][:3]))
 
-# --- stranding: scarce slots + patterned unavailability -> tier-1 coverage must
-# equal an independent max-matching oracle (a better-rate Top must never grab
-# the only day a colleague could take, leaving him at 30h while Fair get 32h) ---
+# --- stranding: scarce slots + patterned unavailability -> Top/Solid coverage
+# must equal an independent max-matching oracle (nobody loses their only
+# feasible day to a colleague who had alternatives) ---
 unav_pat = {n: [ALL[(2 * i) % 7], ALL[(2 * i + 3) % 7]] for i, n in enumerate(TOP)}
 res, chk = run(V_LIGHT, unavail=unav_pat, bk_per_day=1)
 served = sum(1 for dr in res.roster if dr['name'] in TOP
              and len(dr['prim']) + len(dr['helper']) == 3 and dr['bk'])
 best, ncand = max_serve_top3(res)
-po, po_d = pay_order_ok(res)
 print(f'STRANDING: served {served} of {ncand} Top-at-3 | oracle max {best} | errors {len(chk["errors"])}')
-check('stranding: tier-1 coverage equals the max-matching oracle', served == best, f'{served} != {best}')
-check('stranding: pay order holds', po, po_d)
+check('stranding: Top/Solid coverage equals the max-matching oracle', served == best, f'{served} != {best}')
 check('stranding: no errors', not chk['errors'], str(chk['errors'][:3]))
 
-# --- pay-order gate: a Top who CANNOT take any backup day (unavailable) stays
-# 30h -> no Fair may reach 32h (Fair-at-3 backups blocked); slots stay empty ---
+# --- ladder descends past an infeasible driver: a Top who CANNOT take any
+# backup day stays 30h, the ladder moves on -- Fair still get theirs ---
 stuck_name = TOP[0]
 res, chk = run(V_FAIR3, unavail={stuck_name: [d for d in ALL if d not in ('Sun', 'Tue', 'Thu')]},
                bk_per_day=2)
@@ -258,20 +242,20 @@ stuck = next(dr for dr in res.roster if dr['name'] == stuck_name)
 served_all = sum(1 for dr in res.roster if dr['name'] in TOP
                  and len(dr['prim']) + len(dr['helper']) == 3 and dr['bk'])
 best, ncand = max_serve_top3(res)
-fair_hours = [hours_of(res, dr) for dr in res.roster if dr['name'] in FAIR]
-po, po_d = pay_order_ok(res)
-print(f'GATE: {stuck_name} {hours_of(res, stuck)}h bk={len(stuck["bk"])} | Tops served {served_all} '
-      f'(oracle max {best} of {ncand}) | max Fair {max(fair_hours)}h | errors {len(chk["errors"])}')
-check('gate: the blocked Top has no backup (30h)', not stuck['bk'] and hours_of(res, stuck) == 30,
+top_bk2, fair_bk2, disc_bk2 = bktotals(res)
+print(f'DESCEND: {stuck_name} {hours_of(res, stuck)}h bk={len(stuck["bk"])} | Tops served {served_all} '
+      f'(oracle {best}) | Fair bk {fair_bk2} | disc bk {disc_bk2} | errors {len(chk["errors"])}')
+check('descend: the blocked Top stays at 30h, no backup', not stuck['bk'] and hours_of(res, stuck) == 30,
       f'{hours_of(res, stuck)}h')
-check('gate: Top/Solid coverage equals the max-matching oracle', served_all == best, f'{served_all} != {best}')
-check('gate: no Fair exceeds the stuck Top (30h)', max(fair_hours) <= 30, max(fair_hours))
-check('gate: pay order holds', po, po_d)
-check('gate: no errors', not chk['errors'], str(chk['errors'][:3]))
+check('descend: every feasible Top/Solid served (oracle)', served_all == best, f'{served_all} != {best}')
+check('descend: the ladder moves on -- Fair DO get backups', fair_bk2 > 0, fair_bk2)
+check('descend: discipline (1 road) still get none', disc_bk2 == 0, disc_bk2)
+check('descend: no errors', not chk['errors'], str(chk['errors'][:3]))
 
-# --- 5th-day: when Top/Solid AND Fair are all at 4, leftover backups -> Top 5th day,
-# and whatever remains after that -> discipline last resort (best rate first) ---
+# --- everyone at 40h except discipline: the ladder = discipline only (under
+# 40h), best rate first; NO 5th days while the ladder can still cover ---
 res, chk = run(V_FAIR4, backup_pct=0.1)
+req = sum(res.backup[d] for d in res.DAYS)
 top_fifth = sum(1 for dr in res.roster if dr['name'] in TOP
                 and len(dr['prim']) + len(dr['helper']) == 4 and len(dr['bk']) == 1)
 fair_over4 = [dr['name'] for dr in res.roster if dr['name'] in FAIR
@@ -283,35 +267,51 @@ under2_bk = [dr['name'] for dr in disc_srv if len(dr['prim']) + len(dr['helper']
 rate_ok = (not disc_srv or not disc_uns
            or max(DISC_RATE[dr['name']] for dr in disc_uns)
            <= min(DISC_RATE[dr['name']] for dr in disc_srv))
-po, po_d = pay_order_ok(res)
-print(f'5TH-DAY: Top 5th-day backups {top_fifth} | Fair over-4 {len(fair_over4)} | '
-      f'disc last-resort {len(disc_srv)} | errors {len(chk["errors"])}')
-check('5th-day: some Top/Solid take a 5th-day backup when everyone is maxed', top_fifth > 0, top_fifth)
-check('5th-day: Fair never exceed 4 total worked days', not fair_over4, fair_over4[:3])
-check('5th-day: discipline cover the leftovers (last resort)', len(disc_srv) > 0, len(disc_srv))
-check('5th-day: no discipline backup below 2 road days', not under2_bk, under2_bk[:3])
-check('5th-day: last-resort goes best-rate-first', rate_ok)
-check('5th-day: pay order holds', po, po_d)
-check('5th-day: no errors (42h is a note, not a violation)', not chk['errors'], str(chk['errors'][:3]))
+print(f'LADDER-TAIL: req {req} | disc served {len(disc_srv)} | Top 5th-days {top_fifth} | errors {len(chk["errors"])}')
+check('ladder-tail: discipline (only ones under 40h) cover ALL slots', len(disc_srv) == req,
+      f'{len(disc_srv)}/{req}')
+check('ladder-tail: NO 5th days while the ladder still covers', top_fifth == 0, top_fifth)
+check('ladder-tail: best rate first', rate_ok)
+check('ladder-tail: no discipline backup below 2 roads', not under2_bk, under2_bk[:3])
+check('ladder-tail: Fair never exceed 4 total worked days', not fair_over4, fair_over4[:3])
+check('ladder-tail: no errors', not chk['errors'], str(chk['errors'][:3]))
 
-# --- NO 5-vs-3: a Fair stuck at 3 days (cannot take any backup) must BLOCK all
-# Top/Solid 5th days; the leftover slots fall to the discipline tier instead ---
+# --- overflow: more slots than the whole under-40h ladder can hold -> Top/Solid
+# at 4 roads take a 5th day (42h) for the remainder only ---
+res, chk = run(V_FAIR4, bk_per_day=5)
+req = sum(res.backup[d] for d in res.DAYS)
+disc_srv = [dr for dr in res.roster if dr['name'] in DISC and dr['bk']]
+top_fifth = sum(1 for dr in res.roster if dr['name'] in TOP
+                and len(dr['prim']) + len(dr['helper']) == 4 and len(dr['bk']) == 1)
+fair_fifth = [dr['name'] for dr in res.roster if dr['name'] in FAIR
+              and len(dr['prim']) + len(dr['helper']) == 4 and dr['bk']]
+print(f'OVERFLOW: req {req} | disc {len(disc_srv)}/{N_DISC} | Top 5th-days {top_fifth} | errors {len(chk["errors"])}')
+check('overflow: the whole discipline ladder is used first', len(disc_srv) == N_DISC,
+      f'{len(disc_srv)}/{N_DISC}')
+check('overflow: Top/Solid 5th days cover only the remainder', top_fifth == req - N_DISC,
+      f'{top_fifth} != {req - N_DISC}')
+check('overflow: Fair never take a 5th day', not fair_fifth, fair_fifth[:3])
+check('overflow: no errors (42h is a note, not a violation)', not chk['errors'], str(chk['errors'][:3]))
+
+# --- Fair before discipline (Jose 2026-07-20, the complaint): 30h Fair are
+# served before ANY discipline driver; a blocked Fair doesn't stop the ladder ---
 blocked_fair = FAIR[0]
 res, chk = run(V_TOP4, unavail={blocked_fair: [d for d in ALL if d not in ('Sun', 'Tue', 'Thu')]},
                bk_per_day=4)
 bf = next(dr for dr in res.roster if dr['name'] == blocked_fair)
+fair_nobk = [dr['name'] for dr in res.roster if dr['name'] in FAIR
+             and len(dr['prim']) + len(dr['helper']) == 3 and not dr['bk']
+             and dr['name'] != blocked_fair]
+disc_srv2 = [dr for dr in res.roster if dr['name'] in DISC and dr['bk']]
 fifths = [dr['name'] for dr in res.roster
           if len(dr['prim']) + len(dr['helper']) == 4 and dr['bk']]
-disc_srv2 = [dr for dr in res.roster if dr['name'] in DISC and dr['bk']]
-po, po_d = pay_order_ok(res)
-print(f'NO-5v3: blocked Fair {len(bf["prim"])}rd/{len(bf["bk"])}bk | 5th-days {len(fifths)} | '
-      f'disc last-resort {len(disc_srv2)} | errors {len(chk["errors"])}')
-check('no-5v3: the blocked Fair sits at 3 days, no backup', len(bf['prim']) == 3 and not bf['bk'],
-      f'{len(bf["prim"])}rd {len(bf["bk"])}bk')
-check('no-5v3: ZERO 5th days while a Fair sits at 3 days', not fifths, fifths[:3])
-check('no-5v3: discipline cover the leftovers instead', len(disc_srv2) > 0, len(disc_srv2))
-check('no-5v3: pay order holds', po, po_d)
-check('no-5v3: no errors', not chk['errors'], str(chk['errors'][:3]))
+print(f'FAIR-FIRST: feasible Fair unserved {len(fair_nobk)} | disc {len(disc_srv2)} | '
+      f'5th-days {len(fifths)} | errors {len(chk["errors"])}')
+check('fair-first: every feasible 30h Fair served before discipline', not fair_nobk, fair_nobk[:3])
+check('fair-first: discipline take only the remainder', len(disc_srv2) > 0, len(disc_srv2))
+check('fair-first: no 5th days while the ladder covers', not fifths, fifths[:3])
+check('fair-first: the blocked Fair is simply skipped (30h)', not bf['bk'], bf['bk'])
+check('fair-first: no errors', not chk['errors'], str(chk['errors'][:3]))
 
 # --- <5 routes -> exactly 3, even at high volume (feasible: other Tops reach 4) ---
 locked = TOP[0]

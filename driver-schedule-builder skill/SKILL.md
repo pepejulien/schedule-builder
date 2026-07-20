@@ -175,8 +175,8 @@ a build error). Map tiers to config groups:
   target 2 (the 2 is the *upgrade* ceiling, reached only after Fair hit 3). This
   is the shock absorber: in a light week it is the **first** cut, down to **0**,
   **worst board-rate first** across both discipline tiers together. Still prefers
-  Sun/Sat (`prefer_days`); backups only as the LAST-RESORT coverage tier (leave
-  `backup_eligible_extra` empty).
+  Sun/Sat (`prefer_days`); backups only as the tail of the rate ladder — their
+  worst-of-board rates put them last (leave `backup_eligible_extra` empty).
 - **<5 routes in the last 30 days** (from the board's Routes column) -> 30h ->
   `exact_days: 3` (a pinned override; sits outside the layers and is **never**
   bumped to a 4th). A discipline cap below still wins (an Underperforming driver
@@ -260,34 +260,29 @@ the exclude list is now just Zackary McDonald, Rachel Rhoades, Greyson Turner.
 - **Exact per-wave route counts** are hit exactly.
 - **Backups are a top-up, never a whole week — and a route-exposure knob.** A backup
   shift pays only `backup_hours` (≈2h) vs a primary's `primary_hours` (≈10h), **plus a
-  chance of being sent out on a route**. Only drivers with ≥2 road days get backups. The
-  per-day backup count HR sets (`backup_per_day` / `backup_pct`) is the **fill TARGET**;
-  slots are filled globally, one priority tier at a time (Jose 2026-07-19, revised ×2):
-  1. **Top/Solid stuck at 3 road days** → backup (3 road + 1 = **32h**), **better board-rate
-     first**. Served before any Fair, so they stay ahead. `backup_eligible_extra`
-     (advanced-panel, per week) names TRUE exceptions that join this tier — including a
-     discipline or exact-days driver (≥2 road days, inside their total-day cap).
-  2. **then Fair at 2–3 road days** → backup, inside their 4-total cap (**fewest road days
-     first**, to lift a bare 20h week, then better rate). **PAY-ORDER GATE:** while ANY
-     Top/Solid-at-3 could not be given a backup (they sit at 30h), a **3-road Fair gets no
-     backup** — 32h would out-earn that Top/Solid. A 2-road Fair (→22h) still may.
-  3. **Top/Solid at 4 roads take a 5th day** (4 road + 1 = **42h**, ~2h OT), better rate
-     first — but **ONLY when nobody (Top/Solid or Fair) still sits at ≤3 road days without
-     a backup**. Never a 5-day Top/Solid while a Fair holds 3 days (Jose 2026-07-19); at
-     equal day counts Top/Solid wins, but a lower day count always outranks a higher one.
-     Fair never take a 5th day.
-  4. **LAST RESORT — coverage wins (Jose 2026-07-19: the backup spots must be covered):**
-     whatever remains goes to the **Underperforming/Termination tier, better rate first**
-     (≥2 road days only — the standing backup rule still holds). The build emits a NOTE
-     naming each last-resort driver and day.
-  Each tier fills by **matroid-greedy matching**: members are walked in strict priority
-  order and served via an augmenting-path matcher (same technique as the road repair), so
+  chance of being sent out on a route**. The per-day backup count HR sets
+  (`backup_per_day` / `backup_pct`) is the **fill TARGET and it must be covered.**
+  **THE RATE LADDER (Jose 2026-07-20, supersedes every earlier tier scheme):** backup
+  days go to **the driver with the best board rate who is under 40 road+backup hours,
+  then on down the list, one backup each**, until every slot is covered. The board rate
+  already encodes the tier order (Top ≈ −1s, Solid next, Fair mid, Underperforming/
+  Termination worst), so a Top/Solid at 3 roads (30h) is served before a Fair at 30h,
+  and the discipline tier is simply the **tail of the ladder — covered last, but
+  covered.** A driver who can't take any backup day (unavailable/rules) is skipped and
+  the ladder moves on — it never blocks those below. Rate ties break by tier
+  (Top/Solid > Fair > discipline), then fewer hours, then name.
+  Rules that still bind: **≥2 road days** to take a backup (no backup-only weeks);
+  **one backup each**; Fair roads+backups ≤ `free_total_days` (4); nobody over
+  `max_total_days` (5); exact-days drivers (trainees, <5-routes, benched) take no
+  backups unless named in `backup_eligible_extra`.
+  **OVERFLOW — only when the ladder is exhausted** (nobody under 40h can take an open
+  slot): **Top/Solid at 4 roads take a 5th day** (4 road + 1 = **42h**, ~2h OT), best
+  rate first — coverage wins as the true last resort.
+  The fill is a **matroid-greedy matching** (augmenting paths, like the road repair):
   under slot scarcity the better rate ALWAYS wins the last slot and nobody is stranded
-  because a colleague took their only feasible day. **Nobody exceeds 5 total worked days.**
-  Slots nobody may/can take stay empty and the build emits a NOTE naming the open days,
-  the stuck 30h Top/Solid drivers, and — only when true — that the pay-order rule held
-  Fair back; an under-target backup count with that note is deliberate, not a failure.
-  The verification block names every 42h (5th-day) driver.
+  because a colleague took their only feasible day. The build emits NOTEs naming any
+  discipline-tier backups and any open slots (with the reason); the verification block
+  names every 42h (5th-day) driver.
 - **Hours balance for the regular pool.** Everyone not on a target list is balanced toward
   a similar hours band (primaries distributed lowest-first). Result is typically a tight
   ~24–32h cluster, with the "most days" people highest and "fewer days" people lowest **by
@@ -350,15 +345,15 @@ the exclude list is now just Zackary McDonald, Rachel Rhoades, Greyson Turner.
 ## Tuning
 All knobs are in the config; deeper logic (scoring, caps) lives at the top of
 `scripts/build_weekly_schedule.py`. To change hours values, the consecutive cap, or the
-free-pool cap, edit the config — no code change needed.
+Fair caps, edit the config — no code change needed.
 
 ## Do not
 - Don't treat blank availability cells as unavailability — only the literal `Unavailable`.
 - Don't put low-day drivers on backup-only weeks — backups are top-ups (the script enforces this).
-- Don't hand Underperforming/Termination-review drivers backup days EARLY — they are the
-  LAST-RESORT coverage tier (after Top/Solid-at-3 → Fair → Top/Solid 5th day), used only
-  when the backup count can't be met any other way, best rate first, ≥2 road days.
-  `backup_eligible_extra` stays empty unless Jose names an exception that week.
+- Don't hand Underperforming/Termination-review drivers backup days EARLY — their
+  worst-of-board rates put them at the tail of the rate ladder, so they only get slots
+  after every better-rated under-40h driver is served (best rate first among them,
+  ≥2 road days). `backup_eligible_extra` stays empty unless Jose names an exception.
 - Don't let anyone reach 6 worked days or let a Fair carry 3 roads + 2 backups (`max_total_days` 5 / `free_total_days` 4 enforce this — never raise them without Jose).
 - Don't skip `prev_week_file` — without it the consecutive-day carryover can't be checked.
 - Don't deliver a run that has unmatched names, a >cap consecutive run, or any wave-count mismatch — fix and re-run first.
