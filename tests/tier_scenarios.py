@@ -52,7 +52,7 @@ def write_avail(path, unavail=None):
     wb.save(path)
 
 
-def run(total, backup_pct=0.0, unavail=None, exact=None):
+def run(total, backup_pct=0.0, unavail=None, exact=None, bk_per_day=None):
     base = total // 7
     rem = total - base * 7
     waves = {}
@@ -63,8 +63,10 @@ def run(total, backup_pct=0.0, unavail=None, exact=None):
         a = max(n // 4, 1) if n >= 2 else 0
         waves[d] = {'10:25 AM': n - a, '10:45 AM': a} if a else {'10:25 AM': n}
     avail = os.path.join(FIX, '_tier_avail.xlsx'); write_avail(avail, unavail)
+    bk = ({'backup_per_day': {d: bk_per_day for d in waves}} if bk_per_day is not None
+          else {'backup_pct': backup_pct})
     cfg = {
-        'start_date': '2026-08-02', 'waves': waves, 'backup_pct': backup_pct,
+        'start_date': '2026-08-02', 'waves': waves, **bk,
         'max_primary_days': 4, 'weekly_hours_cap': 40,
         'free_primary_cap': 4, 'free_total_days': 4, 'max_total_days': 5,
         'most_days': TOP,
@@ -149,14 +151,33 @@ check('light: Fair protected at 2', min(fair) >= 2, min(fair))
 check('light: discipline cut', m(disc) < 1.0, m(disc))
 check('light: worst-rate discipline cut first', better > worse, f'{better} vs {worse}')
 
-# --- backups: only Top/Solid stuck at 3 get them ---
-res, chk = run(V_LIGHT, backup_pct=0.15)
-bk = {dr['name']: len(dr['bk']) for dr in res.roster}
-top_bk = sum(bk[n] for n in TOP)
-other_bk = sum(bk[n] for n in FAIR + DISC)
-print(f'BACKUPS: Top/Solid backups {top_bk} | Fair+discipline backups {other_bk}')
-check('backups: Fair + discipline get NONE', other_bk == 0, other_bk)
-check('backups: only go to Top/Solid', top_bk >= 0)
+def bktotals(res):
+    return (sum(len(dr['bk']) for dr in res.roster if dr['name'] in TOP),
+            sum(len(dr['bk']) for dr in res.roster if dr['name'] in FAIR),
+            sum(len(dr['bk']) for dr in res.roster if dr['name'] in DISC))
+
+# --- backups: slots on every day -> ALL Top/Solid-at-3 served, THEN Fair; never discipline ---
+# Uniform per-day slots remove the placement bottleneck, so tier order is exact.
+res, chk = run(V_LIGHT, bk_per_day=3)
+top_bk, fair_bk, disc_bk = bktotals(res)
+print(f'BACKUPS: Top/Solid {top_bk}/{N_TOP} | Fair {fair_bk} | discipline {disc_bk} | errors {len(chk["errors"])}')
+check('backups: every Top/Solid-at-3 backed before Fair', top_bk == N_TOP, f'top {top_bk}/{N_TOP}')
+check('backups: Fair receive the remaining slots (after Top/Solid)', fair_bk > 0, fair_bk)
+check('backups: discipline never receive a backup', disc_bk == 0, disc_bk)
+check('backups: no errors', not chk['errors'], str(chk['errors'][:3]))
+
+# --- 5th-day: when Top/Solid AND Fair are all at 4, leftover backups -> Top 5th day ---
+res, chk = run(V_FAIR4, backup_pct=0.1)
+top_fifth = sum(1 for dr in res.roster if dr['name'] in TOP
+                and len(dr['prim']) + len(dr['helper']) == 4 and len(dr['bk']) == 1)
+fair_over4 = [dr['name'] for dr in res.roster if dr['name'] in FAIR
+              and len(dr['prim']) + len(dr['helper']) + len(dr['bk']) > 4]
+disc_bk2 = sum(len(dr['bk']) for dr in res.roster if dr['name'] in DISC)
+print(f'5TH-DAY: Top 5th-day backups {top_fifth} | Fair over-4 {len(fair_over4)} | disc bk {disc_bk2} | errors {len(chk["errors"])}')
+check('5th-day: some Top/Solid take a 5th-day backup when everyone is maxed', top_fifth > 0, top_fifth)
+check('5th-day: Fair never exceed 4 total worked days', not fair_over4, fair_over4[:3])
+check('5th-day: discipline still get no backup', disc_bk2 == 0, disc_bk2)
+check('5th-day: no errors (42h is a note, not a violation)', not chk['errors'], str(chk['errors'][:3]))
 
 # --- <5 routes -> exactly 3, even at high volume (feasible: other Tops reach 4) ---
 locked = TOP[0]

@@ -950,34 +950,69 @@ def build_schedule(cfg):
     # a final rebalance settles anything the exact-completion shifted.
     _rebalance()
 
-    # ---- PHASE 2: backups -- ONLY Top/Solid stuck at 3 road days (Jose 2026-07-19) ----
-    # When road slots run out and some Top/Solid ended at 3 (not 4), give them a
-    # backup day (3 road + 1 backup = 32h), BETTER board-rate first. Fair and the
-    # discipline tier get no backups. The per-day backup count is a CEILING: if the
-    # Top/Solid-at-3 pool is exhausted, the remaining backup slots simply stay
-    # empty (expected, not a shortfall). backup_eligible_extra (BKX) can add named
-    # per-week exceptions. Nobody exceeds max_total_days.
-    def _bk_ok(i, dr, d, dt):
-        n = norm(dr['name'])
-        role = (n in MOST and pdays(dr) == 3) or n in BKX
-        return (role and d not in dr['unav'] and d not in dr['prim']
-                and d not in dr['helper'] and i not in bslot[d]
-                and pdays(dr) >= 2 and len(dr['bk']) < 1 and runok(dr, dt)
-                and wkend_ok(dr, d)
+    # ---- PHASE 2: backups -- fill the requested per-day count in priority order
+    # (Jose 2026-07-19, revised). The count HR sets (backup_per_day / backup_pct)
+    # is the fill TARGET. Slots are filled globally, one priority tier at a time:
+    #   tier 1: Top/Solid stuck at 3 road days -> backup (3 road + 1 bk = 32h),
+    #           best board-rate first. Served before any Fair, so they stay ahead.
+    #   tier 2: then Fair at 2-3 road days -> backup, inside their 4-total cap.
+    #           Fewest road days first (lift bare 20h weeks), then best rate.
+    #   tier 3: only once every Top/Solid AND Fair is at 4 road days do the leftover
+    #           slots go to a Top/Solid taking a 5th day (4 road + 1 bk = 42h OT),
+    #           best rate first. Fair never take a 5th day; discipline never take a
+    #           backup at all. backup_eligible_extra (BKX) names join tier 1. One
+    #           backup each; nobody exceeds max_total_days (5).
+    bslot = {d: [] for d in DAYS}
+    fallback_used = []                       # 5th-day (42h) usages, for the report
+
+    def _bk_common(i, dr, d, dt):
+        return (d not in dr['unav'] and d not in dr['prim'] and d not in dr['helper']
+                and d not in dr['meet'] and d not in dr['extra'] and i not in bslot[d]
+                and len(dr['bk']) < 1 and runok(dr, dt) and wkend_ok(dr, d)
                 and pdays(dr) + len(dr['bk']) + len(dr['extra']) + len(dr['meet']) < MAXTOT)
 
-    bslot = {d: [] for d in DAYS}
-    fallback_used = []                       # kept for the report shape (unused now)
-    for d in FILL:
-        dt = DATEALL[d]
-        while len(bslot[d]) < backup[d]:
-            cands = [i for i, dr in enumerate(roster) if _bk_ok(i, roster[i], d, dt)]
+    def _bk_tier(dr):
+        n = norm(dr['name'])
+        if n in REDS:
+            return None                      # discipline: never
+        tot = pdays(dr) + len(dr['bk']) + len(dr['extra']) + len(dr['meet'])
+        if (n in MOST or n in BKX) and pdays(dr) == 3:
+            return 1                         # Top/Solid stuck at 3 -> 32h
+        if FREE(dr) and 2 <= pdays(dr) <= 3 and tot < FREETOT:
+            return 2                         # Fair at 2-3 road, within their 4-total
+        if n in MOST and pdays(dr) == 4:
+            return 3                         # Top/Solid 5th day (42h OT)
+        return None
+
+    def _bk_order(i):
+        dr = roster[i]
+        if _bk_tier(dr) == 2:                # Fair: fewest road days first, then rate
+            return (pdays(dr), -rate_of(dr), H(dr), norm(dr['name']))
+        return (-rate_of(dr), H(dr), norm(dr['name']))   # Top/Solid: best rate first
+
+    def _place_backup(i):
+        dr = roster[i]
+        opts = [d for d in FILL
+                if len(bslot[d]) < backup[d] and _bk_common(i, dr, d, DATEALL[d])]
+        if not opts:
+            return False
+        d = max(opts, key=lambda d: (prefsc(dr, d), -ALL.index(d)))
+        bslot[d].append(i); dr['bk'].append(d)
+        if pdays(dr) == 4:                    # a 5th worked day (42h OT)
+            fallback_used.append((0, dr['name'], d))
+        return True
+
+    total_slots = sum(backup[d] for d in FILL)
+    for tier in (1, 2, 3):
+        while sum(len(bslot[d]) for d in FILL) < total_slots:
+            cands = [i for i, dr in enumerate(roster)
+                     if _bk_tier(dr) == tier and len(dr['bk']) < 1
+                     and any(len(bslot[d]) < backup[d]
+                             and _bk_common(i, dr, d, DATEALL[d]) for d in FILL)]
             if not cands:
-                break                        # no Top/Solid-at-3 left -> leave slots empty
-            # better board rate first, then fewest hours, then who wants the day most
-            b = min(cands, key=lambda i: (-rate_of(roster[i]), H(roster[i]),
-                                          -prefsc(roster[i], d), norm(roster[i]['name'])))
-            bslot[d].append(b); roster[b]['bk'].append(d)
+                break                        # tier exhausted -> fall to the next
+            if not _place_backup(min(cands, key=_bk_order)):
+                break
 
     # ---- wave labels (primaries hit exact counts; backups spread across waves) ----
     cell = {d: {} for d in DAYS}
