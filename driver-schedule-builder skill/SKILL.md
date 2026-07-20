@@ -261,18 +261,26 @@ the exclude list is now just Zackary McDonald, Rachel Rhoades, Greyson Turner.
   shift pays only `backup_hours` (≈2h) vs a primary's `primary_hours` (≈10h), **plus a
   chance of being sent out on a route**. Only drivers with ≥2 road days get backups. The
   per-day backup count HR sets (`backup_per_day` / `backup_pct`) is the **fill TARGET**;
-  slots are filled globally, one priority tier at a time (Jose 2026-07-19, revised):
+  slots are filled globally, one priority tier at a time (Jose 2026-07-19, revised ×2):
   1. **Top/Solid stuck at 3 road days** → backup (3 road + 1 = **32h**), **better board-rate
      first**. Served before any Fair, so they stay ahead. `backup_eligible_extra`
-     (advanced-panel, per week) adds named drivers to this tier.
+     (advanced-panel, per week) names TRUE exceptions that join this tier — including a
+     discipline or exact-days driver (≥2 road days, inside their total-day cap).
   2. **then Fair at 2–3 road days** → backup, inside their 4-total cap (**fewest road days
-     first**, to lift a bare 20h week, then better rate).
-  3. **only once every Top/Solid AND Fair is at 4 road days** do the leftover slots go to a
-     **Top/Solid taking a 5th day** (4 road + 1 = **42h**, ~2h OT), better rate first.
-  **The discipline tier never takes a backup.** Fair never take a 5th day; **nobody exceeds
-  5 total worked days.** If a tier can't reach a day (everyone eligible is already driving
-  it or maxed), those slots stay empty — expected, not a shortfall. The verification block
-  names every 42h (5th-day) driver.
+     first**, to lift a bare 20h week, then better rate). **PAY-ORDER GATE:** while ANY
+     Top/Solid-at-3 could not be given a backup (they sit at 30h), a **3-road Fair gets no
+     backup** — 32h would out-earn that Top/Solid. A 2-road Fair (→22h) still may.
+  3. Leftover slots → a **Top/Solid at 4 roads takes a 5th day** (4 road + 1 = **42h**,
+     ~2h OT), better rate first — the last resort so the requested count is still met.
+  Each tier fills by **matroid-greedy matching**: members are walked in strict priority
+  order and served via an augmenting-path matcher (same technique as the road repair), so
+  under slot scarcity the better rate ALWAYS wins the last slot and nobody is stranded
+  because a colleague took their only feasible day. **The discipline tier never takes a
+  backup** (unless named in `backup_eligible_extra`). Fair never take a 5th day; **nobody
+  exceeds 5 total worked days.** Slots nobody may/can take stay empty and the build emits a
+  NOTE naming the open days, the stuck 30h Top/Solid drivers, and — only when true — that
+  the pay-order rule held Fair back; an under-target backup count with that note is
+  deliberate, not a failure. The verification block names every 42h (5th-day) driver.
 - **Hours balance for the regular pool.** Everyone not on a target list is balanced toward
   a similar hours band (primaries distributed lowest-first). Result is typically a tight
   ~24–32h cluster, with the "most days" people highest and "fewer days" people lowest **by
@@ -323,7 +331,7 @@ the exclude list is now just Zackary McDonald, Rachel Rhoades, Greyson Turner.
   "weekend_spread": true,      // soft: ~1 weekend day per driver when Sat+Sun both open
   "training_pairs": [{"trainer": "Alex Keller", "trainee": "Jessica Jett"}],
   "extra_worked_days": {"Connor Stephenson": ["Fri", "Sat"]},  // dispatch duty: no routes, still worked days
-  "backup_eligible_extra": [],  // named drivers to add to backup tier 1 (with the Top/Solid-at-3). Normally EMPTY.
+  "backup_eligible_extra": [],  // TRUE exceptions who join backup tier 1 (even discipline/exact drivers, >=2 roads). Normally EMPTY.
   "backup_fallback": [],   // legacy field, no longer used by the fill — the tier order (Top/Solid-at-3 -> Fair -> Top/Solid 5th day) is built in
   "prev_week_file": "<...>/Week-26-Schedule.xlsx",
   "prefs_csv": "<...>/Driver-Preferences.csv",

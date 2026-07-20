@@ -90,6 +90,73 @@ def tiers(res):
     return [d[n] for n in TOP], [d[n] for n in FAIR], [d[n] for n in DISC]
 
 
+def hours_of(res, dr):
+    return (len(dr['prim']) + len(dr['helper'])) * 10 + len(dr['bk']) * 2
+
+
+def pay_order_ok(res):
+    """Jose 2026-07-19: no Fair may out-earn a Top/Solid stuck at 3 road days
+    with no backup (30h). Returns (ok, detail)."""
+    stuck = [dr for dr in res.roster if dr['name'] in TOP
+             and len(dr['prim']) + len(dr['helper']) == 3 and not dr['bk']]
+    if not stuck:
+        return True, 'no stuck Top/Solid'
+    worst = min(hours_of(res, dr) for dr in stuck)
+    over = [(dr['name'], hours_of(res, dr)) for dr in res.roster
+            if dr['name'] in FAIR and hours_of(res, dr) > worst]
+    return not over, f'stuck Top at {worst}h out-earned by {over[:3]}'
+
+
+def _bk_feasible(res, dr, d):
+    """Test-side mirror of the solver's backup-day feasibility (no meetings /
+    extras / weekend cap in these synthetic fleets)."""
+    import datetime
+    if d in dr['unav'] or d in dr['prim'] or d in dr['helper']:
+        return False
+    if len(dr['prim']) + len(dr['helper']) >= 5:
+        return False
+    ONE = datetime.timedelta(days=1)
+    s = ({res.DATEALL[x] for x in list(dr['prim']) + list(dr['helper'])}
+         | set(dr['w_prev']) | {res.DATEALL[d]})
+    dt = res.DATEALL[d]; n = 1
+    c = dt - ONE
+    while c in s:
+        n += 1; c -= ONE
+    c = dt + ONE
+    while c in s:
+        n += 1; c += ONE
+    return n <= 5
+
+
+def max_serve_top3(res):
+    """Independent Kuhn's oracle: the true MAXIMUM number of Top/Solid-at-3
+    that could be given a backup within the per-day slot counts. The solver's
+    tier-1 fill must match this -- no one stranded by day-choice collisions."""
+    cands = [i for i, dr in enumerate(res.roster) if dr['name'] in TOP
+             and len(dr['prim']) + len(dr['helper']) == 3]
+    assign = {d: [] for d in res.DAYS}
+
+    def place(i, seen):
+        dr = res.roster[i]
+        for d in res.DAYS:
+            if d in seen or not _bk_feasible(res, dr, d):
+                continue
+            if len(assign[d]) < res.backup[d]:
+                assign[d].append(i); return True
+        for d in res.DAYS:
+            if d in seen or not _bk_feasible(res, dr, d):
+                continue
+            seen.add(d)
+            for j in list(assign[d]):
+                assign[d].remove(j)
+                if place(j, seen):
+                    assign[d].append(i); return True
+                assign[d].append(j)
+        return False
+
+    return sum(1 for i in cands if place(i, set())), len(cands)
+
+
 PASS = FAIL = 0
 def check(name, cond, detail=''):
     global PASS, FAIL
@@ -160,11 +227,47 @@ def bktotals(res):
 # Uniform per-day slots remove the placement bottleneck, so tier order is exact.
 res, chk = run(V_LIGHT, bk_per_day=3)
 top_bk, fair_bk, disc_bk = bktotals(res)
+po, po_d = pay_order_ok(res)
 print(f'BACKUPS: Top/Solid {top_bk}/{N_TOP} | Fair {fair_bk} | discipline {disc_bk} | errors {len(chk["errors"])}')
 check('backups: every Top/Solid-at-3 backed before Fair', top_bk == N_TOP, f'top {top_bk}/{N_TOP}')
 check('backups: Fair receive the remaining slots (after Top/Solid)', fair_bk > 0, fair_bk)
 check('backups: discipline never receive a backup', disc_bk == 0, disc_bk)
+check('backups: pay order holds (no Fair over a stuck Top)', po, po_d)
 check('backups: no errors', not chk['errors'], str(chk['errors'][:3]))
+
+# --- stranding: scarce slots + patterned unavailability -> tier-1 coverage must
+# equal an independent max-matching oracle (a better-rate Top must never grab
+# the only day a colleague could take, leaving him at 30h while Fair get 32h) ---
+unav_pat = {n: [ALL[(2 * i) % 7], ALL[(2 * i + 3) % 7]] for i, n in enumerate(TOP)}
+res, chk = run(V_LIGHT, unavail=unav_pat, bk_per_day=1)
+served = sum(1 for dr in res.roster if dr['name'] in TOP
+             and len(dr['prim']) + len(dr['helper']) == 3 and dr['bk'])
+best, ncand = max_serve_top3(res)
+po, po_d = pay_order_ok(res)
+print(f'STRANDING: served {served} of {ncand} Top-at-3 | oracle max {best} | errors {len(chk["errors"])}')
+check('stranding: tier-1 coverage equals the max-matching oracle', served == best, f'{served} != {best}')
+check('stranding: pay order holds', po, po_d)
+check('stranding: no errors', not chk['errors'], str(chk['errors'][:3]))
+
+# --- pay-order gate: a Top who CANNOT take any backup day (unavailable) stays
+# 30h -> no Fair may reach 32h (Fair-at-3 backups blocked); slots stay empty ---
+stuck_name = TOP[0]
+res, chk = run(V_FAIR3, unavail={stuck_name: [d for d in ALL if d not in ('Sun', 'Tue', 'Thu')]},
+               bk_per_day=2)
+stuck = next(dr for dr in res.roster if dr['name'] == stuck_name)
+served_all = sum(1 for dr in res.roster if dr['name'] in TOP
+                 and len(dr['prim']) + len(dr['helper']) == 3 and dr['bk'])
+best, ncand = max_serve_top3(res)
+fair_hours = [hours_of(res, dr) for dr in res.roster if dr['name'] in FAIR]
+po, po_d = pay_order_ok(res)
+print(f'GATE: {stuck_name} {hours_of(res, stuck)}h bk={len(stuck["bk"])} | Tops served {served_all} '
+      f'(oracle max {best} of {ncand}) | max Fair {max(fair_hours)}h | errors {len(chk["errors"])}')
+check('gate: the blocked Top has no backup (30h)', not stuck['bk'] and hours_of(res, stuck) == 30,
+      f'{hours_of(res, stuck)}h')
+check('gate: Top/Solid coverage equals the max-matching oracle', served_all == best, f'{served_all} != {best}')
+check('gate: no Fair exceeds the stuck Top (30h)', max(fair_hours) <= 30, max(fair_hours))
+check('gate: pay order holds', po, po_d)
+check('gate: no errors', not chk['errors'], str(chk['errors'][:3]))
 
 # --- 5th-day: when Top/Solid AND Fair are all at 4, leftover backups -> Top 5th day ---
 res, chk = run(V_FAIR4, backup_pct=0.1)
@@ -173,10 +276,12 @@ top_fifth = sum(1 for dr in res.roster if dr['name'] in TOP
 fair_over4 = [dr['name'] for dr in res.roster if dr['name'] in FAIR
               and len(dr['prim']) + len(dr['helper']) + len(dr['bk']) > 4]
 disc_bk2 = sum(len(dr['bk']) for dr in res.roster if dr['name'] in DISC)
+po, po_d = pay_order_ok(res)
 print(f'5TH-DAY: Top 5th-day backups {top_fifth} | Fair over-4 {len(fair_over4)} | disc bk {disc_bk2} | errors {len(chk["errors"])}')
 check('5th-day: some Top/Solid take a 5th-day backup when everyone is maxed', top_fifth > 0, top_fifth)
 check('5th-day: Fair never exceed 4 total worked days', not fair_over4, fair_over4[:3])
 check('5th-day: discipline still get no backup', disc_bk2 == 0, disc_bk2)
+check('5th-day: pay order holds', po, po_d)
 check('5th-day: no errors (42h is a note, not a violation)', not chk['errors'], str(chk['errors'][:3]))
 
 # --- <5 routes -> exactly 3, even at high volume (feasible: other Tops reach 4) ---
@@ -196,6 +301,27 @@ short = [e for e in chk['errors'] if 'INFEASIBLE' in e or 'short' in e.lower()]
 print(f'OVERSUB: {locked} got {days_of(res, locked)}; errors {len(chk["errors"])} ({short[:1]})')
 check('oversub: locked driver still exactly 3', days_of(res, locked) == 3, days_of(res, locked))
 check('oversub: shortfall reported, build did not hang', len(chk['errors']) >= 1)
+
+# --- a day listed with NO wave times must be rejected loudly at load time
+# (never reach the solver and divide by an empty wave list) ---
+avail_p = os.path.join(FIX, '_tier_avail.xlsx'); write_avail(avail_p)
+cfg_e = {
+    'start_date': '2026-08-02',
+    'waves': {'Sun': {'10:25 AM': 3}, 'Mon': {}},
+    'backup_per_day': {'Sun': 1, 'Mon': 2},
+    'max_primary_days': 4, 'most_days': TOP[:2],
+    'reduced_days': {'target': 2, 'names': []}, 'exact_days': {},
+    'prev_week_file': None, 'avail_file': avail_p,
+    'out': os.path.join(FIX, '_tier_out.xlsx'), 'strict_names': True,
+}
+pe = os.path.join(FIX, '_tier_cfg.json'); json.dump(cfg_e, open(pe, 'w'))
+try:
+    B.build_schedule(B.load_config(pe))
+    check('empty-wave day: rejected loudly at config load', False, 'no error raised')
+except B.ScheduleConfigError as e:
+    check('empty-wave day: rejected loudly at config load', 'waves' in str(e), str(e)[:80])
+except Exception as e:  # noqa: BLE001
+    check('empty-wave day: rejected loudly at config load', False, repr(e)[:120])
 
 # --- unavailable discipline driver = no crash ---
 victim = DISC[0]

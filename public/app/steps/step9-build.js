@@ -170,6 +170,9 @@ export function Step9Build() {
       ${(r.infeasible || []).length ? html`<${Banner} kind="warn">
         <b>Some slots could not be filled:</b>
         <ul>${r.infeasible.map((l) => html`<li>${translateInfeasible(l)}</li>`)}</ul><//>` : ''}
+      ${(r.notes || []).length ? html`<${Banner} kind="info">
+        <b>Notes:</b>
+        <ul>${r.notes.map((l) => html`<li>${l}</li>`)}</ul><//>` : ''}
       ${(chk.errors || []).length ? html`<${Banner} kind="err">
         <b>Rule violations:</b><ul>${chk.errors.map((l) => html`<li>${l}</li>`)}</ul><//>` : ''}
 
@@ -197,12 +200,15 @@ export function Step9Build() {
               const other = [...d.helper_days.map((x) => x + ' (train)'),
                 ...d.dispatch_days.map((x) => x + ' (disp)'),
                 ...d.meeting_days.map((x) => x + ' (mtg)')].join(', ');
+              // a 0h driver with submitted days off: say WHY at a glance
+              const why = (!other && d.hours === 0 && (d.unavailable || []).length)
+                ? `unavailable ${d.unavailable.join(' ')}` : '';
               return html`<tr>
                 <td>${d.name}</td>
                 <td><span class="chip ${meta.chip}">${d.cls}${d.target != null ? ':' + d.target : ''}</span></td>
                 <td>${d.road_days.join(' ') || '—'}</td>
                 <td>${d.backup_days.join(' ') || '—'}</td>
-                <td class="muted">${other || '—'}</td>
+                <td class="muted">${other || why || '—'}</td>
                 <td>${d.hours}h</td></tr>`;
             })}`;
         })}</tbody>
@@ -215,7 +221,6 @@ export function Step9Build() {
         Regular-pool hours: ${chk.pool ? `${chk.pool.min}–${chk.pool.max} (avg ${chk.pool.avg})` : 'n/a'}
       </p>
       ${(chk.fifth_day || []).length ? html`<p class="muted">42h fifth-day backups: ${chk.fifth_day.map((x) => x[0]).join(', ')}</p>` : ''}
-      ${(chk.floor_unmet || []).length ? html`<p class="muted">2-road Fair with no backup: ${chk.floor_unmet.map((x) => x[0]).join(', ')}</p>` : ''}
       ${(r.pairlog || []).length ? html`<p class="muted">Training pairs: ${r.pairlog.map((p) => `${p[0]}→${p[1]} (${p[2]}→${p[3]})`).join('; ')}</p>` : ''}
 
       <details style="margin-top:10px"><summary>Full verification log</summary>

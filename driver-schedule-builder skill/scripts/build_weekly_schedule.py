@@ -224,8 +224,14 @@ def load_prefs(prefs_csv):
 
 
 def resolve(name, roster_names):
-    """Fuzzy: every token of the query must be a substring of some token of the candidate."""
-    q = norm(name).split()
+    """Fuzzy: every token of the query must be a substring of some token of the
+    candidate. An EXACT (normalized) match short-circuits first, so a config
+    name that IS a roster name is never reported ambiguous just because it is
+    also a prefix of a longer one (e.g. "Robert Smith" vs "Robert Smith Jr")."""
+    nq = norm(name)
+    if nq in roster_names:
+        return [nq]
+    q = nq.split()
     return [n for n in roster_names
             if all(any(tok in rt for rt in n.split()) for tok in q)]
 
@@ -432,6 +438,9 @@ def build_schedule(cfg):
     else:
         pct = cfg.get('backup_pct', 0.15)   # standing default 15% (Jose's band: 10-20%)
         backup = {d: round(routes[d] * pct) for d in DAYS}
+    # a day with no wave times can't host anything -- zero its backups too
+    # (otherwise the wave-labeling step divides by an empty wave list)
+    backup = {d: (backup[d] if waves[d] else 0) for d in DAYS}
     MAXC = cfg.get('max_consecutive', 5)
     PH = cfg.get('primary_hours', 10)
     BH = cfg.get('backup_hours', 2)
@@ -951,19 +960,28 @@ def build_schedule(cfg):
     _rebalance()
 
     # ---- PHASE 2: backups -- fill the requested per-day count in priority order
-    # (Jose 2026-07-19, revised). The count HR sets (backup_per_day / backup_pct)
-    # is the fill TARGET. Slots are filled globally, one priority tier at a time:
+    # (Jose 2026-07-19, revised x2). The count HR sets (backup_per_day /
+    # backup_pct) is the fill TARGET. Slots are filled globally, one priority
+    # tier at a time:
     #   tier 1: Top/Solid stuck at 3 road days -> backup (3 road + 1 bk = 32h),
     #           best board-rate first. Served before any Fair, so they stay ahead.
     #   tier 2: then Fair at 2-3 road days -> backup, inside their 4-total cap.
     #           Fewest road days first (lift bare 20h weeks), then best rate.
-    #   tier 3: only once every Top/Solid AND Fair is at 4 road days do the leftover
-    #           slots go to a Top/Solid taking a 5th day (4 road + 1 bk = 42h OT),
-    #           best rate first. Fair never take a 5th day; discipline never take a
-    #           backup at all. backup_eligible_extra (BKX) names join tier 1. One
-    #           backup each; nobody exceeds max_total_days (5).
+    #           PAY-ORDER GATE (Jose 2026-07-19): while ANY Top/Solid-at-3
+    #           could not be given a backup (30h), a 3-road Fair may NOT take
+    #           one -- 32h would out-earn the Top. A 2-road Fair (->22h) still
+    #           may; they stay below every Top/Solid.
+    #   tier 3: leftover slots go to a Top/Solid at 4 road days taking a 5th
+    #           day (4 road + 1 bk = 42h, ~2h OT), best rate first -- the last
+    #           resort so the requested count is still met. Fair never take a
+    #           5th day; discipline never take a backup at all.
+    # backup_eligible_extra (BKX) names join tier 1. One backup each; nobody
+    # exceeds max_total_days (5). Each tier fills greedily, then an
+    # AUGMENTING-PATH repair reassigns slot days so no tier member is stranded
+    # by another member taking their only feasible day (same technique as the
+    # Phase 1b road repair; without it, a better-rate Top could grab the slot
+    # day a colleague needed, and the leftover days fell through to Fair).
     bslot = {d: [] for d in DAYS}
-    fallback_used = []                       # 5th-day (42h) usages, for the report
 
     def _bk_common(i, dr, d, dt):
         return (d not in dr['unav'] and d not in dr['prim'] and d not in dr['helper']
@@ -973,10 +991,13 @@ def build_schedule(cfg):
 
     def _bk_tier(dr):
         n = norm(dr['name'])
-        if n in REDS:
-            return None                      # discipline: never
         tot = pdays(dr) + len(dr['bk']) + len(dr['extra']) + len(dr['meet'])
-        if (n in MOST or n in BKX) and pdays(dr) == 3:
+        if n in BKX and pdays(dr) >= 2 \
+                and tot < (FREETOT if FREE(dr) else MAXTOT):
+            return 1                         # named per-week exception joins tier 1
+        if n in REDS:
+            return None                      # discipline: never (unless named in BKX)
+        if n in MOST and pdays(dr) == 3:
             return 1                         # Top/Solid stuck at 3 -> 32h
         if FREE(dr) and 2 <= pdays(dr) <= 3 and tot < FREETOT:
             return 2                         # Fair at 2-3 road, within their 4-total
@@ -984,35 +1005,105 @@ def build_schedule(cfg):
             return 3                         # Top/Solid 5th day (42h OT)
         return None
 
+    top3_short = []                          # tier-1 members left unserved (pay-order gate)
+
+    def _bk_elig(i, tier):
+        dr = roster[i]
+        if _bk_tier(dr) != tier or dr['bk']:
+            return False
+        if tier == 2 and top3_short and pdays(dr) >= 3:
+            return False                     # gate: a 32h Fair would out-earn a 30h Top
+        return True
+
     def _bk_order(i):
         dr = roster[i]
         if _bk_tier(dr) == 2:                # Fair: fewest road days first, then rate
             return (pdays(dr), -rate_of(dr), H(dr), norm(dr['name']))
         return (-rate_of(dr), H(dr), norm(dr['name']))   # Top/Solid: best rate first
 
-    def _place_backup(i):
+    def _bk_place(i, d):
+        bslot[d].append(i); roster[i]['bk'].append(d)
+
+    def _bk_augment(i, seen):
+        # Serve driver i a backup: directly on their most-preferred feasible
+        # day with open capacity, or by relocating a current holder of a
+        # feasible-but-full day to another day they can work (the holder keeps
+        # a backup -- only its day moves, so who-is-served never changes).
+        # Shared `seen` set = each day explored once per attempt (Kuhn's);
+        # reverts on failure.
         dr = roster[i]
-        opts = [d for d in FILL
-                if len(bslot[d]) < backup[d] and _bk_common(i, dr, d, DATEALL[d])]
-        if not opts:
-            return False
-        d = max(opts, key=lambda d: (prefsc(dr, d), -ALL.index(d)))
-        bslot[d].append(i); dr['bk'].append(d)
-        if pdays(dr) == 4:                    # a 5th worked day (42h OT)
-            fallback_used.append((0, dr['name'], d))
-        return True
+        best = None
+        for d in FILL:
+            if d in seen or not _bk_common(i, dr, d, DATEALL[d]):
+                continue
+            if len(bslot[d]) < backup[d]:
+                k = (prefsc(dr, d), -ALL.index(d))
+                if best is None or k > best[0]:
+                    best = (k, d)
+        if best is not None:
+            _bk_place(i, best[1])
+            return True
+        for d in FILL:
+            if d in seen or not _bk_common(i, dr, d, DATEALL[d]):
+                continue
+            seen.add(d)
+            for j in list(bslot[d]):
+                dj = roster[j]
+                bslot[d].remove(j); dj['bk'].remove(d)
+                if _bk_augment(j, seen):
+                    _bk_place(i, d)
+                    return True
+                bslot[d].append(j); dj['bk'].append(d)
+        return False
 
     total_slots = sum(backup[d] for d in FILL)
+
+    def _bk_filled():
+        return sum(len(bslot[d]) for d in FILL)
+
+    # Matroid-greedy fill: walk each tier's members in strict priority order
+    # (_bk_order) and serve each via the augmenting matcher. Serving a later
+    # member never unseats an earlier one (relocations only move DAYS), so
+    # under slot scarcity the served set is exactly the priority-optimal one:
+    # a better board-rate always beats a worse one for the last slot, and a
+    # bare-20h 2-road Fair beats a 3-road Fair. It is also maximum-size --
+    # nobody servable is left stranded by a colleague's day choice.
     for tier in (1, 2, 3):
-        while sum(len(bslot[d]) for d in FILL) < total_slots:
-            cands = [i for i, dr in enumerate(roster)
-                     if _bk_tier(dr) == tier and len(dr['bk']) < 1
-                     and any(len(bslot[d]) < backup[d]
-                             and _bk_common(i, dr, d, DATEALL[d]) for d in FILL)]
-            if not cands:
-                break                        # tier exhausted -> fall to the next
-            if not _place_backup(min(cands, key=_bk_order)):
+        if tier == 2:                        # tier 1 is final now -- fix the gate
+            top3_short = [i for i, dr in enumerate(roster)
+                          if _bk_tier(dr) == 1 and not dr['bk']]
+        for i in sorted((i for i in range(len(roster)) if _bk_elig(i, tier)),
+                        key=_bk_order):
+            if _bk_filled() >= total_slots:
                 break
+            _bk_augment(i, set())
+
+    fallback_used = []   # legacy config ladder -- no longer drives the fill;
+    #                      42h fifth-days are reported via the verifier instead
+
+    # explain any backup shortfall so an under-target count never reads as a
+    # silent failure -- name the open days, and only blame the pay-order rule
+    # when a gated Fair really could have taken one of them.
+    if _bk_filled() < total_slots:
+        short = total_slots - _bk_filled()
+        open_days = [d for d in FILL if len(bslot[d]) < backup[d]]
+        stuck = sorted(roster[i]['name'] for i in top3_short if not roster[i]['bk'])
+        gated = [dr['name'] for i, dr in enumerate(roster)
+                 if FREE(dr) and pdays(dr) >= 3 and not dr['bk']
+                 and pdays(dr) + len(dr['extra']) + len(dr['meet']) < FREETOT
+                 and any(len(bslot[d]) < backup[d]
+                         and _bk_common(i, dr, d, DATEALL[d]) for d in FILL)]
+        msg = (f'BACKUPS {_bk_filled()}/{total_slots}: {short} slot(s) open on '
+               f'{"/".join(open_days)}.')
+        if stuck:
+            msg += (f' {len(stuck)} Top/Solid at 3 road days could not be given '
+                    f'a backup ({", ".join(stuck)}).')
+        if stuck and gated:
+            msg += (f' {len(gated)} three-road Fair were held back by the '
+                    f'pay-order rule (a backup would put them above those drivers).')
+        if not stuck:
+            msg += ' No eligible driver can work the open day(s).'
+        notes.append(msg)
 
     # ---- wave labels (primaries hit exact counts; backups spread across waves) ----
     cell = {d: {} for d in DAYS}
