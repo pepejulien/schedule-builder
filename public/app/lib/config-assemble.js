@@ -11,10 +11,10 @@ const MOST = new Set(['Top performer', 'Solid']);
 // Default day-target group from a driver's board tier + 30-day route count.
 // (SKILL.md "Tier-based day targets"). Returns a group descriptor.
 export function deriveGroup(tier, routes) {
-  if (DISCIPLINE.has(tier)) return { kind: 'reduced' };           // exactly 2, Sun+Sat
-  if (routes != null && routes < 5) return { kind: 'exact', n: 3 }; // 30h floor
-  if (MOST.has(tier)) return { kind: 'most' };                     // maximize road days
-  if (tier === 'Fair') return { kind: 'free' };                    // free pool
+  if (DISCIPLINE.has(tier)) return { kind: 'reduced' };           // base 1, up to 2, Sun+Sat
+  if (routes != null && routes < 5) return { kind: 'exact', n: 3 }; // pinned 3, never bumped
+  if (MOST.has(tier)) return { kind: 'most' };                     // base 3, up to 4 road
+  if (tier === 'Fair') return { kind: 'free' };                    // free pool: base 2, up to 4
   return { kind: 'exact', n: 3 };                                  // Unrated / unknown -> ask, default 3
 }
 
@@ -25,9 +25,9 @@ export function hasTierOverlap(tier, routes) {
 }
 
 export const GROUP_OPTIONS = [
-  { value: 'most', label: 'Most days (4 road, maximize)' },
-  { value: 'free', label: 'Free pool (Fair: 3+1 / 2+2)' },
-  { value: 'reduced', label: 'Reduced (exactly 2, Sun+Sat)' },
+  { value: 'most', label: 'Most days (Top/Solid: base 3, max 4)' },
+  { value: 'free', label: 'Free pool (Fair: base 2, max 4 road, no backup)' },
+  { value: 'reduced', label: 'Reduced (base 1, max 2, Sun+Sat)' },
   { value: 'exact:3', label: 'Exactly 3 days' },
   { value: 'exact:2', label: 'Exactly 2 days' },
   { value: 'exact:4', label: 'Exactly 4 days' },
