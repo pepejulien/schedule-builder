@@ -286,6 +286,14 @@ the exclude list is now just Zackary McDonald, Rachel Rhoades, Greyson Turner.
     last, but covered (the spots must be filled). Same for extra road days: a
     discipline driver gets an emergency 3rd road day only when no Top/Solid/Fair can
     legally take that day.
+  - **THE 40h EXCHANGE (Jose 2026-07-31):** before an Underperforming driver gets
+    their FIRST backup, every Top/Solid still under 40h trades up instead: they give
+    back their backup day(s) and **take a route day away from the worst-rated
+    discipline driver** — Top/Solid secured at **4 roads = 40h**, the discipline
+    driver drops a route day (keeping ≥1) and may receive the released backup day in
+    exchange (authorized even below 2 roads — the one exception to that rule). Every
+    trade is named in a **BACKUP EXCHANGE** note. No trade happens in weeks where the
+    discipline tier never reaches the backup ladder.
   A driver who can't take any backup day (unavailable/rules) is skipped and the ladder
   moves on — it never blocks those below. Rate ties break by tier, then fewer hours.
   Rules that still bind: **≥2 road days** to take a backup (no backup-only weeks);

@@ -294,28 +294,49 @@ check('seconds: some discipline take a 2nd backup (still under 40h)', len(disc_2
 check('seconds: 5th-days only for the slots the ladder cannot reach', top_fifth <= 2, top_fifth)
 check('seconds: no errors', not chk['errors'], str(chk['errors'][:3]))
 
-# --- Top/Solid + Fair seconds come BEFORE any discipline backup (the 07-31
-# complaint): tops take a 2nd backup (34h) before discipline get their 1st ---
+# --- THE 40h EXCHANGE (Jose 2026-07-31): before discipline get their first
+# backup, every under-40h Top/Solid trades their backup day(s) for a route day
+# taken from the worst-rated discipline driver -> Top secured at 4 roads/40h ---
 res, chk = run(V_DISC2, bk_per_day=8)
-top_2bk = sum(1 for dr in res.roster if dr['name'] in TOP and len(dr['bk']) == 2)
-fair_1bk = sum(1 for dr in res.roster if dr['name'] in FAIR and len(dr['bk']) == 1)
+req = sum(res.backup[d] for d in res.DAYS)
+top_secured = sum(1 for dr in res.roster if dr['name'] in TOP
+                  and len(dr['prim']) + len(dr['helper']) == 4 and not dr['bk'])
+disc1 = [dr['name'] for dr in res.roster if dr['name'] in DISC
+         and len(dr['prim']) + len(dr['helper']) == 1]
+disc2r = [dr['name'] for dr in res.roster if dr['name'] in DISC
+          and len(dr['prim']) + len(dr['helper']) == 2]
+rate_ok = (not disc1 or not disc2r
+           or max(DISC_RATE[n] for n in disc1) <= min(DISC_RATE[n] for n in disc2r))
+filled = sum(chk['per_day'][d]['backup'] for d in res.DAYS)
+note_ok = any('BACKUP EXCHANGE' in x for x in res.notes)
 fair_over = [dr['name'] for dr in res.roster if dr['name'] in FAIR
              and len(dr['prim']) + len(dr['helper']) + len(dr['bk']) > 4]
-disc_srv = [dr for dr in res.roster if dr['name'] in DISC and dr['bk']]
-disc_uns = [dr for dr in res.roster if dr['name'] in DISC and not dr['bk']]
-rate_ok = (not disc_srv or not disc_uns
-           or min(DISC_RATE[dr['name']] for dr in disc_srv)
-           >= max(DISC_RATE[dr['name']] for dr in disc_uns))
-print(f'TOP-SECONDS: Top doubles {top_2bk}/{N_TOP} | Fair singles {fair_1bk}/{N_FAIR} | '
-      f'disc served {len(disc_srv)} | errors {len(chk["errors"])}')
-check('top-seconds: every Top/Solid holds TWO backups (3rd+2bk = 34h, 5 days)',
-      top_2bk == N_TOP, f'{top_2bk}/{N_TOP}')
-check('top-seconds: every Fair holds one (3 roads + 1 = their 4-day cap)',
-      fair_1bk == N_FAIR, f'{fair_1bk}/{N_FAIR}')
-check('top-seconds: Fair never exceed 4 total days', not fair_over, fair_over[:3])
-check('top-seconds: discipline get only what remains, best rate first',
-      len(disc_srv) > 0 and rate_ok, f'{len(disc_srv)} rate_ok={rate_ok}')
-check('top-seconds: no errors', not chk['errors'], str(chk['errors'][:3]))
+print(f'EXCHANGE: Tops secured at 40h {top_secured}/{N_TOP} | disc road-donors {len(disc1)} | '
+      f'backups {filled}/{req} | errors {len(chk["errors"])}')
+check('exchange: EVERY Top/Solid secured at 4 roads / 40h, zero backups',
+      top_secured == N_TOP, f'{top_secured}/{N_TOP}')
+check('exchange: the road donors are the WORST-rated discipline drivers', rate_ok,
+      f'1-road {disc1[:3]} vs 2-road min rate')
+check('exchange: donors count matches the secured Tops', len(disc1) == N_TOP,
+      f'{len(disc1)} != {N_TOP}')
+check('exchange: backup slots still fully covered', filled == req, f'{filled}/{req}')
+check('exchange: BACKUP EXCHANGE note emitted', note_ok, res.notes[:1])
+check('exchange: Fair never exceed 4 total days', not fair_over, fair_over[:3])
+check('exchange: no errors (traded 1-road backups are authorized)', not chk['errors'],
+      str(chk['errors'][:3]))
+
+# --- no trigger, no trade: when discipline never reach the backup ladder,
+# nobody touches their route days ---
+res, chk = run(V_DISC2, bk_per_day=2)
+disc_roads = sum(len(dr['prim']) + len(dr['helper']) for dr in res.roster if dr['name'] in DISC)
+top4 = sum(1 for dr in res.roster if dr['name'] in TOP
+           and len(dr['prim']) + len(dr['helper']) == 4)
+note_bad = any('BACKUP EXCHANGE' in x for x in res.notes)
+print(f'NO-TRIGGER: disc road-days {disc_roads}/{N_DISC * 2} | Tops at 4: {top4} | errors {len(chk["errors"])}')
+check('no-trigger: discipline keep every route day', disc_roads == N_DISC * 2,
+      f'{disc_roads}/{N_DISC * 2}')
+check('no-trigger: no exchange happened', top4 == 0 and not note_bad, f'top4={top4}')
+check('no-trigger: no errors', not chk['errors'], str(chk['errors'][:3]))
 
 # --- true overflow: EVERYONE at 40h (route coverage pushed discipline to 4
 # roads too) -> only then do Top/Solid take a 42h fifth day ---

@@ -226,9 +226,10 @@ def check_case(case, res, chk):
         return None                      # over-constrained roster: not a backup test
     if chk['errors']:
         errs.append(f'verifier errors: {chk["errors"][:3]}')
+    xbk = {B.norm(n) if isinstance(n, str) else n for n in (getattr(res, 'XBK', set()) or set())}
     for dr in res.roster:
         n = dr['name']
-        if dr['bk'] and pdy(dr) < 2:
+        if dr['bk'] and pdy(dr) < 2 and B.norm(n) not in xbk:
             errs.append(f'backup under 2 roads: {n}')
         if pdy(dr) + len(dr['bk']) > 5:
             errs.append(f'over 5 total: {n}')
@@ -242,12 +243,32 @@ def check_case(case, res, chk):
         got = sum(1 for dr in res.roster if d in dr['bk'])
         if got > res.backup[d]:
             errs.append(f'day {d}: {got} > requested {res.backup[d]}')
-    served = {dr['name']: len(dr['bk']) for dr in res.roster if dr['bk']}
-    want = oracle_ladder(res, case)
-    if served != want:
-        diff = [(n, served.get(n, 0), want.get(n, 0))
-                for n in set(served) | set(want) if served.get(n, 0) != want.get(n, 0)]
-        errs.append(f'LADDER COUNTS: {diff[:4]} ({sum(served.values())} vs {sum(want.values())})')
+    exchanged = any('BACKUP EXCHANGE' in x for x in res.notes)
+    if not exchanged:
+        served = {dr['name']: len(dr['bk']) for dr in res.roster if dr['bk']}
+        want = oracle_ladder(res, case)
+        if served != want:
+            diff = [(n, served.get(n, 0), want.get(n, 0))
+                    for n in set(served) | set(want) if served.get(n, 0) != want.get(n, 0)]
+            errs.append(f'LADDER COUNTS: {diff[:4]} ({sum(served.values())} vs {sum(want.values())})')
+    # 40h-exchange invariant (Jose 2026-07-31): while any discipline driver
+    # holds a backup, no Top/Solid under 40h / under 4 roads may be able to
+    # directly take a route day from a >=2-road discipline driver
+    disc_hold = any(dr['name'] in disc and dr['bk'] for dr in res.roster)
+    if disc_hold:
+        for t in res.roster:
+            if t['name'] not in top or pdy(t) >= 4:
+                continue
+            if pdy(t) * 10 + len(t['bk']) * 2 >= 40:
+                continue
+            for u in res.roster:
+                if u['name'] not in disc or pdy(u) < 2:
+                    continue
+                for r in u['prim']:
+                    if bk_feasible(res, t, r, case['weekend_cap'], set(t['bk'])):
+                        errs.append(f'MISSED EXCHANGE: {t["name"]} (<40h) could take '
+                                    f'{r} from {u["name"]}')
+                        return errs
     return errs
 
 

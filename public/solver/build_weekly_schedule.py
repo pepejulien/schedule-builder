@@ -1112,25 +1112,98 @@ def build_schedule(cfg):
     def _bk_filled():
         return sum(len(bslot[d]) for d in FILL)
 
+    # THE 40h EXCHANGE (Jose 2026-07-31): before an Underperforming driver
+    # gets their FIRST backup, secure every Top/Solid at a full 40h week
+    # instead -- the Top/Solid gives up their backup day(s) and takes a ROUTE
+    # day away from the worst-rated discipline driver (who keeps at least 1
+    # road day and may receive the released backup day in exchange). One
+    # successful trade per call; the ladder loop repeats it until no trade is
+    # possible, then lets the discipline tail fill what remains.
+    exchanges = []                            # (top, disc, road day, bk day|None)
+    XBK = set()                               # disc granted a backup below 2 roads
+
+    def _try_exchange():
+        tops = sorted((i for i, dr in enumerate(roster)
+                       if norm(dr['name']) in MOST and pdays(dr) < MAXPRIM
+                       and H(dr) < BKCAP),
+                      key=lambda i: (-rate_of(roster[i]), H(roster[i]),
+                                     norm(roster[i]['name'])))
+        discs = sorted((i for i, dr in enumerate(roster)
+                        if _is_disc(dr) and pdays(dr) >= 2),
+                       key=lambda i: (rate_of(roster[i]),      # WORST rate first
+                                      norm(roster[i]['name'])))
+        for t in tops:
+            dt_ = roster[t]
+            # release t's backup days up front (they count toward runok);
+            # restored verbatim if no road can be taken
+            freed = list(dt_['bk'])
+            for b in freed:
+                bslot[b].remove(t); dt_['bk'].remove(b)
+            for u in discs:
+                du = roster[u]
+                for r in sorted(du['prim'],
+                                key=lambda x: -prefsc(dt_, x)):
+                    if (u, r) in LOCKED or not _fillable(t, r):
+                        continue
+                    _unplace(u, r); _place(t, r)
+                    handed = None
+                    for b in freed:            # the literal exchange: U takes T's day
+                        if _bk_common(u, du, b, DATEALL[b]):
+                            _bk_place(u, b); handed = b
+                            if pdays(du) < 2:
+                                XBK.add(norm(du['name']))
+                            break
+                    exchanges.append((dt_['name'], du['name'], r, handed))
+                    return True
+            for b in freed:                    # no trade for this top: restore
+                bslot[b].append(t); dt_['bk'].append(b)
+        return False
+
     # Walk the rate ladder top to bottom, re-sorting after every placement
     # (hours grow with each backup, and a driver may take a 2nd): the next
     # slot always goes to the highest-priority driver who can still take one.
     # Each attempt runs the augmenting matcher, so under slot scarcity the
     # served set is exactly the priority-optimal one and nobody is stranded
     # because a colleague took their only feasible day. A driver the matcher
-    # cannot serve is dead for good -- capacity only shrinks from here.
-    dead = set()
-    while _bk_filled() < total_slots:
-        cands = sorted((i for i, dr in enumerate(roster)
-                        if i not in dead and _bk_ok(dr)), key=_bk_order)
-        placed = False
-        for i in cands:
-            if _bk_augment(i, set()):
-                placed = True
+    # cannot serve is dead until the exchange reshapes the week.
+    def _run_ladder():
+        dead = set()
+        while _bk_filled() < total_slots:
+            cands = sorted((i for i, dr in enumerate(roster)
+                            if i not in dead and _bk_ok(dr)), key=_bk_order)
+            placed = False
+            tried_exchange = False
+            for i in cands:
+                # the trigger is per CANDIDATE: the ladder is about to hand
+                # THIS discipline driver a backup -- trade a Top/Solid up to
+                # 40h first. (Checking only the head of the list misses the
+                # passes where the non-disc candidates ahead all fail and the
+                # fill falls through.)
+                if _is_disc(roster[i]) and not tried_exchange:
+                    tried_exchange = True
+                    if _try_exchange():
+                        placed = True         # a trade happened; re-sort everything
+                        dead.clear()
+                        break
+                if _bk_augment(i, set()):
+                    placed = True
+                    break
+                dead.add(i)
+            if not placed:
                 break
-            dead.add(i)
-        if not placed:
-            break
+
+    _run_ladder()
+    # final sweep: while ANY discipline driver still holds a backup and a
+    # trade remains possible, keep securing Top/Solid at 40h -- the trade can
+    # free slots (the top's returned backup days), so refill after each one.
+    while any(_is_disc(dr) and dr['bk'] for dr in roster) and _try_exchange():
+        _run_ladder()
+
+    if exchanges:
+        notes.append('BACKUP EXCHANGE (40h security): '
+                     + '; '.join(f'{t} took {r} from {u}'
+                                 + (f', {u} moved to backup {b}' if b else '')
+                                 for t, u, r, b in exchanges))
 
     # overflow: the ladder is spent and slots remain -> Top/Solid at 4 roads
     # take a 5th day (42h), best rate first. Coverage beats the 40h line here.
@@ -1200,6 +1273,7 @@ def build_schedule(cfg):
                   fallback_used=fallback_used, WSPREAD=WSPREAD, USESEED=USESEED,
                   PAIRLOG=PAIRLOG, REDS=REDS, REDPREF=REDPREF, RATE=RATE,
                   MAXWKND=MAXWKND, weekend_rule=weekend_rule, CAPX=CAPX,
+                  XBK=XBK, exchanges=exchanges,
                   merge_std=merge_std, notes=notes, infeasible=infeasible)
 
 
@@ -1491,7 +1565,11 @@ def check_invariants(res):
     backup_only = [dr['name'] for dr in roster if dr['bk'] and not pdy(dr)]
     for nm in backup_only:
         errs.append(f'BACKUP-ONLY: {nm}')
-    backup_under2 = [dr['name'] for dr in roster if dr['bk'] and pdy(dr) < 2]
+    # the 40h exchange (Jose 2026-07-31) may leave a discipline driver at
+    # 1 road + the traded backup day -- authorized, not a violation
+    xbk = getattr(res, 'XBK', set()) or set()
+    backup_under2 = [dr['name'] for dr in roster if dr['bk'] and pdy(dr) < 2
+                     and norm(dr['name']) not in xbk]
     for nm in backup_under2:
         errs.append(f'BACKUP<2PRIMARY: {nm}')
 
