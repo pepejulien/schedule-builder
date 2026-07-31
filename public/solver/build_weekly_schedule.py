@@ -548,6 +548,11 @@ def build_schedule(cfg):
             n += 1; f += ONE
         return n <= MAXC
 
+    # CAPX: per-driver EXTRA road-day allowance granted by the emergency
+    # route-coverage pass (Jose 2026-07-20: routes must be covered -- a short
+    # day is worse than bending a soft tier cap). Empty in a normal week.
+    CAPX = {}
+
     def pcap(dr):
         n = norm(dr['name'])
         if n in TARGET:            # exact_days OR discipline: cap at the target
@@ -556,7 +561,7 @@ def build_schedule(cfg):
             base = MAXPRIM
         else:                      # Fair: road cap; the rank enforces the soft 3-target
             base = MAXPRIM
-        return min(base, MAXPRIM)
+        return min(base + CAPX.get(n, 0), MAXPRIM)
 
     # Day-count priority rank (Jose 2026-07-19: base floor + layered upgrades).
     # Higher = filled first / cut last. Day-independent (placement = prefsc).
@@ -723,19 +728,21 @@ def build_schedule(cfg):
         PAIRLOG.append((roster[t]['name'], roster[n]['name'], dA, dB))
 
     # ---- PHASE 1: primaries (hit targets, max most, balance free by primary-day count) ----
-    for d in FILL:
-        dt = DATEALL[d]
-        while len(pslot[d]) < routes[d]:
-            cands = [i for i, dr in enumerate(roster)
-                     if d not in dr['unav'] and i not in pslot[d]
-                     and d not in dr['helper']
-                     and (dr.get('train_done') is None or ALL.index(d) > dr['train_done'])
-                     and pdays(dr) < pcap(dr) and runok(dr, dt)
-                     and wkend_ok(dr, d)]
-            if not cands:
-                break  # PHASE 1b repairs stranded slots; shortfalls reported after it
-            b = max(cands, key=lambda i: _dayscore(i, d))
-            pslot[d].append(b); roster[b]['prim'].append(d)
+    def _fill_days():
+        for d in FILL:
+            dt = DATEALL[d]
+            while len(pslot[d]) < routes[d]:
+                cands = [i for i, dr in enumerate(roster)
+                         if d not in dr['unav'] and i not in pslot[d]
+                         and d not in dr['helper']
+                         and (dr.get('train_done') is None or ALL.index(d) > dr['train_done'])
+                         and pdays(dr) < pcap(dr) and runok(dr, dt)
+                         and wkend_ok(dr, d)]
+                if not cands:
+                    break  # PHASE 1b repairs stranded slots; shortfalls reported after it
+                b = max(cands, key=lambda i: _dayscore(i, d))
+                pslot[d].append(b); roster[b]['prim'].append(d)
+    _fill_days()
 
     # ---- PHASE 1b: augmenting-path repair for slots the greedy stranded ----
     # The day-by-day greedy can leave a day short even when a full assignment
@@ -796,8 +803,40 @@ def build_schedule(cfg):
     for d in DAYS:
         while len(pslot[d]) < routes[d] and _augment(d, {d}):
             pass
+
+    # ---- PHASE 1b2: EMERGENCY ROUTE COVERAGE (Jose 2026-07-20) ----
+    # THE ROUTES ARE THE MISSION: a short day is worse than bending a SOFT
+    # tier cap. If days are still short after the repair, relax the soft caps
+    # one stage at a time and refill -- never touching the hard rules
+    # (submitted days off, max consecutive, per-wave counts, benched exact-0
+    # drivers, training mechanics, and the max_primary_days=4 / 40h ceiling):
+    #   1) discipline tier 2 -> 3 road days   (rank-0 fill = best rate first)
+    #   2) discipline tier 3 -> 4
+    #   3) exact-days pins +1 (trainees, <5-routes, HR overrides; never 0-benched)
+    #   4) exact-days pins +2
+    # Later phases may migrate an extra day to a higher-priority driver; the
+    # ROUTE COVERAGE note (added after Phase 1d) names whoever ends over their
+    # normal cap. Only when even stage 4 cannot cover does the build report
+    # P1 INFEASIBLE -- that means genuinely not enough drivers.
+    def _short_days():
+        return [d for d in DAYS if len(pslot[d]) < routes[d]]
+
+    if _short_days():
+        pinned = {n for n in TARGET if n not in REDS and TARGET[n] > 0}
+        for names, extra in ((REDS, 1), (REDS, 2), (pinned, 1), (pinned, 2)):
+            if not _short_days():
+                break
+            for n in names:
+                CAPX[n] = max(CAPX.get(n, 0), extra)
+            _fill_days()
+            for d in DAYS:
+                while len(pslot[d]) < routes[d] and _augment(d, {d}):
+                    pass
+
+    for d in DAYS:
         if len(pslot[d]) < routes[d]:
-            infeasible.append(f'P1 INFEASIBLE {d}: filled {len(pslot[d])}/{routes[d]}')
+            infeasible.append(f'P1 INFEASIBLE {d}: filled {len(pslot[d])}/{routes[d]} '
+                              f'-- not enough drivers even with every soft cap relaxed')
 
     # ---- PHASE 1c: restore the base-floor + layer priority after repair ----
     # The scarcest-day greedy and the repair chains can leave a route slot with a
@@ -958,6 +997,19 @@ def build_schedule(cfg):
 
     # a final rebalance settles anything the exact-completion shifted.
     _rebalance()
+
+    # name everyone the emergency pass left above their normal cap
+    if CAPX:
+        bumped = []
+        for dr in roster:
+            n = norm(dr['name'])
+            base = min(TARGET[n], MAXPRIM) if n in TARGET else MAXPRIM
+            if CAPX.get(n) and pdays(dr) > base:
+                bumped.append((dr['name'], pdays(dr) - base, pdays(dr)))
+        if bumped:
+            notes.append('ROUTE COVERAGE: soft day-caps relaxed to fill the '
+                         'routes -- ' + '; '.join(f'{nm} +{x} (now {p} road days)'
+                                                  for nm, x, p in sorted(bumped)))
 
     # ---- PHASE 2: backups -- the RATE LADDER (Jose 2026-07-20). ----
     # Backup days go to the driver with the BEST board rate who is UNDER 40
@@ -1127,7 +1179,7 @@ def build_schedule(cfg):
                   MAXTOT=MAXTOT, FREETOT=FREETOT, FBACK=FBACK,
                   fallback_used=fallback_used, WSPREAD=WSPREAD, USESEED=USESEED,
                   PAIRLOG=PAIRLOG, REDS=REDS, REDPREF=REDPREF, RATE=RATE,
-                  MAXWKND=MAXWKND, weekend_rule=weekend_rule,
+                  MAXWKND=MAXWKND, weekend_rule=weekend_rule, CAPX=CAPX,
                   merge_std=merge_std, notes=notes, infeasible=infeasible)
 
 
@@ -1374,18 +1426,21 @@ def check_invariants(res):
     # never a hard error (Jose 2026-07-19 tier rework).
     capd = res.MAXPRIM
     REDS = res.REDS
+    capx = getattr(res, 'CAPX', {}) or {}
     target_bad = []
     target_short = []
     for n in TARGET:
         if n not in res.idx:
             continue
         want = min(TARGET[n], capd)
+        # the emergency route-coverage pass may grant extra days over a pin
+        hi = min(TARGET[n] + capx.get(n, 0), capd)
         got = pdy(roster[res.idx[n]])
         if n in REDS:
             continue                       # discipline: soft, day count informational
-        if got > want:                     # over target / a benched driver got scheduled
-            target_bad.append((n, want, got))
-            errs.append(f'TARGET {n}: want {want} got {got} (over)')
+        if got > hi:                       # over target / a benched driver got scheduled
+            target_bad.append((n, hi, got))
+            errs.append(f'TARGET {n}: want {hi} got {got} (over)')
         elif got < want:                   # availability-limited: a note, not an error
             target_short.append((n, want, got))
 

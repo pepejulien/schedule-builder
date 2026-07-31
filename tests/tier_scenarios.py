@@ -322,14 +322,63 @@ check('<5 routes: exactly 3 (not 4) while other Tops reach 4', days_of(res, lock
 check('<5 routes: other Top/Solid still hit 4 (proves high volume)', other_top >= 3.8, other_top)
 check('<5 routes: no errors', not chk['errors'], str(chk['errors'][:3]))
 
-# --- over-subscribed instance completes gracefully (no exponential-augment hang) ---
-# Locking a Top to 3 at max volume drops fleet capacity below demand by 1 route.
-# The build must return quickly and report the shortfall -- never hang.
-res, chk = run(V_FAIR4, exact={locked: 3})
-short = [e for e in chk['errors'] if 'INFEASIBLE' in e or 'short' in e.lower()]
-print(f'OVERSUB: {locked} got {days_of(res, locked)}; errors {len(chk["errors"])} ({short[:1]})')
-check('oversub: locked driver still exactly 3', days_of(res, locked) == 3, days_of(res, locked))
-check('oversub: shortfall reported, build did not hang', len(chk['errors']) >= 1)
+# --- ROUTE COVERAGE (Jose 2026-07-20): routes are the mission. Demand above
+# the tier caps relaxes the SOFT caps -- discipline to 3 (best rate first) ---
+V_COVER1 = V_FAIR4 + 16          # 200: needs 16 discipline 3rd days
+res, chk = run(V_COVER1)
+filled = sum(chk['per_day'][d]['routes'] for d in res.DAYS)
+disc3 = [dr['name'] for dr in res.roster if dr['name'] in DISC
+         and len(dr['prim']) + len(dr['helper']) == 3]
+disc2 = [dr['name'] for dr in res.roster if dr['name'] in DISC
+         and len(dr['prim']) + len(dr['helper']) == 2]
+rate_ok = (not disc3 or not disc2
+           or min(DISC_RATE[n] for n in disc3) >= max(DISC_RATE[n] for n in disc2))
+note_ok = any('ROUTE COVERAGE' in x for x in res.notes)
+print(f'COVER1({V_COVER1}): filled {filled} | disc at 3: {len(disc3)} | errors {len(chk["errors"])}')
+check('cover1: EVERY route filled (soft caps relaxed)', filled == V_COVER1, f'{filled}/{V_COVER1}')
+check('cover1: discipline supply the extra days', len(disc3) == 16, len(disc3))
+check('cover1: extra days go best-rate-first', rate_ok)
+check('cover1: ROUTE COVERAGE note emitted', note_ok, res.notes[:1])
+check('cover1: no errors', not chk['errors'], str(chk['errors'][:3]))
+
+# --- coverage stage 2: discipline all the way to 4 when needed ---
+V_COVER2 = 236                   # needs disc avg > 3 (max capacity 240)
+res, chk = run(V_COVER2)
+filled = sum(chk['per_day'][d]['routes'] for d in res.DAYS)
+disc4 = sum(1 for dr in res.roster if dr['name'] in DISC
+            and len(dr['prim']) + len(dr['helper']) == 4)
+print(f'COVER2({V_COVER2}): filled {filled} | disc at 4: {disc4} | errors {len(chk["errors"])}')
+check('cover2: EVERY route filled at near-max volume', filled == V_COVER2, f'{filled}/{V_COVER2}')
+check('cover2: some discipline reach 4 road days', disc4 > 0, disc4)
+check('cover2: no errors', not chk['errors'], str(chk['errors'][:3]))
+
+# --- exact pins yield LAST: only when even discipline-at-4 can't cover ---
+res, chk = run(240, exact={locked: 3})   # capacity with the pin honored = 239
+filled = sum(chk['per_day'][d]['routes'] for d in res.DAYS)
+print(f'PIN-YIELDS(240): filled {filled} | {locked} got {days_of(res, locked)} | errors {len(chk["errors"])}')
+check('pin-yields: EVERY route filled', filled == 240, f'{filled}/240')
+check('pin-yields: the pin gave way (3 -> 4) as the last resort', days_of(res, locked) == 4,
+      days_of(res, locked))
+check('pin-yields: ROUTE COVERAGE note names the pinned driver',
+      any('ROUTE COVERAGE' in x and locked in x for x in res.notes), res.notes[:1])
+check('pin-yields: no errors (the bump is authorized, not a violation)',
+      not chk['errors'], str(chk['errors'][:3]))
+
+# --- but the pin holds when discipline can absorb the demand instead ---
+res, chk = run(V_FAIR4, exact={locked: 3})   # 184: disc 3rd days cover the gap
+filled = sum(chk['per_day'][d]['routes'] for d in res.DAYS)
+print(f'PIN-HOLDS({V_FAIR4}): filled {filled} | {locked} got {days_of(res, locked)} | errors {len(chk["errors"])}')
+check('pin-holds: EVERY route filled', filled == V_FAIR4, f'{filled}/{V_FAIR4}')
+check('pin-holds: the pin stays at 3 (discipline absorbed the gap)',
+      days_of(res, locked) == 3, days_of(res, locked))
+check('pin-holds: no errors', not chk['errors'], str(chk['errors'][:3]))
+
+# --- truly impossible demand still fails loudly and fast (no hang) ---
+res, chk = run(246)              # 246 > 240 = every driver at the 4-day ceiling
+print(f'INFEASIBLE(246): infeasible={len(res.infeasible)} errors={len(chk["errors"])}')
+check('infeasible: shortfall reported, build did not hang',
+      len(res.infeasible) >= 1 and len(chk['errors']) >= 1,
+      f'{len(res.infeasible)} inf / {len(chk["errors"])} err')
 
 # --- a day listed with NO wave times must be rejected loudly at load time
 # (never reach the solver and divide by an empty wave list) ---

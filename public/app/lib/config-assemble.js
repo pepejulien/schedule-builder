@@ -219,12 +219,14 @@ export function capacityCheck(config, rosterNames) {
   const exact = config.exact_days;
 
   const roadCap = config.max_primary_days || 4;
-  // Max road-days each group can supply: Top/Solid & Fair up to the road cap (4),
-  // discipline up to its target (2), explicit exacts at their value.
+  // Max road-days each group supplies under the NORMAL tier caps: Top/Solid &
+  // Fair up to the road cap (4), discipline up to its target (2), exacts at
+  // their pin.
   let fixedRoad = 0;
+  let benched = 0;
   for (const n of most) fixedRoad += roadCap;
   for (const n of reduced) fixedRoad += config.reduced_days.target || 2;
-  for (const [n, v] of Object.entries(exact)) fixedRoad += v;
+  for (const [n, v] of Object.entries(exact)) { fixedRoad += v; if (!v) benched += 1; }
 
   const assigned = new Set([...most, ...reduced, ...Object.keys(exact), ...exclude]);
   const freeCount = rosterNames.filter((n) => !assigned.has(n)).length;
@@ -232,9 +234,16 @@ export function capacityCheck(config, rosterNames) {
   const freeMax = freeCount * roadCap; // Fair can reach 4 when volume is high
 
   const reachable = fixedRoad + freeMax;
-  const ok = reachable >= routeTotal;
-  const message = ok
+  // Routes are the mission: when demand exceeds the normal caps, the engine
+  // automatically relaxes the SOFT caps (discipline to 3 then 4 road days,
+  // then exact pins) up to the hard ceiling of 4 road days per driver.
+  const everyone = most.size + reduced.size + Object.keys(exact).length - benched + freeCount;
+  const emergencyMax = everyone * roadCap;
+  const ok = emergencyMax >= routeTotal;
+  const message = reachable >= routeTotal
     ? `Top/Solid + Fair + discipline can supply up to ${reachable} road-days (Fair aims for 3). The week needs ${routeTotal} routes.`
-    : `Even at full capacity the fleet can reach only ${reachable} road-days but the week needs ${routeTotal} — there aren't enough available drivers.`;
+    : ok
+    ? `The week needs ${routeTotal} routes — above the normal tier caps (${reachable}). The engine will relax the soft caps (discipline to 3–4 days, then exact pins) to cover every route, up to ${emergencyMax}. The result page will list who got extra days.`
+    : `Even with every soft cap relaxed the fleet can reach only ${emergencyMax} road-days but the week needs ${routeTotal} — there aren't enough available drivers.`;
   return { routeTotal, fixedRoad, freeMin, freeMax, freeCount, ok, message };
 }

@@ -18,16 +18,26 @@ same shape as the inputs (ready to enter into the system) + a `By Day` sheet.
    hours (sole exception: the 5th-day fallback backup, 42h) · 5 total worked
    days · backups only on >=2 road days, no backup-only weeks · training-pair
    mechanics (back-to-back, same trainer, solo AFTER training) · exclusions.
-2. **Jose's named per-week overrides** ("give X exactly 2 days") — beat every
+2. **ROUTE COVERAGE (Jose 2026-07-20): the routes are the mission.** When
+   demand exceeds what the tier caps below can supply, the solver relaxes the
+   SOFT caps automatically rather than leave a route unfilled — in order:
+   discipline tier 2→3 road days, then 3→4 (best rate first), then exact-days
+   pins +1 and +2 (never a benched exact-0 driver, never past the 4-day/40h
+   hard ceiling). Every extra day is named in a **ROUTE COVERAGE** note. Only
+   when even that cannot cover does the build report `P1 INFEASIBLE` — that
+   means genuinely not enough drivers.
+3. **Jose's named per-week overrides** ("give X exactly 2 days") — beat every
    tier rule, but **die with the week**: every build starts from fresh board
    tiers and Jose restates anything he still wants. These are `exact_days`.
-3. **The tier day-count ladder — a BASE FLOOR everyone gets first, then upgrade
+4. **The tier day-count ladder — a BASE FLOOR everyone gets first, then upgrade
    layers (SOFT targets — an availability-limited undershoot is reported, never
    a build error).** Not strict priority: the bottom tier gets its floor-of-1
    *before* the top tier gets a 4th. Fill order, each layer taken only while
    route slots remain and **better board-rate first within a layer**:
    - **Explicit `exact_days`** (trainees 3, benched 0, `<5 routes`=3, Jose
-     overrides) — pinned; sits outside the base/upgrade layers, never bumped.
+     overrides) — pinned; sits outside the base/upgrade layers, never bumped by
+     tier upgrades. (Only the ROUTE COVERAGE pass above may add a day, as the
+     very last resort before failing, and it is named in a note.)
    - **Base floor (everyone, in one pass):** Top/Solid → **3**, Fair → **2**,
      Underperforming/Termination → **1**. Nobody is left at 0 while routes remain.
    - **Upgrade 1:** Fair 2 → **3**.
@@ -40,9 +50,9 @@ same shape as the inputs (ready to enter into the system) + a `By Day` sheet.
    the one place strict tier applies: Top/Solid keep 3 and Fair keep 2 while the
    discipline tier drops toward **0** (worst board-rate first), then Fair, then
    Top/Solid last.
-4. **Within a tier, the better board RATE gets more hours** (a -14 outranks a
+5. **Within a tier, the better board RATE gets more hours** (a -14 outranks a
    -24). For the discipline tier this is the primary cut order. Config `driver_rates`.
-5. **Soft placement** (which days, never how many): Jose's pre-made days →
+6. **Soft placement** (which days, never how many): Jose's pre-made days →
    weekend spread (~1 weekend day) → **compactness** (prefer days adjacent
    to already-assigned days — no Sun-Tue-Thu-Sat zigzags) → usual days →
    the discipline tier's Sun/Sat preference (the days nobody wants).
@@ -178,9 +188,10 @@ a build error). Map tiers to config groups:
   Sun/Sat (`prefer_days`); backups only as the tail of the rate ladder — their
   worst-of-board rates put them last (leave `backup_eligible_extra` empty).
 - **<5 routes in the last 30 days** (from the board's Routes column) -> 30h ->
-  `exact_days: 3` (a pinned override; sits outside the layers and is **never**
-  bumped to a 4th). A discipline cap below still wins (an Underperforming driver
-  with <5 routes stays discipline).
+  `exact_days: 3` (a pinned override; sits outside the layers and is never
+  bumped by tier upgrades — only the ROUTE COVERAGE pass may add a day as the
+  very last resort, named in a note). A discipline cap below still wins (an
+  Underperforming driver with <5 routes stays discipline).
   **Overlap = ask Jose (2026-07-11):** any driver matching two categories
   (e.g. Top performer AND <5 routes) is listed by name and Jose rules per
   driver before the build — never resolved silently.
