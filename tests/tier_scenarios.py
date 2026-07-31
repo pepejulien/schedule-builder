@@ -276,21 +276,60 @@ check('ladder-tail: no discipline backup below 2 roads', not under2_bk, under2_b
 check('ladder-tail: Fair never exceed 4 total worked days', not fair_over4, fair_over4[:3])
 check('ladder-tail: no errors', not chk['errors'], str(chk['errors'][:3]))
 
-# --- overflow: more slots than the whole under-40h ladder can hold -> Top/Solid
-# at 4 roads take a 5th day (42h) for the remainder only ---
+# --- 2nd backups (Jose 2026-07-31): under-40h drivers take a SECOND backup
+# before any 42h fifth-day. Everyone at 40h except discipline -> discipline
+# take firsts, then seconds; zero 5th days ---
 res, chk = run(V_FAIR4, bk_per_day=5)
 req = sum(res.backup[d] for d in res.DAYS)
-disc_srv = [dr for dr in res.roster if dr['name'] in DISC and dr['bk']]
+disc_bk_tot = sum(len(dr['bk']) for dr in res.roster if dr['name'] in DISC)
+disc_2bk = [dr for dr in res.roster if dr['name'] in DISC and len(dr['bk']) == 2]
 top_fifth = sum(1 for dr in res.roster if dr['name'] in TOP
-                and len(dr['prim']) + len(dr['helper']) == 4 and len(dr['bk']) == 1)
-fair_fifth = [dr['name'] for dr in res.roster if dr['name'] in FAIR
-              and len(dr['prim']) + len(dr['helper']) == 4 and dr['bk']]
-print(f'OVERFLOW: req {req} | disc {len(disc_srv)}/{N_DISC} | Top 5th-days {top_fifth} | errors {len(chk["errors"])}')
-check('overflow: the whole discipline ladder is used first', len(disc_srv) == N_DISC,
-      f'{len(disc_srv)}/{N_DISC}')
-check('overflow: Top/Solid 5th days cover only the remainder', top_fifth == req - N_DISC,
-      f'{top_fifth} != {req - N_DISC}')
-check('overflow: Fair never take a 5th day', not fair_fifth, fair_fifth[:3])
+                and len(dr['prim']) + len(dr['helper']) == 4 and dr['bk'])
+print(f'SECONDS: req {req} | disc bk {disc_bk_tot} ({len(disc_2bk)} doubles) | '
+      f'Top 5th-days {top_fifth} | errors {len(chk["errors"])}')
+check('seconds: every slot covered (ladder + overflow remainder)',
+      disc_bk_tot + top_fifth == req, f'{disc_bk_tot}+{top_fifth} != {req}')
+check('seconds: some discipline take a 2nd backup (still under 40h)', len(disc_2bk) > 0,
+      len(disc_2bk))
+check('seconds: 5th-days only for the slots the ladder cannot reach', top_fifth <= 2, top_fifth)
+check('seconds: no errors', not chk['errors'], str(chk['errors'][:3]))
+
+# --- Top/Solid + Fair seconds come BEFORE any discipline backup (the 07-31
+# complaint): tops take a 2nd backup (34h) before discipline get their 1st ---
+res, chk = run(V_DISC2, bk_per_day=8)
+top_2bk = sum(1 for dr in res.roster if dr['name'] in TOP and len(dr['bk']) == 2)
+fair_1bk = sum(1 for dr in res.roster if dr['name'] in FAIR and len(dr['bk']) == 1)
+fair_over = [dr['name'] for dr in res.roster if dr['name'] in FAIR
+             and len(dr['prim']) + len(dr['helper']) + len(dr['bk']) > 4]
+disc_srv = [dr for dr in res.roster if dr['name'] in DISC and dr['bk']]
+disc_uns = [dr for dr in res.roster if dr['name'] in DISC and not dr['bk']]
+rate_ok = (not disc_srv or not disc_uns
+           or min(DISC_RATE[dr['name']] for dr in disc_srv)
+           >= max(DISC_RATE[dr['name']] for dr in disc_uns))
+print(f'TOP-SECONDS: Top doubles {top_2bk}/{N_TOP} | Fair singles {fair_1bk}/{N_FAIR} | '
+      f'disc served {len(disc_srv)} | errors {len(chk["errors"])}')
+check('top-seconds: every Top/Solid holds TWO backups (3rd+2bk = 34h, 5 days)',
+      top_2bk == N_TOP, f'{top_2bk}/{N_TOP}')
+check('top-seconds: every Fair holds one (3 roads + 1 = their 4-day cap)',
+      fair_1bk == N_FAIR, f'{fair_1bk}/{N_FAIR}')
+check('top-seconds: Fair never exceed 4 total days', not fair_over, fair_over[:3])
+check('top-seconds: discipline get only what remains, best rate first',
+      len(disc_srv) > 0 and rate_ok, f'{len(disc_srv)} rate_ok={rate_ok}')
+check('top-seconds: no errors', not chk['errors'], str(chk['errors'][:3]))
+
+# --- true overflow: EVERYONE at 40h (route coverage pushed discipline to 4
+# roads too) -> only then do Top/Solid take a 42h fifth day ---
+res, chk = run(240, bk_per_day=2)
+top_fifth = sum(1 for dr in res.roster if dr['name'] in TOP
+                and len(dr['prim']) + len(dr['helper']) == 4 and dr['bk'])
+other_bk = sum(len(dr['bk']) for dr in res.roster if dr['name'] not in TOP)
+open_note = any('slot(s) open' in x for x in res.notes)
+print(f'OVERFLOW: Top 5th-days {top_fifth}/12 | other bk {other_bk} | open-note {open_note} | '
+      f'errors {len(chk["errors"])}')
+check('overflow: Top/Solid 5th days (42h) fire when everyone is at 40h',
+      top_fifth > 0, top_fifth)
+check('overflow: nobody else holds a backup (all at 40h)', other_bk == 0, other_bk)
+check('overflow: the uncoverable slots are explained in a note', open_note, res.notes[:2])
 check('overflow: no errors (42h is a note, not a violation)', not chk['errors'], str(chk['errors'][:3]))
 
 # --- Fair before discipline (Jose 2026-07-20, the complaint): 30h Fair are

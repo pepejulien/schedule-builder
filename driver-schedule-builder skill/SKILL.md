@@ -273,22 +273,29 @@ the exclude list is now just Zackary McDonald, Rachel Rhoades, Greyson Turner.
   shift pays only `backup_hours` (≈2h) vs a primary's `primary_hours` (≈10h), **plus a
   chance of being sent out on a route**. The per-day backup count HR sets
   (`backup_per_day` / `backup_pct`) is the **fill TARGET and it must be covered.**
-  **THE RATE LADDER (Jose 2026-07-20, supersedes every earlier tier scheme):** backup
-  days go to **the driver with the best board rate who is under 40 road+backup hours,
-  then on down the list, one backup each**, until every slot is covered. The board rate
-  already encodes the tier order (Top ≈ −1s, Solid next, Fair mid, Underperforming/
-  Termination worst), so a Top/Solid at 3 roads (30h) is served before a Fair at 30h,
-  and the discipline tier is simply the **tail of the ladder — covered last, but
-  covered.** A driver who can't take any backup day (unavailable/rules) is skipped and
-  the ladder moves on — it never blocks those below. Rate ties break by tier
-  (Top/Solid > Fair > discipline), then fewer hours, then name.
+  **THE RATE LADDER (Jose 2026-07-20, refined 07-31 — supersedes every earlier tier
+  scheme):** backup days go to **the driver with the best board rate who is under 40
+  road+backup hours, then on down the list**, until every slot is covered. Two explicit
+  rules sit on top of the rate order:
+  - **Top/Solid and Fair may take a SECOND backup day** (still under 40h, inside their
+    day caps) **before the discipline tier receives anything** — first everyone's 1st
+    backup in rate order, then 2nd backups in rate order, only then Underperforming/
+    Termination. A 22h discipline week must never exist while a Top/Solid or Fair sits
+    under 40h (Jose 2026-07-31).
+  - **The discipline tier is segregated to the tail REGARDLESS of rate** — covered
+    last, but covered (the spots must be filled). Same for extra road days: a
+    discipline driver gets an emergency 3rd road day only when no Top/Solid/Fair can
+    legally take that day.
+  A driver who can't take any backup day (unavailable/rules) is skipped and the ladder
+  moves on — it never blocks those below. Rate ties break by tier, then fewer hours.
   Rules that still bind: **≥2 road days** to take a backup (no backup-only weeks);
-  **one backup each**; Fair roads+backups ≤ `free_total_days` (4); nobody over
-  `max_total_days` (5); exact-days drivers (trainees, <5-routes, benched) take no
-  backups unless named in `backup_eligible_extra`.
-  **OVERFLOW — only when the ladder is exhausted** (nobody under 40h can take an open
-  slot): **Top/Solid at 4 roads take a 5th day** (4 road + 1 = **42h**, ~2h OT), best
-  rate first — coverage wins as the true last resort.
+  Fair roads+backups ≤ `free_total_days` (4 → a 3-road Fair holds max 1 backup, a
+  2-road Fair max 2); nobody over `max_total_days` (5 → a 3-road Top/Solid holds max
+  2 backups = 34h); exact-days drivers (trainees, <5-routes, benched) take no backups
+  unless named in `backup_eligible_extra`.
+  **OVERFLOW — only when the whole under-40h ladder is exhausted** (nobody under 40h
+  can take an open slot): **Top/Solid at 4 roads take a 5th day** (4 road + 1 =
+  **42h**, ~2h OT), best rate first — coverage wins as the true last resort.
   The fill is a **matroid-greedy matching** (augmenting paths, like the road repair):
   under slot scarcity the better rate ALWAYS wins the last slot and nobody is stranded
   because a colleague took their only feasible day. The build emits NOTEs naming any

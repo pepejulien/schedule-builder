@@ -119,17 +119,20 @@ def wknd_used(dr):
                if x in ('Sat', 'Sun'))
 
 
-def bk_feasible(res, dr, d, weekend_cap):
-    if d in dr['unav'] or d in dr['prim'] or d in dr['helper']:
+def bk_feasible(res, dr, d, weekend_cap, held):
+    """Can this driver take a backup on day d, given the backup days `held`
+    already assigned to them by the oracle?"""
+    if d in dr['unav'] or d in dr['prim'] or d in dr['helper'] or d in held:
         return False
-    if pdy(dr) >= 5:
+    if pdy(dr) + len(held) >= 5:
         return False
     if weekend_cap is not None and d in ('Sat', 'Sun'):
-        # mirror wkend_ok for a driver with no backup yet
-        if sum(1 for x in list(dr['prim']) + list(dr['helper'])
-               if x in ('Sat', 'Sun')) >= weekend_cap:
+        used = sum(1 for x in list(dr['prim']) + list(dr['helper']) + list(held)
+                   if x in ('Sat', 'Sun'))
+        if used >= weekend_cap:
             return False
     s = ({res.DATEALL[x] for x in list(dr['prim']) + list(dr['helper'])}
+         | {res.DATEALL[x] for x in held}
          | set(dr['w_prev']) | {res.DATEALL[d]})
     dt = res.DATEALL[d]; n = 1
     c = dt - ONE
@@ -142,13 +145,17 @@ def bk_feasible(res, dr, d, weekend_cap):
 
 
 def oracle_ladder(res, case):
-    """Independent mirror of the RATE LADDER (Jose 2026-07-20): every driver
-    under 40 road hours with >=2 roads (Fair inside their 4-total cap), sorted
-    best rate first (tie: tier, then hours, then name), served via matroid-
-    greedy matching; then the 5th-day overflow (Top/Solid at 4 roads). Returns
-    the exact SET of names that must hold a backup."""
+    """Independent mirror of the RATE LADDER (Jose 2026-07-20, refined 07-31):
+    drivers under 40 road+backup hours with >=2 roads, discipline segregated
+    to the tail regardless of rate, everyone's 1st backup before any 2nd,
+    best rate first within a round; iterative matroid-greedy matching; then
+    the one-each 5th-day overflow (Top/Solid at 4 roads). Returns a dict
+    name -> backup COUNT that the solver must reproduce exactly."""
     top, fair, disc = set(case['top']), set(case['fair']), set(case['disc'])
     weekend_cap = case['weekend_cap']
+    N = len(res.roster)
+    held = {i: set() for i in range(N)}
+    assign = {d: [] for d in res.DAYS}
 
     def rate(dr):
         return res.RATE.get(B.norm(dr['name']), 0)
@@ -156,46 +163,60 @@ def oracle_ladder(res, case):
     def trank(dr):
         return 0 if dr['name'] in top else (1 if dr['name'] in fair else 2)
 
-    def elig(dr):
-        if pdy(dr) < 2 or pdy(dr) * 10 >= 40:
+    def elig(i):
+        dr = res.roster[i]
+        tot = pdy(dr) + len(held[i])
+        if pdy(dr) < 2 or tot >= 5:
             return False
-        if dr['name'] in fair and pdy(dr) >= 4:
+        if dr['name'] in fair and tot >= 4:
             return False
-        return True
+        return pdy(dr) * 10 + len(held[i]) * 2 < 40
 
-    key = lambda i: (-rate(res.roster[i]), trank(res.roster[i]),
-                     pdy(res.roster[i]) * 10, B.norm(res.roster[i]['name']))
-    ladder = sorted((i for i, dr in enumerate(res.roster) if elig(dr)), key=key)
-    overflow = sorted((i for i, dr in enumerate(res.roster)
-                       if dr['name'] in top and pdy(dr) == 4), key=key)
-    assign = {d: [] for d in res.DAYS}
+    def key(i):
+        dr = res.roster[i]
+        return (dr['name'] in disc, len(held[i]), -rate(dr), trank(dr),
+                pdy(dr) * 10 + len(held[i]) * 2, B.norm(dr['name']))
 
     def place(i, seen):
         dr = res.roster[i]
         for d in res.DAYS:
-            if d in seen or not bk_feasible(res, dr, d, weekend_cap):
+            if d in seen or not bk_feasible(res, dr, d, weekend_cap, held[i]):
                 continue
             if len(assign[d]) < res.backup[d]:
-                assign[d].append(i); return True
+                assign[d].append(i); held[i].add(d); return True
         for d in res.DAYS:
-            if d in seen or not bk_feasible(res, dr, d, weekend_cap):
+            if d in seen or not bk_feasible(res, dr, d, weekend_cap, held[i]):
                 continue
             seen.add(d)
             for j in list(assign[d]):
-                assign[d].remove(j)
+                assign[d].remove(j); held[j].discard(d)
                 if place(j, seen):
-                    assign[d].append(i); return True
-                assign[d].append(j)
+                    assign[d].append(i); held[i].add(d); return True
+                assign[d].append(j); held[j].add(d)
         return False
 
     total = sum(res.backup[d] for d in res.DAYS)
-    served = set()
-    for i in ladder + overflow:
-        if len(served) >= total:
+    filled = 0
+    dead = set()
+    while filled < total:
+        cands = sorted((i for i in range(N) if i not in dead and elig(i)), key=key)
+        placed = False
+        for i in cands:
+            if place(i, set()):
+                filled += 1; placed = True
+                break
+            dead.add(i)
+        if not placed:
             break
-        if place(i, set()):
-            served.add(res.roster[i]['name'])
-    return served
+    if filled < total:
+        for i in sorted((i for i, dr in enumerate(res.roster)
+                         if dr['name'] in top and pdy(dr) == 4 and not held[i]),
+                        key=key):
+            if filled >= total:
+                break
+            if place(i, set()):
+                filled += 1
+    return {res.roster[i]['name']: len(held[i]) for i in range(N) if held[i]}
 
 
 def check_case(case, res, chk):
@@ -207,8 +228,6 @@ def check_case(case, res, chk):
         errs.append(f'verifier errors: {chk["errors"][:3]}')
     for dr in res.roster:
         n = dr['name']
-        if len(dr['bk']) > 1:
-            errs.append(f'>1 backup: {n}')
         if dr['bk'] and pdy(dr) < 2:
             errs.append(f'backup under 2 roads: {n}')
         if pdy(dr) + len(dr['bk']) > 5:
@@ -217,15 +236,18 @@ def check_case(case, res, chk):
             errs.append(f'Fair over 4 total: {n}')
         if dr['bk'] and pdy(dr) == 4 and n not in top:
             errs.append(f'5th-day backup on non-Top: {n}')
+        if len(dr['bk']) != len(set(dr['bk'])):
+            errs.append(f'duplicate backup day: {n}')
     for d in res.DAYS:
         got = sum(1 for dr in res.roster if d in dr['bk'])
         if got > res.backup[d]:
             errs.append(f'day {d}: {got} > requested {res.backup[d]}')
-    served = {dr['name'] for dr in res.roster if dr['bk']}
+    served = {dr['name']: len(dr['bk']) for dr in res.roster if dr['bk']}
     want = oracle_ladder(res, case)
     if served != want:
-        errs.append(f'LADDER SET: extra {sorted(served - want)[:3]} / missing '
-                    f'{sorted(want - served)[:3]} ({len(served)} vs {len(want)})')
+        diff = [(n, served.get(n, 0), want.get(n, 0))
+                for n in set(served) | set(want) if served.get(n, 0) != want.get(n, 0)]
+        errs.append(f'LADDER COUNTS: {diff[:4]} ({sum(served.values())} vs {sum(want.values())})')
     return errs
 
 
