@@ -8,6 +8,7 @@ import { deriveGroup, hasTierOverlap, assembleConfig } from '../public/app/lib/c
 import { weekLabel, isSunday } from '../public/app/lib/weeks.js';
 import { driverCsv } from '../public/app/lib/driver-csv.js';
 import { readiness } from '../public/app/readiness.js';
+import { joinChunks } from '../public/app/lib/board-fetch.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -132,6 +133,16 @@ eq('readiness week done', rd.steps[0].status, 'done');
 eq('readiness prior-week warn (none)', rd.steps[3].status, 'warn');
 ok('readiness numbers.drivers', rd.numbers.drivers === 5, JSON.stringify(rd.numbers));
 ok('readiness firstTodoIdx is a number', typeof rd.firstTodoIdx === 'number');
+
+// board-fetch: the board splits its payload across column A, one cell per line.
+eq('joinChunks single cell', joinChunks('"enc1:AAAA"'), { payload: 'enc1:AAAA', count: 1 });
+eq('joinChunks stitches chunks', joinChunks('"enc1:AAAA"\n"BBBB"\n"CC=="'),
+  { payload: 'enc1:AAAABBBBCC==', count: 3 });
+eq('joinChunks skips blank rows', joinChunks('"enc1:AA"\n""\n\n"BB"'),
+  { payload: 'enc1:AABB', count: 2 });
+eq('joinChunks CRLF', joinChunks('"enc1:AA"\r\n"BB"'), { payload: 'enc1:AABB', count: 2 });
+eq('joinChunks unescapes doubled quotes', joinChunks('"a""b"'), { payload: 'a"b', count: 1 });
+eq('joinChunks unquoted cell', joinChunks('enc1:AAAA'), { payload: 'enc1:AAAA', count: 1 });
 
 console.log(`\n${pass}/${pass + fail} passed`);
 if (fail) { console.log('FAILURES:'); fails.forEach((f) => console.log('  ✗', f)); Deno.exit(1); }

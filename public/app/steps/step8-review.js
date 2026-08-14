@@ -26,7 +26,7 @@ export function Step8Review() {
         <${Banner} kind="err">
           <b>Some names don't match the roster</b> and would stop the build:
           <ul>${nameProblems.map((p) => html`<li>${p.name} — ${p.reason}</li>`)}</ul>
-          Fix these in Step 3 (tiers &amp; names) or Step 7 (standing settings).
+          Fix these in Step 3 (tiers & names) or Step 7 (standing settings).
         <//>` : ''}
 
       <h3>Week</h3>

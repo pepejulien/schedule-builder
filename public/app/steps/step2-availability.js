@@ -40,7 +40,7 @@ export function Step2Availability() {
   return html`
     <div class="card">
       <h2>Step 2 — This week's availability</h2>
-      <p class="hint">Upload the <b>Week-NN</b> "Shifts &amp; Availability" workbook drivers submitted. Cells marked
+      <p class="hint">Upload the <b>Week-NN</b> "Shifts & Availability" workbook drivers submitted. Cells marked
         <i>Unavailable</i> are hard days off; other pre-filled shifts are treated as your draft (seeds).</p>
       <${FileInput} accept=".xlsx" label="Availability workbook (.xlsx)" onFile=${onFile} />
       ${err ? html`<${Banner} kind="err">${err}<//>` : ''}

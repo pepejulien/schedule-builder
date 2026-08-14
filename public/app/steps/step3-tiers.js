@@ -104,7 +104,7 @@ export function Step3Tiers() {
 
   return html`
     <div class="card">
-      <h2>Step 3 — Driver tiers &amp; names</h2>
+      <h2>Step 3 — Driver tiers & names</h2>
       <p class="hint">Pull each driver's tier, 30-day routes and rate straight from the JAJB driver board.
         The board password stays on this device and is never sent anywhere.</p>
 

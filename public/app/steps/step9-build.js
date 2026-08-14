@@ -35,7 +35,7 @@ function QuickAdjust({ wizard, onRebuild }) {
   const setBk = (pct) => setWizard((w) => ({ backups: { ...w.backups, mode: 'pct', pct } }));
   return html`
     <div class="card" style="border-left:4px solid var(--navy)">
-      <h3>Adjust &amp; rebuild</h3>
+      <h3>Adjust & rebuild</h3>
       <p class="hint">Change a driver's days, the backup percentage, or an advanced setting, then rebuild — no need to
         start over. For availability or route changes, use
         <a href="#" onClick=${(e) => { e.preventDefault(); continueWizard(); setWizard({ step: 1 }); }}>Availability</a> /
