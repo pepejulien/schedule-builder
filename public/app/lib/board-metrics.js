@@ -5,10 +5,13 @@
 //
 // Window is always 30 days for schedule day-targets. Tier ladder (the board's
 // 2nd tier() definition, which wins): ncns>=2 || high>=2 || strikes>=3 ->
-// Termination review; routes<1 -> Unrated; else by rateScore.
+// Termination review; routes<1 -> Unrated; else by rateScore against the
+// cutoffs below — re-synced from the board 2026-08-14: -3.5 / -10 / -25 / -50.
 //
-// If the board changes its scoring, the tests/board-metrics fixture test fails
-// loudly and the wizard falls back to manual tier entry.
+// These cutoffs are the one part of the port that has silently drifted before
+// (the board tightened them and the builder kept the old -5/-15/-35/-60), so
+// tests/js_selftest.mjs pins each boundary exactly. If the board moves them
+// again those tests fail loudly instead of mis-tiering a whole roster.
 
 export const TIER_ORDER = [
   'Termination review', 'Underperforming', 'Fair', 'Solid', 'Top performer', 'Unrated',
@@ -49,10 +52,10 @@ function tier(m) {
   if (m.ncns >= 2 || m.high >= 2 || m.strikes >= 3) return 'Termination review';
   if (!m.enough) return 'Unrated';
   const r = m.rateScore;
-  if (r >= -5) return 'Top performer';
-  if (r >= -15) return 'Solid';
-  if (r >= -35) return 'Fair';
-  if (r >= -60) return 'Underperforming';
+  if (r >= -3.5) return 'Top performer';
+  if (r >= -10) return 'Solid';
+  if (r >= -25) return 'Fair';
+  if (r >= -50) return 'Underperforming';
   return 'Termination review';
 }
 

@@ -1,5 +1,6 @@
-// Headless version of public/selftest.js — runs the pure front-end logic under
-// Deno (no DOM) so it can be executed in CI / locally. Run:
+// Headless version of public/selftest.js — runs the pure front-end logic with
+// no DOM so it can be executed in CI / locally under either runtime:
+//   node tests/js_selftest.mjs
 //   deno run tests/js_selftest.mjs
 import { computeTiers } from '../public/app/lib/board-metrics.js';
 import { normalizePortal, portalToSchedule } from '../public/app/lib/waves.js';
@@ -55,6 +56,22 @@ eq('Under', byName['Under One'], 'Underperforming');
 eq('Term rate', byName['Term Rate'], 'Termination review');
 eq('Term ncns', byName['Term NCNS'], 'Termination review');
 eq('Unrated', byName['Unrated One'], 'Unrated');
+
+// Tier cutoffs, pinned exactly to the board's ladder (-3.5/-10/-25/-50).
+// rateScore = -(sp/(routes+8)*100) and an oodt event adds mag/25 to sp, so with
+// routes=92 the divisor is 100 and mag=25*x lands rateScore on exactly -x.
+function rateDrv(x) {
+  return { name: 'R', events: [{ track: 'oodt', d: D, mag: 25 * x }], strikes: [], backing: [0, 0], exp: [[D, 92, 3000]] };
+}
+const tierAt = (x) => computeTiers({ ...db, drivers: [rateDrv(x)] }, 30)[0].tier;
+eq('rate -3.5 is Top', tierAt(3.5), 'Top performer');
+eq('rate -3.6 drops to Solid', tierAt(3.6), 'Solid');
+eq('rate -10 is Solid', tierAt(10), 'Solid');
+eq('rate -10.1 drops to Fair', tierAt(10.1), 'Fair');
+eq('rate -25 is Fair', tierAt(25), 'Fair');
+eq('rate -25.1 drops to Underperforming', tierAt(25.1), 'Underperforming');
+eq('rate -50 is Underperforming', tierAt(50), 'Underperforming');
+eq('rate -50.1 drops to Termination review', tierAt(50.1), 'Termination review');
 
 // config-assemble
 eq('deriveGroup Top', deriveGroup('Top performer', 15), { kind: 'most' });
@@ -145,5 +162,8 @@ eq('joinChunks unescapes doubled quotes', joinChunks('"a""b"'), { payload: 'a"b'
 eq('joinChunks unquoted cell', joinChunks('enc1:AAAA'), { payload: 'enc1:AAAA', count: 1 });
 
 console.log(`\n${pass}/${pass + fail} passed`);
-if (fail) { console.log('FAILURES:'); fails.forEach((f) => console.log('  ✗', f)); Deno.exit(1); }
+if (fail) {
+  console.log('FAILURES:'); fails.forEach((f) => console.log('  ✗', f));
+  if (globalThis.Deno) globalThis.Deno.exit(1); else globalThis.process.exit(1);
+}
 console.log('ALL PASS');
