@@ -73,3 +73,32 @@ export function build(files, onProgress) {
     w.postMessage({ type: 'build', files });
   });
 }
+
+// Manual-edit round-trip. op: 'candidates' | 'apply'.
+// Resolves {ok, data?} for candidates, {ok, report?, xlsx?} for apply,
+// or {ok:false, error:{kind, message}} on any failure (incl. timeout).
+let editSeq = 0;
+const EDIT_TIMEOUT_MS = 30000;
+
+export function editRequest(op, payload) {
+  const w = ensureWorker();
+  const id = ++editSeq;
+  return new Promise((resolve) => {
+    let done = false;
+    let timer;
+    const finish = (msg) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      w.removeEventListener('message', handler);
+      resolve(msg);
+    };
+    const handler = (e) => {
+      if (e.data && e.data.type === 'edit-result' && e.data.id === id) finish(e.data);
+    };
+    w.addEventListener('message', handler);
+    timer = setTimeout(() => finish({ ok: false, error: {
+      kind: 'timeout', message: 'The engine did not answer in time. Try again, or rebuild.' } }), EDIT_TIMEOUT_MS);
+    w.postMessage({ type: 'edit', id, op, payload });
+  });
+}

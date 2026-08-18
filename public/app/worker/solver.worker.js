@@ -6,6 +6,8 @@
  *   worker      -> {type:'ready'}
  *   main thread -> {type:'build', files:{...}}
  *   worker      -> {type:'result', ok, xlsx?, report?, error?}
+ *   main thread -> {type:'edit', id, op:'candidates'|'apply', payload:{...}}
+ *   worker      -> {type:'edit-result', id, ok, data?|report?+xlsx?, error?}
  *
  * If Pyodide ever fails to load, bump PYODIDE_VERSION to the current stable
  * release (https://github.com/pyodide/pyodide/releases) — this is the one knob.
@@ -126,8 +128,43 @@ async function build(files) {
   }
 }
 
+// Manual-edit calls only make sense against the build held in the Python
+// module's memory (runner._STATE). If the worker isn't ready there is no such
+// build, so answer instantly instead of cold-loading Pyodide just to say no.
+async function edit(msg) {
+  const fail = (error) => self.postMessage({ type: 'edit-result', id: msg.id, ok: false, error });
+  if (!ready) {
+    fail({ kind: 'no_state',
+      message: 'The engine has no schedule in memory (the page was reloaded). Rebuild first, then edit.' });
+    return;
+  }
+  try {
+    const runner = pyodide.pyimport('runner');
+    const fn = msg.op === 'apply' ? runner.apply_edit : runner.candidates;
+    const out = JSON.parse(fn(JSON.stringify(msg.payload || {})));
+    runner.destroy();
+    if (out.ok === false) {
+      fail({ kind: out.kind || 'edit', message: out.message || 'The edit failed.' });
+      return;
+    }
+    if (msg.op === 'apply') {
+      let xlsx = null;
+      try {
+        const bytes = pyodide.FS.readFile('/work/output.xlsx');
+        xlsx = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      } catch { /* no output written */ }
+      self.postMessage({ type: 'edit-result', id: msg.id, ok: true, report: out, xlsx }, xlsx ? [xlsx] : []);
+    } else {
+      self.postMessage({ type: 'edit-result', id: msg.id, ok: true, data: out });
+    }
+  } catch (err) {
+    fail({ kind: 'crash', message: (err && err.message ? err.message : String(err)) });
+  }
+}
+
 self.onmessage = (e) => {
   const msg = e.data || {};
   if (msg.type === 'warmup') warmup();
   else if (msg.type === 'build') build(msg.files);
+  else if (msg.type === 'edit') edit(msg);
 };

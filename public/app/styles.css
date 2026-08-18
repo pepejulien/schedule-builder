@@ -133,3 +133,41 @@ pre.log { background: #0f1b2a; color: #d6e2f0; padding: 12px; border-radius: 8px
   .rail .step { border-bottom: 0; border-right: 1px solid #f0f1f3; white-space: nowrap; }
   .grid2 { grid-template-columns: 1fr; }
 }
+
+/* ---- Step 9 manual editing ---- */
+.day-chip {
+  display: inline-block; margin: 1px 3px 1px 0; padding: 2px 9px;
+  border: 1px solid #cfe0f2; border-radius: 10px; background: #eef4fb;
+  color: #234b73; font-size: 12px; font-weight: 700; line-height: 1.4;
+}
+.day-chip:hover { background: #dbeafe; border-color: #93b8dd; }
+.day-chip.bk { background: #fdf1e7; border-color: #f3d5b8; color: #8a5a1a; }
+.day-chip.bk:hover { background: #fbe3cc; border-color: #e8b98a; }
+
+.edit-overlay {
+  position: fixed; inset: 0; z-index: 40; background: rgba(22, 35, 50, .45);
+  display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px;
+  overflow-y: auto;
+}
+.edit-modal { width: 640px; max-width: 100%; margin: 0; max-height: calc(100vh - 80px); overflow-y: auto; }
+
+.cand-group { margin-top: 10px; }
+.cand-h { margin: 8px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+.cand-h.ok { color: var(--ok); }
+.cand-h.warn { color: var(--warn); }
+.cand-h.blocked { color: var(--muted); }
+
+.cand { padding: 6px 8px; border-radius: 8px; margin: 2px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cand.ok { background: #f2fbf5; }
+.cand.warn { background: #fffaf0; }
+.cand.blocked { background: #f6f7f9; opacity: .8; }
+.cand-pick { padding: 4px 12px; font-size: 13px; }
+.cand.ok .cand-pick { border-color: #bfe6cc; background: #eafaef; color: #14682e; }
+.cand.ok .cand-pick:hover { background: #d8f3e2; }
+.cand.warn .cand-pick { border-color: #f0e0a8; background: #fff8e6; color: #8a6d1a; }
+.cand.warn .cand-pick:hover { background: #fdefc4; }
+.cand.blocked .cand-pick { text-decoration: none; color: var(--muted); background: #eef0f3; border-color: var(--line); }
+.cand-hours { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cand-why { flex-basis: 100%; font-size: 12px; color: #8a231c; margin-left: 2px; }
+.cand.blocked .cand-why { color: var(--muted); }
+.cand-note { flex-basis: 100%; font-size: 12px; color: #234b73; margin-left: 2px; }
