@@ -9,14 +9,19 @@ Usage (in Pyodide OR under CPython for parity testing):
 The output xlsx is written to cfg['out'] (the worker reads its bytes back).
 
 MANUAL EDITS (2026-08): after run() the built Result stays in _STATE, so the
-UI can move individual road/backup days between drivers without a rebuild:
-    runner.candidates(json)  -> who can take a given (day, role) slot, and why not
-    runner.apply_edit(json)  -> perform a move/fill/remove, re-verify, rewrite xlsx
-Both take/return JSON strings. The rules mirrored here are the same invariants
+UI can change assignments without a rebuild:
+    runner.candidates(json)       -> who can take a given (day, role) slot, and why not
+    runner.apply_edit(json)       -> move/fill/remove a slot, re-verify, rewrite xlsx
+    runner.add_options(json)      -> which days a named driver could be GIVEN a shift on
+    runner.swap_candidates(json)  -> who on a full day's routes could step down to backup
+    runner.apply_add(json)        -> give a driver an extra shift (plain / via swap / extra route)
+    runner.undo_last(json)        -> restore the state before the most recent edit
+All take/return JSON strings. The rules mirrored here are the same invariants
 check_invariants() enforces -- after every edit the verifier reruns, so even a
 rule this mirror missed would still surface in the report banner.
 """
 import contextlib
+import copy
 import datetime
 import io
 import json
@@ -31,7 +36,8 @@ WEEKEND = {'Sat', 'Sun'}
 ONE = datetime.timedelta(days=1)
 
 # The live build this session (res mutates in place as edits are applied).
-_STATE = {'cfg': None, 'res': None, 'edits': []}
+# 'undo' holds one snapshot of the mutable state per applied edit, newest last.
+_STATE = {'cfg': None, 'res': None, 'edits': [], 'undo': []}
 
 
 def _classify(dr, res):
@@ -104,6 +110,7 @@ def _report(cfg, res, chk):
         fallback_used=[list(t) for t in res.fallback_used],
         drivers=_driver_rows(res),
         edits=list(_STATE["edits"]),
+        can_undo=bool(_STATE["undo"]),
     )
 
 
@@ -116,7 +123,7 @@ def run(config_path):
         res = build_schedule(cfg)
         write_xlsx(res)                       # -> cfg['out']
         chk = check_invariants(res)
-        _STATE.update(cfg=cfg, res=res, edits=[])
+        _STATE.update(cfg=cfg, res=res, edits=[], undo=[])
         # json.dumps turns int dict keys (Counter distributions) into strings
         # and tuples into lists automatically -> browser-safe.
         return json.dumps(_report(cfg, res, chk), default=str)
@@ -312,6 +319,41 @@ def _fill_label(res, day, role):
     return (short[0] if short else times[0])
 
 
+def _snapshot(res):
+    """Everything a manual edit can mutate, deep-copied. Small: lists of day
+    names per driver plus the per-day cell/wave maps."""
+    return dict(
+        assign=[dict(prim=list(dr["prim"]), bk=list(dr["bk"])) for dr in res.roster],
+        cell=copy.deepcopy(res.cell),
+        waves=copy.deepcopy(res.waves),
+        routes=dict(res.routes),
+        backup=dict(res.backup),
+        infeasible=list(res.infeasible),
+        edits=list(_STATE["edits"]),
+    )
+
+
+def _restore(res, snap):
+    for dr, a in zip(res.roster, snap["assign"]):
+        dr["prim"][:] = a["prim"]
+        dr["bk"][:] = a["bk"]
+    res.cell = snap["cell"]
+    res.waves = snap["waves"]
+    res.routes = snap["routes"]
+    res.backup = snap["backup"]
+    res.infeasible = snap["infeasible"]
+    _STATE["edits"] = snap["edits"]
+
+
+def _routes_filled(res, day):
+    return sum(1 for v in res.cell[day].values()
+               if "Backup" not in v and "TRAIN helper" not in v)
+
+
+def _bk_filled(res, day):
+    return sum(1 for v in res.cell[day].values() if "Backup" in v)
+
+
 def _recount_short(res, chk):
     """Rebuild the unfilled-slot lines from the CURRENT grid, so a manual fill
     clears the warning (same formats translateInfeasible() parses)."""
@@ -377,7 +419,8 @@ def apply_edit(payload_json):
                     message=f"{to_name} is marked Unavailable on {day} - that is "
                             "a hard rule."))
 
-        # mutate the live result
+        # mutate the live result (snapshot first so undo can restore it)
+        _STATE["undo"].append(_snapshot(res))
         if from_dr is not None:
             from_dr[key].remove(day)
             res.cell[day].pop(i_from, None)
@@ -397,6 +440,204 @@ def apply_edit(payload_json):
         chk = check_invariants(res)
         res.infeasible = _recount_short(res, chk)
         write_xlsx(res)                       # -> cfg['out'], picked up by the worker
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        import traceback
+        return json.dumps(dict(ok=False, kind="crash",
+                               message=traceback.format_exc()))
+
+
+def add_options(payload_json):
+    """payload: {name}. For each operating day, can this driver be GIVEN a
+    route / a backup? Per role: status 'ok'|'warn'|'blocked', plus 'full' for
+    a route on a day whose route slots are all taken (allowed via a swap) and
+    an 'extra' note for a backup above the day's target."""
+    try:
+        p = json.loads(payload_json)
+        res = _STATE.get("res")
+        if res is None:
+            return _no_state()
+        i, dr = _find(res, p.get("name") or "")
+        if dr is None:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"Driver not found: {p.get('name')}"))
+        days = []
+        for d in res.DAYS:
+            cur = ("route" if d in dr["prim"] else "helper" if d in dr["helper"]
+                   else "backup" if d in dr["bk"] else "meeting" if d in dr["meet"]
+                   else "dispatch" if d in dr["extra"]
+                   else "unavailable" if d in dr["unav"] else "")
+            road_st, road_why, _ = _assess(res, dr, d, "road")
+            bk_st, bk_why, _ = _assess(res, dr, d, "backup")
+            r_filled, r_want = _routes_filled(res, d), res.routes[d]
+            b_filled, b_want = _bk_filled(res, d), res.backup[d]
+            if road_st != "blocked" and r_filled >= r_want:
+                road_st = "full"     # takeable, but only by swapping someone out
+            days.append(dict(
+                day=d, current=cur,
+                road=dict(status=road_st, reasons=road_why,
+                          filled=r_filled, want=r_want),
+                backup=dict(status=bk_st, reasons=bk_why,
+                            filled=b_filled, want=b_want,
+                            over_target=(bk_st != "blocked" and b_filled >= b_want)),
+            ))
+        return json.dumps(dict(ok=True, name=dr["name"], hours=_hours(res, dr),
+                               ph=res.PH, bh=res.BH, days=days))
+    except Exception:  # noqa: BLE001
+        import traceback
+        return json.dumps(dict(ok=False, kind="crash",
+                               message=traceback.format_exc()))
+
+
+def swap_candidates(payload_json):
+    """payload: {day, for_name}. Who currently holds a ROUTE on `day` and
+    could step down to a backup that same day, freeing their route slot for
+    `for_name`? Their day count / streaks don't change, so the checks are the
+    backup-side rules only."""
+    try:
+        p = json.loads(payload_json)
+        res = _STATE.get("res")
+        if res is None:
+            return _no_state()
+        day = p.get("day")
+        if day not in res.DAYS:
+            return json.dumps(dict(ok=False, kind="edit", message=f"Bad day: {day}"))
+        for_n = norm(p.get("for_name") or "")
+        xbk = getattr(res, "XBK", set()) or set()
+        out = []
+        for i, dr in enumerate(res.roster):
+            if day not in dr["prim"] or norm(dr["name"]) == for_n:
+                continue
+            label = res.cell[day].get(i, "")
+            blocks, warns = [], []
+            if "TRAIN" in label:
+                blocks.append("training-pair day - can only change with a rebuild")
+            n = norm(dr["name"])
+            if n in res.TARGET and n not in res.REDS:
+                blocks.append(f"pinned at exactly {res.TARGET[n]} road day(s)")
+            if _pdays(dr) - 1 < 2 and n not in xbk:
+                blocks.append("would drop under 2 road days (backup rule)")
+            if n in res.MOST and _pdays(dr) - 1 < 3:
+                warns.append("drops a Top/Solid below 3 road days")
+            status = "blocked" if blocks else ("warn" if warns else "ok")
+            h = _hours(res, dr)
+            out.append(dict(
+                name=dr["name"], cls=_classify(dr, res), hours=h,
+                new_hours=h - res.PH + res.BH,
+                road_days=sorted(dr["prim"]), backup_days=sorted(dr["bk"]),
+                status=status, reasons=blocks + warns, notes=[]))
+        rank = {"ok": 0, "warn": 1, "blocked": 2}
+        out.sort(key=lambda c: (rank[c["status"]], -c["hours"], norm(c["name"])))
+        return json.dumps(dict(ok=True, day=day, candidates=out))
+    except Exception:  # noqa: BLE001
+        import traceback
+        return json.dumps(dict(ok=False, kind="crash",
+                               message=traceback.format_exc()))
+
+
+def apply_add(payload_json):
+    """payload: {name, day, role, swap_name?, extra_route?}. Give `name` an
+    extra shift on `day`. For a route on a full day, either `swap_name` (that
+    driver's route becomes a backup, freeing the slot) or `extra_route:true`
+    (raise the day's route count by one) must be provided."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        day, role = p.get("day"), p.get("role")
+        if day not in res.DAYS or role not in ("road", "backup"):
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"Bad slot: {day} / {role}"))
+        i_to, to_dr = _find(res, p.get("name") or "")
+        if to_dr is None:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"Driver not found: {p.get('name')}"))
+        if day in to_dr["prim"] or day in to_dr["bk"] or day in to_dr["helper"]:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"{to_dr['name']} already works {day}."))
+        if day in to_dr["meet"] or day in to_dr["extra"]:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"{to_dr['name']} has a meeting/dispatch duty on {day}."))
+        if day in to_dr["unav"]:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"{to_dr['name']} is marked Unavailable on {day} - "
+                                           "that is a hard rule."))
+
+        swap_name = p.get("swap_name")
+        extra_route = bool(p.get("extra_route"))
+
+        if role == "backup":
+            _STATE["undo"].append(_snapshot(res))
+            to_dr["bk"].append(day)
+            res.cell[day][i_to] = _fill_label(res, day, "backup")
+            desc = f"Added a {day} backup for {to_dr['name']}"
+        elif swap_name:
+            i_sw, sw_dr = _find(res, swap_name)
+            if sw_dr is None or day not in sw_dr["prim"]:
+                return json.dumps(dict(ok=False, kind="edit",
+                    message=f"{swap_name} no longer holds a route on {day} - "
+                            "close and reopen the editor."))
+            label = res.cell[day].get(i_sw, "")
+            if "TRAIN" in label:
+                return json.dumps(dict(ok=False, kind="edit",
+                    message="That is a training-pair day - training days can only "
+                            "be changed by a rebuild."))
+            _STATE["undo"].append(_snapshot(res))
+            sw_dr["prim"].remove(day)
+            sw_dr["bk"].append(day)
+            m = re.match(r"(\d{1,2}:\d{2} [AP]M)", label)
+            res.cell[day][i_sw] = (m.group(1) + " Backup") if m else "Backup"
+            to_dr["prim"].append(day)
+            res.cell[day][i_to] = label
+            desc = (f"Added a {day} route for {to_dr['name']} - "
+                    f"{sw_dr['name']} stepped down to backup that day")
+        elif extra_route:
+            _STATE["undo"].append(_snapshot(res))
+            label = _fill_label(res, day, "road")
+            if label in res.waves[day]:
+                res.waves[day][label] += 1
+            res.routes[day] += 1
+            to_dr["prim"].append(day)
+            res.cell[day][i_to] = label
+            desc = (f"Added a {day} route for {to_dr['name']} as an EXTRA route "
+                    f"({day} is now {res.routes[day]} routes)")
+        else:
+            if _routes_filled(res, day) >= res.routes[day]:
+                return json.dumps(dict(ok=False, kind="edit", full=True,
+                    message=f"{day}'s {res.routes[day]} route(s) are already filled. "
+                            "Move one of that day's route drivers to backup, or add "
+                            "it as an extra route."))
+            _STATE["undo"].append(_snapshot(res))
+            to_dr["prim"].append(day)
+            res.cell[day][i_to] = _fill_label(res, day, "road")
+            desc = f"Added a {day} route for {to_dr['name']}"
+
+        _STATE["edits"].append(desc)
+        chk = check_invariants(res)
+        res.infeasible = _recount_short(res, chk)
+        write_xlsx(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        import traceback
+        return json.dumps(dict(ok=False, kind="crash",
+                               message=traceback.format_exc()))
+
+
+def undo_last(payload_json):  # noqa: ARG001 - uniform (json in, json out) signature
+    """Restore the state saved before the most recent edit, re-verify, and
+    rewrite the xlsx."""
+    try:
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        if not _STATE["undo"]:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message="Nothing to undo."))
+        _restore(res, _STATE["undo"].pop())
+        chk = check_invariants(res)
+        res.infeasible = _recount_short(res, chk)
+        write_xlsx(res)
         return json.dumps(_report(cfg, res, chk), default=str)
     except Exception:  # noqa: BLE001
         import traceback

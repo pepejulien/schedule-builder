@@ -104,6 +104,122 @@ function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView }) {
   </div>`;
 }
 
+// Modal for giving one driver an EXTRA shift. Shows every operating day with
+// what they're doing now and whether a route / backup can be added. A route
+// on a full day opens the swap step: pick who steps down to backup (freeing
+// their slot), or add it as a genuine extra route.
+function AddEditor({ name, onClose, onApplied }) {
+  const [opts, setOpts] = useState({ loading: true, error: null, data: null });
+  const [swap, setSwap] = useState(null);   // {day, want, loading, error, list} | null
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setOpts({ loading: true, error: null, data: null });
+    setSwap(null);
+    editRequest('add_options', { name }).then((m) => {
+      if (!alive) return;
+      setOpts(m.ok ? { loading: false, error: null, data: m.data }
+        : { loading: false, error: m.error, data: null });
+    });
+    return () => { alive = false; };
+  }, [name]);
+
+  async function openSwap(day, want) {
+    setSwap({ day, want, loading: true, error: null, list: null });
+    const m = await editRequest('swap_candidates', { day, for_name: name });
+    setSwap((s) => (s && s.day === day)
+      ? (m.ok ? { day, want, loading: false, error: null, list: m.data.candidates }
+        : { day, want, loading: false, error: m.error, list: null })
+      : s);
+  }
+
+  async function apply(payload) {
+    setBusy(true);
+    const m = await editRequest('apply_add', { name, ...payload });
+    setBusy(false);
+    if (!m.ok) { setOpts((o) => ({ ...o, error: m.error })); return; }
+    onApplied(m);
+  }
+
+  const CUR = { route: 'Route', backup: 'Backup', helper: 'Training',
+    meeting: 'Meeting', dispatch: 'Dispatch', unavailable: 'Unavailable' };
+  const data = opts.data;
+
+  return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div class="edit-modal card">
+      <h3>Add an extra shift — ${name}${data ? html` <span class="muted">(${data.hours}h now)</span>` : ''}</h3>
+      <p class="hint">Pick a day. A route adds ${data ? data.ph : 10}h, a backup adds ${data ? data.bh : 2}h.
+        Grey means the rules block it — the reason is shown.</p>
+
+      ${opts.error ? html`<${Banner} kind="err">
+        ${opts.error.message}
+        ${opts.error.kind === 'no_state' ? html`<div class="hint">Manual edits work on the build from this
+          session. Hit “Rebuild with changes” once, then edit.</div>` : ''}
+      <//>` : ''}
+      ${opts.loading ? html`<p><${Spinner}/> Checking every day against the rules…</p>` : ''}
+
+      ${data && !swap ? html`<div class="scroll-x"><table class="addgrid">
+        <thead><tr><th>Day</th><th>Now</th><th>Route (+${data.ph}h)</th><th>Backup (+${data.bh}h)</th></tr></thead>
+        <tbody>${data.days.map((dd) => {
+          const roadCell = dd.road.status === 'blocked'
+            ? html`<span class="cand-inline-why">${dd.road.reasons[0] || ''}</span>`
+            : dd.road.status === 'full'
+            ? html`<button class="slot-btn full" disabled=${busy}
+                title=${`All ${dd.road.want} route(s) on ${dd.day} are filled — someone must step down to backup`}
+                onClick=${() => openSwap(dd.day, dd.road.want)}>Full — swap someone…</button>`
+            : html`<button class=${'slot-btn ' + dd.road.status} disabled=${busy}
+                title=${dd.road.reasons.join('; ')}
+                onClick=${() => apply({ day: dd.day, role: 'road' })}>
+                + Route${dd.road.status === 'warn' ? ' (flagged)' : ''}</button>`;
+          const bkCell = dd.backup.status === 'blocked'
+            ? html`<span class="cand-inline-why">${dd.backup.reasons[0] || ''}</span>`
+            : html`<button class=${'slot-btn ' + (dd.backup.over_target ? 'warn' : dd.backup.status)} disabled=${busy}
+                title=${dd.backup.reasons.join('; ')}
+                onClick=${() => apply({ day: dd.day, role: 'backup' })}>
+                + Backup${dd.backup.status === 'warn' ? ' (flagged)'
+                  : dd.backup.over_target ? ' (above target)' : ''}</button>`;
+          return html`<tr>
+            <td><b>${dd.day}</b></td>
+            <td class="muted">${CUR[dd.current] || '—'}</td>
+            <td>${roadCell}</td>
+            <td>${bkCell}</td></tr>`;
+        })}</tbody>
+      </table></div>` : ''}
+
+      ${swap ? html`<div class="swap-panel">
+        <h4>${swap.day}’s ${swap.want} route${swap.want === 1 ? '' : 's'} are all filled</h4>
+        <p class="hint">Pick who steps down to <b>backup</b> that day — ${name} takes their route slot.
+          Their day count doesn’t change, only 10h of road becomes a 2h backup.</p>
+        ${swap.error ? html`<${Banner} kind="err">${swap.error.message}<//>` : ''}
+        ${swap.loading ? html`<p><${Spinner}/> Checking that day’s route drivers…</p>` : ''}
+        ${(swap.list || []).map((c) => {
+          const meta = TIER_META[c.cls] || TIER_META.free;
+          const clickable = c.status !== 'blocked';
+          return html`<div class=${'cand ' + c.status}>
+            <button class="cand-pick" disabled=${busy || !clickable}
+              onClick=${() => clickable && apply({ day: swap.day, role: 'road', swap_name: c.name })}>${c.name}</button>
+            <span class="chip ${meta.chip}">${meta.short}</span>
+            <span class="cand-hours">${c.hours}h → ${c.new_hours}h</span>
+            <span class="muted">Road: ${c.road_days.join(' ')}${c.backup_days.length ? ' · Bk: ' + c.backup_days.join(' ') : ''}</span>
+            ${(c.reasons || []).length ? html`<div class="cand-why">${c.reasons.join('; ')}</div>` : ''}
+          </div>`;
+        })}
+        <div class="row" style="margin-top:10px">
+          <button disabled=${busy} onClick=${() => apply({ day: swap.day, role: 'road', extra_route: true })}>
+            Add as an EXTRA route instead (${swap.day} becomes ${swap.want + 1} routes)</button>
+          <button disabled=${busy} onClick=${() => setSwap(null)}>← Back to days</button>
+        </div>
+      </div>` : ''}
+
+      <div class="row" style="margin-top:12px">
+        <button disabled=${busy} onClick=${onClose}>Cancel</button>
+        ${busy ? html`<span><${Spinner}/> Applying…</span>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
 // Sticky strip shown above the per-driver table while a move is in progress
 // in table view: says what's being moved and offers the escape hatches.
 function MoveBar({ editor, cands, busy, onPick, onClose, onListView }) {
@@ -175,9 +291,9 @@ export function Step9Build() {
   const b = wizard.build;
   const [progress, setProgress] = useState(null);
   const [editor, setEditor] = useState(null);       // {day, role, fromName, view:'table'|'list'} | null
+  const [adder, setAdder] = useState(null);         // {name} | null — the add-a-shift modal
   const [cands, setCands] = useState(null);         // {loading, error, list} for the current editor
   const [applying, setApplying] = useState(false);
-  const [undoStack, setUndoStack] = useState([]);   // inverse moves, newest last
 
   // One candidate fetch per selected slot, shared by the table highlight and
   // the compact list (switching views doesn't refetch).
@@ -194,31 +310,34 @@ export function Step9Build() {
     return () => { alive = false; };
   }, [eDay, eRole, eFrom]);
 
-  // Hand the selected slot to `toName` (null = leave it unfilled). A success
-  // hands back a fresh report + Excel; swap them in place.
+  // Every successful mutation hands back a fresh report + Excel; swap them in.
+  function commitReport(msg, note) {
+    setWizard((w) => ({ build: { ...w.build, report: msg.report, xlsx: msg.xlsx } }));
+    const log = (msg.report && msg.report.edits) || [];
+    toast(note || (log.length ? log[log.length - 1] : 'Edit applied'));
+  }
+
+  // Hand the selected slot to `toName` (null = leave it unfilled).
   async function applySlot(toName) {
     if (!editor || applying) return;
     setApplying(true);
-    const move = { day: editor.day, role: editor.role, from_name: editor.fromName, to_name: toName };
-    const msg = await editRequest('apply', move);
+    const msg = await editRequest('apply',
+      { day: editor.day, role: editor.role, from_name: editor.fromName, to_name: toName });
     setApplying(false);
     if (!msg.ok) { setCands((c) => ({ ...(c || {}), loading: false, error: msg.error })); return; }
-    setWizard((w) => ({ build: { ...w.build, report: msg.report, xlsx: msg.xlsx } }));
-    setUndoStack((s) => [...s, { day: move.day, role: move.role,
-      from_name: move.to_name, to_name: move.from_name }]);
     setEditor(null);
-    const log = (msg.report && msg.report.edits) || [];
-    toast(log.length ? log[log.length - 1] : 'Edit applied');
+    commitReport(msg);
   }
 
+  // The engine snapshots the state before every edit, so undo restores adds,
+  // swaps, and extra routes too — not just simple moves.
   async function undoLast() {
-    const inv = undoStack[undoStack.length - 1];
-    if (!inv) return;
-    const msg = await editRequest('apply', inv);
+    if (applying) return;
+    setApplying(true);
+    const msg = await editRequest('undo', {});
+    setApplying(false);
     if (!msg.ok) { toast(msg.error.message, 'err'); return; }
-    setWizard((w) => ({ build: { ...w.build, report: msg.report, xlsx: msg.xlsx } }));
-    setUndoStack((s) => s.slice(0, -1));
-    toast('Undid the last edit');
+    commitReport(msg, 'Undid the last edit');
   }
 
   const weekNum = parseInt(wizard.week.num, 10);
@@ -340,7 +459,8 @@ export function Step9Build() {
       </table></div>
 
       <h3>Per-driver</h3>
-      <p class="hint">Click any day to move that shift — the table lights up green on everyone who can safely take it.</p>
+      <p class="hint">Click any day to move that shift — the table lights up green on everyone who can safely
+        take it. The <b>+</b> next to a name adds an extra route or backup for that driver.</p>
       ${editor && editor.view === 'table' ? html`<${MoveBar} editor=${editor} cands=${cands} busy=${applying}
         onPick=${applySlot} onClose=${() => setEditor(null)}
         onListView=${() => setEditor({ ...editor, view: 'list' })} />` : ''}
@@ -392,7 +512,9 @@ export function Step9Build() {
                   if (!editor) setEditor({ day, role, fromName: d.name, view: 'table' }); }}>${day}</button>`;
               return html`<tr class=${rowCls} title=${rowTitle}
                 onClick=${pickable && !applying ? () => applySlot(d.name) : undefined}>
-                <td>${d.name}</td>
+                <td>${d.name}${!inTableMove ? html` <button class="add-shift"
+                  title=${'Add an extra shift for ' + d.name}
+                  onClick=${(e) => { e.stopPropagation(); setAdder({ name: d.name }); }}>+</button>` : ''}</td>
                 <td><span class="chip ${meta.chip}">${meta.short}${d.target != null ? ':' + d.target : ''}</span></td>
                 <td>${d.road_days.length || addChip('road') || blockedWhy('road')
                   ? html`${d.road_days.map((day) => chip(day, 'road'))}${addChip('road')}${blockedWhy('road')}` : '—'}</td>
@@ -424,12 +546,15 @@ export function Step9Build() {
       <ul>${r.edits.map((e) => html`<li>${e}</li>`)}</ul>
       <p class="hint">Already reflected in the checks above and in the Excel download.
         Rebuilding re-runs the engine and discards these edits.</p>
-      ${undoStack.length ? html`<button onClick=${undoLast}>Undo last edit</button>` : ''}
+      ${r.can_undo ? html`<button disabled=${applying} onClick=${undoLast}>Undo last edit</button>` : ''}
     </div>` : ''}
 
     ${editor && editor.view === 'list' ? html`<${SlotEditor} editor=${editor} cands=${cands} busy=${applying}
       onPick=${applySlot} onClose=${() => setEditor(null)}
       onTableView=${() => setEditor({ ...editor, view: 'table' })} />` : ''}
+
+    ${adder ? html`<${AddEditor} name=${adder.name} onClose=${() => setAdder(null)}
+      onApplied=${(m) => { setAdder(null); commitReport(m); }} />` : ''}
 
     <${QuickAdjust} wizard=${wizard} onRebuild=${runBuild} />
 

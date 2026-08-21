@@ -128,6 +128,14 @@ export function assembleConfig(state) {
     // 'free' -> no entry (free pool)
   }
 
+  // --- board tier per driver: shown as a Tier column in the output workbook ---
+  const driver_tiers = {};
+  for (const name of roster) {
+    if (exclude.has(name)) continue;
+    const t = tierByDriver[name]?.tier;
+    if (t) driver_tiers[name] = t;
+  }
+
   // --- backup fallback ladder from tiers (Top, Solid, discipline last) ---
   const topNames = [], solidNames = [], discNames = [];
   for (const name of roster) {
@@ -170,6 +178,7 @@ export function assembleConfig(state) {
     reduced_days: { target: 2, names: reducedNames, prefer_days: ['Sun', 'Sat'] },
     most_days,
     driver_rates,
+    driver_tiers,
     use_premade_shifts: adv.use_premade_shifts ?? true,
     weekend_spread: adv.weekend_spread ?? true,
     training_pairs: trainingPairs,

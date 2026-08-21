@@ -138,16 +138,27 @@ async function edit(msg) {
       message: 'The engine has no schedule in memory (the page was reloaded). Rebuild first, then edit.' });
     return;
   }
+  // Ops that mutate the schedule hand back a fresh report + xlsx; the rest
+  // return plain data.
+  const OPS = {
+    candidates: 'candidates', add_options: 'add_options', swap_candidates: 'swap_candidates',
+    apply: 'apply_edit', apply_add: 'apply_add', undo: 'undo_last',
+  };
+  const MUTATING = new Set(['apply', 'apply_add', 'undo']);
   try {
+    if (!OPS[msg.op]) {
+      fail({ kind: 'edit', message: 'Unknown edit op: ' + msg.op });
+      return;
+    }
     const runner = pyodide.pyimport('runner');
-    const fn = msg.op === 'apply' ? runner.apply_edit : runner.candidates;
+    const fn = runner[OPS[msg.op]];
     const out = JSON.parse(fn(JSON.stringify(msg.payload || {})));
     runner.destroy();
     if (out.ok === false) {
-      fail({ kind: out.kind || 'edit', message: out.message || 'The edit failed.' });
+      fail({ kind: out.kind || 'edit', message: out.message || 'The edit failed.', full: out.full });
       return;
     }
-    if (msg.op === 'apply') {
+    if (MUTATING.has(msg.op)) {
       let xlsx = null;
       try {
         const bytes = pyodide.FS.readFile('/work/output.xlsx');

@@ -1298,6 +1298,7 @@ def write_xlsx(res):
     waves, routes, backup = res.waves, res.routes, res.backup
     DAYS, DATEALL, closed = res.DAYS, res.DATEALL, res.closed
     COLS = ALL
+    from openpyxl.utils import get_column_letter
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = SHEET
     bold = Font(bold=True); white = Font(bold=True, color='FFFFFF')
     hf = PatternFill('solid', fgColor='305496'); bk = PatternFill('solid', fgColor='FCE4D6')
@@ -1305,6 +1306,23 @@ def write_xlsx(res):
     clf = PatternFill('solid', fgColor='BDD7EE')
     thin = Side('thin', color='BFBFBF'); bd = Border(thin, thin, thin, thin)
     ctr = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+    # Optional Tier column (Jose 2026-08-21): when cfg carries driver_tiers
+    # ({name: board tier}), a 'Tier' column sits between the name and the ID.
+    # The web app always passes it; a config without it gets the classic
+    # layout. Re-uploading a sheet with the extra column parses fine --
+    # _layout() finds columns by header text, not position.
+    TIERS = {}
+    if cfg.get('driver_tiers'):
+        rn = [norm(dr['name']) for dr in roster]
+        for nm, t in cfg['driver_tiers'].items():
+            hits = resolve(nm, rn)
+            if len(hits) == 1:
+                TIERS[hits[0]] = str(t)
+    tcol = 1 if TIERS else 0          # extra-column shift
+    d0 = 3 + tcol                     # first day column
+    TIERFILL = {'top performer': 'C6EFCE', 'solid': 'E2EFDA', 'fair': 'E4DFEC',
+                'underperforming': 'D9D9D9', 'termination review': 'F8CBAD'}
 
     def setc(r, c, v=None):
         cell_ = ws.cell(r, c, asciize(v))
@@ -1317,25 +1335,33 @@ def write_xlsx(res):
     setc(2, 2, cfg.get('company', 'JAJB LOGISTICS LLC'))
     setc(2, 3, cfg.get('station', 'WWV9'))
     for j, d in enumerate(COLS):
-        c = setc(4, 3 + j, f"{d}, {DATEALL[d].strftime('%d/%b')}")
+        c = setc(4, d0 + j, f"{d}, {DATEALL[d].strftime('%d/%b')}")
         c.font = white; c.fill = hf; c.alignment = ctr; c.border = bd
-    for j, h in enumerate(['Associate Name', 'Transporter ID'], 1):
+    heads = ['Associate Name'] + (['Tier'] if tcol else []) + ['Transporter ID']
+    for j, h in enumerate(heads, 1):
         c = setc(4, j, h); c.font = white; c.fill = hf; c.alignment = ctr; c.border = bd
     setc(5, 1, 'Total Scheduled (routes + backup)').font = bold
-    ws.cell(5, 1).fill = tf; ws.cell(5, 2).fill = tf
+    for cc in range(1, d0):
+        ws.cell(5, cc).fill = tf
     for j, d in enumerate(COLS):
         if d in closed or d not in DAYS:
             txt = 'CLOSED'
         else:
             txt = f'{routes[d]}+{backup[d]}={routes[d] + backup[d]}'
-        c = setc(5, 3 + j, txt); c.font = bold; c.fill = tf; c.alignment = ctr; c.border = bd
+        c = setc(5, d0 + j, txt); c.font = bold; c.fill = tf; c.alignment = ctr; c.border = bd
     order = sorted(range(len(roster)), key=lambda i: roster[i]['name'].lower()); r = 6
     for i in order:
         dr = roster[i]
         setc(r, 1, dr['name']).border = bd
-        setc(r, 2, dr['tid']).border = bd
+        if tcol:
+            tv = TIERS.get(norm(dr['name']), '')
+            c = setc(r, 2, tv); c.border = bd; c.alignment = ctr
+            fillhex = TIERFILL.get(tv.lower())
+            if fillhex:
+                c.fill = PatternFill('solid', fgColor=fillhex)
+        setc(r, 2 + tcol, dr['tid']).border = bd
         for j, d in enumerate(COLS):
-            c = ws.cell(r, 3 + j); c.alignment = ctr; c.border = bd
+            c = ws.cell(r, d0 + j); c.alignment = ctr; c.border = bd
             if d in closed or d not in DAYS:
                 c.fill = clf; continue
             v = cell[d].get(i)
@@ -1364,12 +1390,15 @@ def write_xlsx(res):
                 c.value = 'Unavailable'; c.fill = uf
                 c.font = Font(italic=True, color='808080')
         r += 1
-    ws.freeze_panes = 'C6'
-    ws.column_dimensions['A'].width = 24; ws.column_dimensions['B'].width = 17
+    ws.freeze_panes = ws.cell(6, d0).coordinate      # 'C6', or 'D6' with a Tier column
+    ws.column_dimensions['A'].width = 24
+    if tcol:
+        ws.column_dimensions['B'].width = 16
+    ws.column_dimensions[get_column_letter(2 + tcol)].width = 17
     # Jose 2026-07-10 (corrected): normal column WIDTH, row HEIGHT 40px
     # (= 30 pt; 1 pt = 4/3 px).
-    for col in 'CDEFGHI':
-        ws.column_dimensions[col].width = 15
+    for j in range(7):
+        ws.column_dimensions[get_column_letter(d0 + j)].width = 15
     for rr_ in range(6, r):
         ws.row_dimensions[rr_].height = 30
 
