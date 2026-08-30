@@ -1,6 +1,6 @@
 // In-browser assertions for the pure front-end logic. Renders pass/fail.
 import { computeTiers } from './lib/board-metrics.js';
-import { normalizePortal, portalToSchedule } from './lib/waves.js';
+import { normalizePortal, portalToSchedule, scheduleToPortal } from './lib/waves.js';
 import { norm, resolveFuzzy, matchName } from './lib/names.js';
 import { deriveGroup, hasTierOverlap, assembleConfig } from './lib/config-assemble.js';
 import { weekLabel, isSunday } from './lib/weeks.js';
@@ -15,6 +15,8 @@ eq('portal 10:45 -> schedule 10:25', portalToSchedule('10:45 AM'), '10:25 AM');
 eq('portal 11:05 -> schedule 10:45', portalToSchedule('11:05 AM'), '10:45 AM');
 eq('normalize "1045"', normalizePortal('10:45 AM'), '10:45 AM');
 eq('bad time -> null', portalToSchedule('nope'), null);
+eq('schedule 10:25 -> portal 10:45', scheduleToPortal('10:25 AM'), '10:45 AM');
+eq('schedule 11:05 -> portal 11:25', scheduleToPortal('11:05 AM'), '11:25 AM');
 
 // ---- weeks ----
 ok('2026-08-02 is Sunday', isSunday('2026-08-02'));

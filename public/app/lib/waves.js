@@ -50,3 +50,11 @@ export function portalToSchedule(portalStr) {
   if (mins == null) return null;
   return fmtTime((mins - 20 + 1440) % 1440);
 }
+
+// schedule "h:MM AM" -> portal "h:MM AM" (20 min later) — the inverse, for
+// reading demand back out of a schedule workbook.
+export function scheduleToPortal(scheduleStr) {
+  const mins = parsePortalTime(scheduleStr);
+  if (mins == null) return null;
+  return fmtTime((mins + 20) % 1440);
+}

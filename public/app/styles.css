@@ -224,3 +224,10 @@ tr.cand-row.src td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
 
 .swap-panel { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
 .swap-panel h4 { margin: 4px 0 2px; font-size: 13px; color: var(--navy); }
+
+/* ---- Step 5 demand grid ---- */
+.demand-grid th { text-align: center; vertical-align: top; }
+.demand-grid td { text-align: center; }
+.demand-grid td:first-child { text-align: left; }
+.demand-grid input { width: 62px; text-align: center; font-variant-numeric: tabular-nums; }
+.demand-grid .ghost.small { padding: 2px 6px; font-size: 12px; }

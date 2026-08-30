@@ -3,7 +3,7 @@
 //   node tests/js_selftest.mjs
 //   deno run tests/js_selftest.mjs
 import { computeTiers } from '../public/app/lib/board-metrics.js';
-import { normalizePortal, portalToSchedule } from '../public/app/lib/waves.js';
+import { normalizePortal, portalToSchedule, scheduleToPortal } from '../public/app/lib/waves.js';
 import { norm, resolveFuzzy, matchName } from '../public/app/lib/names.js';
 import { deriveGroup, hasTierOverlap, assembleConfig } from '../public/app/lib/config-assemble.js';
 import { weekLabel, isSunday } from '../public/app/lib/weeks.js';
@@ -21,6 +21,8 @@ eq('portal 10:45 -> 10:25', portalToSchedule('10:45 AM'), '10:25 AM');
 eq('portal 11:05 -> 10:45', portalToSchedule('11:05 AM'), '10:45 AM');
 eq('normalize 10:45', normalizePortal('10:45 AM'), '10:45 AM');
 eq('bad time null', portalToSchedule('nope'), null);
+eq('schedule 10:25 -> portal 10:45', scheduleToPortal('10:25 AM'), '10:45 AM');
+eq('schedule 11:05 -> portal 11:25', scheduleToPortal('11:05 AM'), '11:25 AM');
 
 // weeks
 ok('sunday', isSunday('2026-08-02'));
