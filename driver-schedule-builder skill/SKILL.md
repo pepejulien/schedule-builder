@@ -17,7 +17,8 @@ same shape as the inputs (ready to enter into the system) + a `By Day` sheet.
    consecutive worked days · exact per-wave counts · 4 road days / 40h road
    hours (sole exception: the 5th-day fallback backup, 42h) · 5 total worked
    days · backups only on >=2 road days, no backup-only weeks · training-pair
-   mechanics (back-to-back, same trainer, solo AFTER training) · exclusions.
+   mechanics (ONE day, trainee drives w/ trainer riding along, solo only
+   AFTER training; Jose 2026-08-31) · exclusions.
 2. **ROUTE COVERAGE (Jose 2026-07-20): the routes are the mission.** When
    demand exceeds what the tier caps below can supply, the solver relaxes the
    SOFT caps automatically rather than leave a route unfilled — in order:
@@ -207,35 +208,37 @@ Fair's 2nd, then Top/Solid's 3rd — the reverse of how they were built.
 Sanity-check capacity before running: fixed-group route-days vs the week's route
 total — the Fair group absorbs the difference, so make sure its min/max range can.
 
-## New-hire training pairs (Jose 2026-07-10)
+## New-hire training pairs (REVISED Jose 2026-08-31: ONE training day)
 
-A **brand-new hire (never on the road)** rides **2 back-to-back days with the SAME
-trainer**: day 1 the trainer drives and the new hire is the helper; day 2 the new
-hire drives and the trainer is the helper. The pair shares one van, so each
-training day consumes **exactly one route slot** (the driver-of-record's); a
-helper day is a full worked 10h day for caps/hours/consecutive but **not** a wave
-count. Rules:
+A **brand-new hire (never on the road)** gets a **single training day**: the
+**new hire drives** (driver-of-record, consuming one route slot) with the
+trainer riding along as the helper. From then on the new hire is scheduled as
+a **regular driver**. The trainer's ride-along is a full worked 10h day for
+caps/hours/consecutive but **not** a wave count. Rules:
 
-- Config: `training_pairs: [{"trainer": "...", "trainee": "..."}]`. The solver
-  picks the **EARLIEST feasible back-to-back window** per pair (train first —
-  seeds/preferences never delay training; Jose 2026-07-10), preferring a window
-  that leaves the trainee an available later day, and **locks** it (repair
+- Config: `training_pairs: [{"trainer": "...", "trainee": "..."}]` (unchanged).
+  The solver picks the **EARLIEST feasible day** for the pair (train first —
+  seeds/preferences never delay training), preferring a day that leaves the
+  trainee an available later day for solo routes, and **locks** it (repair
   passes can't move training days). Infeasible pair -> loud report.
-- **The trainee's solo day always falls AFTER day 2 of training** — a new hire
+- **The trainee's solo days always fall AFTER the training day** — a new hire
   never drives alone before being trained. Enforced as a hard rule, with a
   target-completion pass that swaps slots free when busier tiers saturate the
   trainee's only eligible days.
-- A trainer **may take two trainees** — sequentially, never two on the same day
-  (e.g. pair 1 Sun->Mon, pair 2 Tue->Wed). List the pair twice with different
-  trainees.
-- **New hires get 3 total days**: the 2 training days + 1 solo route ->
-  `exact_days: 3` (training-helper days count toward the target).
+- A trainer **may take two trainees** — on different days, never two on the
+  same day. List the pair twice with different trainees.
+- **New hires get 3 total days**: the training day + 2 solo routes ->
+  `exact_days: 3`.
 - A trainer **without a trainee is just a normal driver** — no special handling.
 - **Standing trainer roster (Jose 2026-07-10):** Alex Keller, Barry Hughes,
   Joseph Gebczyk, Jade Oakes, Lexie McMillan, Connor Stephenson, Matthew (Lee)
   Dutton.
-- Output: both cells carry the shared wave + `(TRAIN drives w/ X)` /
-  `(TRAIN helper w/ X)`; the verification block lists every pair and its days.
+- Output: the trainee's cell carries the wave + `(TRAIN drives w/ X)`, the
+  trainer's the wave + `(TRAIN helper w/ X)`; the verification block lists
+  every pair and its day.
+- History: before 2026-08-31 training was 2 back-to-back days (day 1 trainer
+  drives / day 2 trainee drives). Old schedules and PAIRLOG entries from that
+  era show two days.
 
 ## Meeting days are DO-NOT-TOUCH (Jose 2026-07-10)
 
