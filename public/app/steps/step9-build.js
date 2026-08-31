@@ -535,7 +535,7 @@ export function Step9Build() {
         Fair-driver hours: ${chk.pool ? `${chk.pool.min}–${chk.pool.max} (avg ${chk.pool.avg})` : 'n/a'}
       </p>
       ${(chk.fifth_day || []).length ? html`<p class="muted">42h fifth-day backups: ${chk.fifth_day.map((x) => x[0]).join(', ')}</p>` : ''}
-      ${(r.pairlog || []).length ? html`<p class="muted">Training pairs: ${r.pairlog.map((p) => `${p[0]}→${p[1]} (${p[2]}→${p[3]})`).join('; ')}</p>` : ''}
+      ${(r.pairlog || []).length ? html`<p class="muted">Training days: ${r.pairlog.map((p) => `${p[1]} drives ${p[2]} with ${p[0]}`).join('; ')}</p>` : ''}
 
       <details style="margin-top:10px"><summary>Full verification log</summary>
         <pre class="log">${r.summary_text}</pre></details>

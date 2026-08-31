@@ -96,7 +96,8 @@ export function Step7Standing() {
       </select>
 
       <h3>Training pairs (this week)</h3>
-      <p class="hint">A brand-new hire rides two back-to-back days with the same trainer, then drives solo.</p>
+      <p class="hint">A brand-new hire gets one training day: they drive with the trainer riding along.
+        After that they're scheduled like a regular driver.</p>
       ${standing.trainingPairs.map((p, i) => html`
         <div class="row" style="margin:6px 0">
           <select value=${p.trainer} onChange=${(e) => { const t = standing.trainingPairs.slice(); t[i] = { ...t[i], trainer: e.target.value }; set({ trainingPairs: t }); }}>

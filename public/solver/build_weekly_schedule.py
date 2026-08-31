@@ -662,20 +662,19 @@ def build_schedule(cfg):
         return have - routes[d] - backup[d]
     FILL = sorted(DAYS, key=day_slack)
 
-    # ---- PHASE 0: training pairs (Jose 2026-07-10) ----
-    # A brand-new hire rides 2 BACK-TO-BACK days with the SAME trainer:
-    #   day 1 -- trainer drives, new hire is the helper;
-    #   day 2 -- new hire drives, trainer is the helper.
-    # The pair is in ONE van, so each training day consumes exactly one route
-    # slot (the driver-of-record's); the helper day counts as a worked 10h day
-    # for caps/hours/consecutive but NOT toward wave counts. A trainer may
-    # take a second trainee on other days (never two on the same day). Pairs
-    # are placed first (most constrained) and LOCKED -- repair passes must
-    # never move them.
+    # ---- PHASE 0: training pairs (Jose 2026-08-31: ONE training day) ----
+    # A brand-new hire gets a SINGLE training day: the NEW HIRE drives
+    # (driver-of-record, consuming one route slot) with the trainer riding
+    # along as the helper. From then on the new hire is a regular driver.
+    # The helper day counts as a worked 10h day for the trainer's caps/hours/
+    # consecutive but NOT toward wave counts. A trainer may take another
+    # trainee on a different day (never two on the same day). Pairs are
+    # placed first (most constrained) and LOCKED -- repair passes must never
+    # move them.
     pslot = {d: [] for d in DAYS}
     infeasible = []
     LOCKED = set()
-    PAIRLOG = []
+    PAIRLOG = []                       # (trainer, trainee, training day)
     for pair in cfg.get('training_pairs', []):
         pt, pn = pair['trainer'], pair['trainee']
         ti = [i for i, dr in enumerate(roster) if resolve(pt, [norm(dr['name'])])]
@@ -685,47 +684,37 @@ def build_schedule(cfg):
                 f'training_pairs: "{pt}" matched {len(ti)}, "{pn}" matched {len(ni)} roster names')
         t, n = ti[0], ni[0]
 
-        def _pair_ok(dA, dB):
+        def _day_ok(d):
+            if len(pslot[d]) >= routes[d]:
+                return False
             for i in (t, n):
                 dr = roster[i]
-                for d in (dA, dB):
-                    if d in dr['unav'] or d in dr['prim'] or d in dr['helper']:
-                        return False
-                if pdays(dr) + 2 > pcap(dr):
+                if d in dr['unav'] or d in dr['prim'] or d in dr['helper']:
                     return False
-                # consecutive check with both days added
-                s = worked(dr) | {DATEALL[dA], DATEALL[dB]}
-                run = 0; c = DATEALL[dA]
-                while c in s:
-                    run += 1; c -= ONE
-                f = DATEALL[dA] + ONE
-                while f in s:
-                    run += 1; f += ONE
-                if run > MAXC:
+                if pdays(dr) + 1 > pcap(dr):
                     return False
-            return (len(pslot[dA]) < routes[dA] and len(pslot[dB]) < routes[dB])
+                if not runok(dr, DATEALL[d]):
+                    return False
+            return True
 
-        wins = [(ALL[j], ALL[j + 1]) for j in range(6)
-                if ALL[j] in DAYS and ALL[j + 1] in DAYS]
-        wins = [w for w in wins if _pair_ok(*w)]
+        wins = [d for d in DAYS if _day_ok(d)]
         if not wins:
-            infeasible.append(f'TRAINING: no feasible back-to-back days for '
+            infeasible.append(f'TRAINING: no feasible day for '
                               f'{roster[t]["name"]} + {roster[n]["name"]}')
             continue
 
-        # Train FIRST, solo AFTER (Jose 2026-07-10): pick the EARLIEST feasible
-        # window, preferring one that leaves the trainee an available later day
-        # for the solo route. Seeds/preferences do NOT delay training.
-        def _solo_ok(dB):
-            iB = ALL.index(dB)
-            return any(ALL.index(dS) > iB and dS not in roster[n]['unav']
+        # Train FIRST (Jose 2026-07-10): the EARLIEST feasible day, preferring
+        # one that leaves the trainee an available later day for solo routes.
+        # Seeds/preferences do NOT delay training.
+        def _later_ok(d):
+            iD = ALL.index(d)
+            return any(ALL.index(dS) > iD and dS not in roster[n]['unav']
                        for dS in DAYS)
-        dA, dB = min(wins, key=lambda w: (not _solo_ok(w[1]), ALL.index(w[0])))
-        pslot[dA].append(t); roster[t]['prim'].append(dA); roster[n]['helper'].append(dA)
-        pslot[dB].append(n); roster[n]['prim'].append(dB); roster[t]['helper'].append(dB)
-        LOCKED.add((t, dA)); LOCKED.add((n, dB))
-        roster[n]['train_done'] = ALL.index(dB)   # solo days only AFTER this
-        PAIRLOG.append((roster[t]['name'], roster[n]['name'], dA, dB))
+        dT = min(wins, key=lambda d: (not _later_ok(d), ALL.index(d)))
+        pslot[dT].append(n); roster[n]['prim'].append(dT); roster[t]['helper'].append(dT)
+        LOCKED.add((n, dT))
+        roster[n]['train_done'] = ALL.index(dT)   # solo days only AFTER this
+        PAIRLOG.append((roster[t]['name'], roster[n]['name'], dT))
 
     # ---- PHASE 1: primaries (hit targets, max most, balance free by primary-day count) ----
     def _fill_days():
@@ -1260,10 +1249,9 @@ def build_schedule(cfg):
         cell[d][hlp] = wave + ' (TRAIN helper w/ ' + _short(roster[drv]['name']) + ')'
 
     nidx = {norm(dr['name']): i for i, dr in enumerate(roster)}
-    for tnm, nnm, dA, dB in PAIRLOG:
+    for tnm, nnm, dT in PAIRLOG:
         t, n = nidx[norm(tnm)], nidx[norm(nnm)]
-        _annotate(dA, t, n)
-        _annotate(dB, n, t)
+        _annotate(dT, n, t)            # trainee drives, trainer rides along
 
     return Result(cfg=cfg, roster=roster, cell=cell, waves=waves, routes=routes,
                   backup=backup, DAYS=DAYS, DATEALL=DATEALL, closed=closed,
@@ -1447,24 +1435,23 @@ def write_xlsx(res):
                 c.fill = bk
     ws2.freeze_panes = 'B4'
 
-    # Training -- one row per trainer/trainee pair this week. Day 1 is the day
-    # the trainer drives (trainee rides along); Day 2 is the day the trainee
-    # drives solo with the trainer supporting. Source: res.PAIRLOG.
+    # Training -- one row per trainer/trainee pair this week. ONE training day
+    # (Jose 2026-08-31): the trainee drives with the trainer riding along;
+    # from then on the trainee is a regular driver. Source: res.PAIRLOG.
     ws3 = wb.create_sheet('Training')
     ws3.cell(1, 1, asciize(
         f"{cfg.get('week_label', 'Week')} - {cfg.get('station', 'WWV9')} - Training pairs"
     )).font = Font(bold=True, size=13)
     heads = ['Trainer', 'Trainer ID', 'Trainee', 'Trainee ID',
-             'Day 1 - trainer drives', 'Day 2 - trainee drives']
+             'Training day - trainee drives, trainer rides along']
     for j, h in enumerate(heads, 1):
         c = ws3.cell(3, j, asciize(h))
         c.font = white; c.fill = hf; c.alignment = ctr; c.border = bd
     tid_of = {dr['name']: dr['tid'] for dr in roster}
     if res.PAIRLOG:
-        for k, (tnm, nnm, dA, dB) in enumerate(sorted(res.PAIRLOG)):
+        for k, (tnm, nnm, dT) in enumerate(sorted(res.PAIRLOG)):
             vals = [tnm, tid_of.get(tnm, ''), nnm, tid_of.get(nnm, ''),
-                    f"{dA} {DATEALL[dA].strftime('%d/%b')}" if dA in DATEALL else dA,
-                    f"{dB} {DATEALL[dB].strftime('%d/%b')}" if dB in DATEALL else dB]
+                    f"{dT} {DATEALL[dT].strftime('%d/%b')}" if dT in DATEALL else dT]
             for j, v in enumerate(vals, 1):
                 c = ws3.cell(4 + k, j, asciize(v)); c.border = bd
                 if j >= 5:
@@ -1472,7 +1459,7 @@ def write_xlsx(res):
     else:
         ws3.cell(4, 1, 'No training pairs scheduled this week.').font = \
             Font(italic=True, color='808080')
-    for j, w in enumerate([24, 17, 24, 17, 22, 22]):
+    for j, w in enumerate([24, 17, 24, 17, 40]):
         ws3.column_dimensions[chr(ord('A') + j)].width = w
     ws3.freeze_panes = 'A4'
 
@@ -1707,9 +1694,9 @@ def print_summary(res, chk):
         print(f"  {d}: routes {pd['routes']}/{res.routes[d]}  "
               f"backup {pd['backup']}/{res.backup[d]} ({pct}%)")
     if res.PAIRLOG:
-        print('  training pairs (day1 trainer drives / day2 trainee drives):')
-        for tnm, nnm, dA, dB in res.PAIRLOG:
-            print(f'    {tnm} + {nnm}: {dA} -> {dB}')
+        print('  training days (trainee drives, trainer rides along):')
+        for tnm, nnm, dT in res.PAIRLOG:
+            print(f'    {tnm} + {nnm}: {dT}')
     if chk.get('meetings'):
         print('  meeting days preserved (do-not-touch):',
               '; '.join(f'{n} ({d})' for n, d in chk['meetings']))
