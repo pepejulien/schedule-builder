@@ -1309,8 +1309,13 @@ def write_xlsx(res):
                 TIERS[hits[0]] = str(t)
     tcol = 1 if TIERS else 0          # extra-column shift
     d0 = 3 + tcol                     # first day column
-    TIERFILL = {'top performer': 'C6EFCE', 'solid': 'E2EFDA', 'fair': 'E4DFEC',
-                'underperforming': 'D9D9D9', 'termination review': 'F8CBAD'}
+    # Vivid, at-a-glance tier colors (Jose 2026-08-31): (fill, font color).
+    # Green / near-white gray / yellow / orange / red, bold contrasting text.
+    TIERSTYLE = {'top performer': ('00B050', 'FFFFFF'),
+                 'solid': ('F2F2F2', '404040'),
+                 'fair': ('FFFF00', '000000'),
+                 'underperforming': ('FF8C00', 'FFFFFF'),
+                 'termination review': ('FF0000', 'FFFFFF')}
 
     def setc(r, c, v=None):
         cell_ = ws.cell(r, c, asciize(v))
@@ -1344,9 +1349,10 @@ def write_xlsx(res):
         if tcol:
             tv = TIERS.get(norm(dr['name']), '')
             c = setc(r, 2, tv); c.border = bd; c.alignment = ctr
-            fillhex = TIERFILL.get(tv.lower())
-            if fillhex:
-                c.fill = PatternFill('solid', fgColor=fillhex)
+            sty = TIERSTYLE.get(tv.lower())
+            if sty:
+                c.fill = PatternFill('solid', fgColor=sty[0])
+                c.font = Font(bold=True, color=sty[1])
         setc(r, 2 + tcol, dr['tid']).border = bd
         for j, d in enumerate(COLS):
             c = ws.cell(r, d0 + j); c.alignment = ctr; c.border = bd
