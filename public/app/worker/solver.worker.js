@@ -142,9 +142,10 @@ async function edit(msg) {
   // return plain data.
   const OPS = {
     candidates: 'candidates', add_options: 'add_options', swap_candidates: 'swap_candidates',
-    apply: 'apply_edit', apply_add: 'apply_add', undo: 'undo_last',
+    wave_options: 'wave_options',
+    apply: 'apply_edit', apply_add: 'apply_add', apply_wave: 'apply_wave', undo: 'undo_last',
   };
-  const MUTATING = new Set(['apply', 'apply_add', 'undo']);
+  const MUTATING = new Set(['apply', 'apply_add', 'apply_wave', 'undo']);
   try {
     if (!OPS[msg.op]) {
       fail({ kind: 'edit', message: 'Unknown edit op: ' + msg.op });

@@ -15,6 +15,8 @@ UI can change assignments without a rebuild:
     runner.add_options(json)      -> which days a named driver could be GIVEN a shift on
     runner.swap_candidates(json)  -> who on a full day's routes could step down to backup
     runner.apply_add(json)        -> give a driver an extra shift (plain / via swap / extra route)
+    runner.wave_options(json)     -> which other waves a driver's shift could move to that day
+    runner.apply_wave(json)       -> move a shift to another wave (roads swap; backups relabel)
     runner.undo_last(json)        -> restore the state before the most recent edit
 All take/return JSON strings. The rules mirrored here are the same invariants
 check_invariants() enforces -- after every edit the verifier reruns, so even a
@@ -612,6 +614,124 @@ def apply_add(payload_json):
             to_dr["prim"].append(day)
             res.cell[day][i_to] = _fill_label(res, day, "road")
             desc = f"Added a {day} route for {to_dr['name']}"
+
+        _STATE["edits"].append(desc)
+        chk = check_invariants(res)
+        res.infeasible = _recount_short(res, chk)
+        write_xlsx(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        import traceback
+        return json.dumps(dict(ok=False, kind="crash",
+                               message=traceback.format_exc()))
+
+
+_WAVE_RE = re.compile(r"(\d{1,2}:\d{2} [AP]M)")
+
+
+def _cell_wave(v):
+    m = _WAVE_RE.match(str(v or ""))
+    return m.group(1) if m else None
+
+
+def wave_options(payload_json):
+    """payload: {day, name}. Where could this driver's shift on `day` move,
+    wave-wise? Roads keep exact per-wave counts, so moving means SWAPPING
+    labels with a driver already in the target wave — each option lists them.
+    Backup labels don't affect route counts, so backups relabel freely."""
+    try:
+        p = json.loads(payload_json)
+        res = _STATE.get("res")
+        if res is None:
+            return _no_state()
+        day = p.get("day")
+        if day not in res.DAYS:
+            return json.dumps(dict(ok=False, kind="edit", message=f"Bad day: {day}"))
+        i, dr = _find(res, p.get("name") or "")
+        if dr is None:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"Driver not found: {p.get('name')}"))
+        role = "backup" if day in dr["bk"] else "road" if day in dr["prim"] else None
+        if role is None:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"{dr['name']} has no route or backup on {day}."))
+        label = res.cell[day].get(i, "")
+        if "TRAIN" in label:
+            return json.dumps(dict(ok=False, kind="edit",
+                message="That is a training-pair day - training days can only "
+                        "be changed by a rebuild."))
+        cur = _cell_wave(label)
+        out = []
+        for t in res.waves[day]:
+            if t == cur:
+                continue
+            if role == "backup":
+                out.append(dict(wave=t, swap_with=None))
+                continue
+            occ = []
+            for j, other in enumerate(res.roster):
+                v = res.cell[day].get(j, "")
+                if j == i or "Backup" in v or "TRAIN" in v:
+                    continue
+                if _cell_wave(v) == t:
+                    occ.append(dict(name=other["name"], cls=_classify(other, res),
+                                    hours=_hours(res, other)))
+            occ.sort(key=lambda c: norm(c["name"]))
+            out.append(dict(wave=t, swap_with=occ))
+        return json.dumps(dict(ok=True, day=day, name=dr["name"], role=role,
+                               current=cur, waves=out))
+    except Exception:  # noqa: BLE001
+        import traceback
+        return json.dumps(dict(ok=False, kind="crash",
+                               message=traceback.format_exc()))
+
+
+def apply_wave(payload_json):
+    """payload: {day, name, wave, swap_name?}. Move the driver's shift on
+    `day` into `wave`. Roads require `swap_name` (a plain-route holder of the
+    target wave) so per-wave counts stay exact; backups just relabel."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        day, wave = p.get("day"), p.get("wave")
+        if day not in res.DAYS or wave not in res.waves[day]:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"Bad wave: {day} / {wave}"))
+        i, dr = _find(res, p.get("name") or "")
+        if dr is None:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"Driver not found: {p.get('name')}"))
+        label = res.cell[day].get(i, "")
+        if "TRAIN" in label:
+            return json.dumps(dict(ok=False, kind="edit",
+                message="That is a training-pair day - training days can only "
+                        "be changed by a rebuild."))
+        cur = _cell_wave(label)
+        if cur == wave:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"{dr['name']} is already in the {wave} wave."))
+
+        if day in dr["bk"]:
+            _STATE["undo"].append(_snapshot(res))
+            res.cell[day][i] = wave + " Backup"
+            desc = f"Moved {dr['name']}'s {day} backup to the {wave} wave"
+        elif day in dr["prim"]:
+            j, sw = _find(res, p.get("swap_name") or "")
+            vj = res.cell[day].get(j, "") if sw is not None else ""
+            if sw is None or "Backup" in vj or "TRAIN" in vj or _cell_wave(vj) != wave:
+                return json.dumps(dict(ok=False, kind="edit",
+                    message=f"Pick who in the {wave} wave trades times - route "
+                            "counts per wave must stay exact."))
+            _STATE["undo"].append(_snapshot(res))
+            res.cell[day][i] = wave
+            res.cell[day][j] = cur
+            desc = (f"Swapped {day} waves: {dr['name']} -> {wave}, "
+                    f"{sw['name']} -> {cur}")
+        else:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"{dr['name']} has no route or backup on {day}."))
 
         _STATE["edits"].append(desc)
         chk = check_invariants(res)

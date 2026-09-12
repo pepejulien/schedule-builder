@@ -98,6 +98,21 @@ def asciize(v):
     return v.encode('ascii', 'ignore').decode('ascii')
 
 
+def parse_wave_time(s):
+    """Leading 'h:MM AM/PM' of a cell -> minutes since midnight, or None."""
+    m = re.match(r'\s*(\d{1,2}):(\d{2})\s*([AP]M)', str(s or ''), re.I)
+    if not m:
+        return None
+    h = int(m.group(1)) % 12 + (12 if m.group(3).upper() == 'PM' else 0)
+    return h * 60 + int(m.group(2))
+
+
+def fmt_wave_time(mins):
+    h = mins // 60
+    ap = 'AM' if h < 12 else 'PM'
+    return f"{h % 12 or 12}:{mins % 60:02d} {ap}"
+
+
 def fmt_timestamp(dt):
     """'6/27/26, 2:30:04 AM' without platform-specific strftime (%-m crashes on Windows)."""
     h = dt.hour % 12 or 12
@@ -162,6 +177,7 @@ def load_roster(avail_file):
             continue
         name = re.sub(r'\s+', ' ', str(nm)).strip()
         unav, seed, meet, meet_txt = set(), set(), set(), {}
+        seed_time = {}
         for d, col in daycols.items():
             v = ws.cell(r, col).value
             if not v or not str(v).strip():
@@ -177,8 +193,16 @@ def load_roster(avail_file):
                 meet.add(d); meet_txt[d] = str(v).strip()
             elif not any(t in lv for t in ('closed', 'dispatch')):
                 seed.add(d)
+                # Jose 2026-09-11: a seed cell that STARTS WITH a time is a
+                # wave request too (e.g. an edited copy of last week's output).
+                # The DAY is still only a soft preference; the TIME is honored
+                # by the wave-label pass whenever counts allow.
+                mins = parse_wave_time(v)
+                if mins is not None:
+                    seed_time[d] = mins
         rows.append(dict(name=name, tid=str(ws.cell(r, tidc).value or '').strip(),
-                         unav=unav, seed=seed, meet=meet, meet_txt=meet_txt,
+                         unav=unav, seed=seed, seed_time=seed_time,
+                         meet=meet, meet_txt=meet_txt,
                          std_added=set(), usual=[], soft=[],
                          present=0, prim=[], bk=[], helper=[], extra=set()))
     if not rows:
@@ -463,6 +487,7 @@ def build_schedule(cfg):
     if not USESEED:
         for dr in roster:
             dr['seed'] = set()
+            dr['seed_time'] = {}
     rnames = [norm(d['name']) for d in roster]
     prev = load_prev_worked(cfg.get('prev_week_file'), start)
     prefs = load_prefs(cfg.get('prefs_csv'))
@@ -1229,13 +1254,41 @@ def build_schedule(cfg):
             f'can work those days, and no 4-road Top/Solid can either.')
 
     # ---- wave labels (primaries hit exact counts; backups spread across waves) ----
+    # Requested times first (Jose 2026-09-11): a driver whose seed cell carried
+    # a time gets THAT wave when its count allows — matching the wave key
+    # directly (schedule time) or shifted -20 min (a portal time was written).
+    # Everyone else fills by remaining capacity, exactly as before.
+    def _seed_wave(dr, d, cap):
+        mins = dr.get('seed_time', {}).get(d)
+        if mins is None:
+            return None
+        for cand in (mins, mins - 20):
+            t = fmt_wave_time(cand % 1440)
+            if cap.get(t, 0) > 0:
+                return t
+        return None
+
     cell = {d: {} for d in DAYS}
     for d in DAYS:
         cap = dict(waves[d]); times = list(waves[d].keys())
+        rest = []
         for i in sorted(pslot[d], key=lambda i: roster[i]['name'].lower()):
+            t = _seed_wave(roster[i], d, cap)
+            if t:
+                cell[d][i] = t; cap[t] -= 1
+            else:
+                rest.append(i)
+        for i in rest:
             t = max(times, key=lambda t: cap[t]); cell[d][i] = t; cap[t] -= 1
         for k, i in enumerate(sorted(bslot[d], key=lambda i: roster[i]['name'].lower())):
-            cell[d][i] = times[k % len(times)] + ' Backup'
+            mins = roster[i].get('seed_time', {}).get(d)
+            bt = None
+            if mins is not None:
+                for cand in (mins, mins - 20):
+                    if fmt_wave_time(cand % 1440) in waves[d]:
+                        bt = fmt_wave_time(cand % 1440)
+                        break
+            cell[d][i] = (bt or times[k % len(times)]) + ' Backup'
 
     # training annotations: the pair shares the driver-of-record's wave; the
     # helper's cell carries the same wave + 'TRAIN helper' (NOT a route slot)

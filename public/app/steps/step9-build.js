@@ -222,7 +222,76 @@ function AddEditor({ name, onClose, onApplied }) {
 
 // Sticky strip shown above the per-driver table while a move is in progress
 // in table view: says what's being moved and offers the escape hatches.
-function MoveBar({ editor, cands, busy, onPick, onClose, onListView }) {
+// Modal for moving one driver's shift on one day into a DIFFERENT WAVE.
+// Route counts per wave are exact, so a route change is a time swap with a
+// driver already in the target wave; backups just relabel.
+function WaveEditor({ day, name, onClose, onApplied }) {
+  const [st, setSt] = useState({ loading: true, error: null, data: null });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setSt({ loading: true, error: null, data: null });
+    editRequest('wave_options', { day, name }).then((m) => {
+      if (!alive) return;
+      setSt(m.ok ? { loading: false, error: null, data: m.data }
+        : { loading: false, error: m.error, data: null });
+    });
+    return () => { alive = false; };
+  }, [day, name]);
+
+  async function apply(wave, swapName) {
+    setBusy(true);
+    const m = await editRequest('apply_wave', { day, name, wave, swap_name: swapName });
+    setBusy(false);
+    if (!m.ok) { setSt((s) => ({ ...s, error: m.error })); return; }
+    onApplied(m);
+  }
+
+  const d = st.data;
+  return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div class="edit-modal card">
+      <h3>Change ${name}’s wave on ${day}</h3>
+      ${d ? html`<p class="hint">Now in the <b>${d.current}</b> wave (${d.role === 'road' ? 'route' : 'backup'}).
+        ${d.role === 'road'
+          ? 'Route counts per wave are exact, so pick who trades times with them.'
+          : 'Backups can move to any wave.'}</p>` : ''}
+
+      ${st.error ? html`<${Banner} kind="err">
+        ${st.error.message}
+        ${st.error.kind === 'no_state' ? html`<div class="hint">Manual edits work on the build from this
+          session. Hit “Rebuild with changes” once, then edit.</div>` : ''}
+      <//>` : ''}
+      ${st.loading ? html`<p><${Spinner}/> Reading that day’s waves…</p>` : ''}
+
+      ${d ? d.waves.map((w) => html`<div class="cand-group">
+        <h4 class="cand-h ok">${w.wave} wave</h4>
+        ${w.swap_with === null
+          ? html`<button class="slot-btn ok" disabled=${busy}
+              onClick=${() => apply(w.wave, null)}>Move backup to ${w.wave}</button>`
+          : w.swap_with.length === 0
+          ? html`<p class="muted" style="margin:4px 0">Nobody is on a plain route in this wave that day.</p>`
+          : w.swap_with.map((c) => {
+            const meta = TIER_META[c.cls] || TIER_META.free;
+            return html`<div class="cand ok">
+              <button class="cand-pick" disabled=${busy}
+                onClick=${() => apply(w.wave, c.name)}>⇄ ${c.name}</button>
+              <span class="chip ${meta.chip}">${meta.short}</span>
+              <span class="cand-hours">${c.hours}h</span>
+              <span class="muted">takes the ${d.current} spot</span>
+            </div>`;
+          })}
+      </div>`) : ''}
+
+      <div class="row" style="margin-top:12px">
+        <button disabled=${busy} onClick=${onClose}>Cancel</button>
+        ${busy ? html`<span><${Spinner}/> Applying…</span>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+function MoveBar({ editor, cands, busy, onPick, onClose, onListView, onWave }) {
   const what = editor.role === 'road' ? 'route' : 'backup';
   return html`<div class="movebar">
     <div class="movebar-msg">
@@ -236,6 +305,8 @@ function MoveBar({ editor, cands, busy, onPick, onClose, onListView }) {
     </div>
     <div class="movebar-btns">
       <button class="small" disabled=${busy} onClick=${onListView}>Compact list</button>
+      ${editor.fromName ? html`<button class="small" disabled=${busy}
+        onClick=${onWave}>Change wave…</button>` : ''}
       ${editor.fromName && editor.role === 'backup' ? html`<button class="small" disabled=${busy}
         onClick=${() => onPick(null)}>Remove — leave unfilled</button>` : ''}
       <button class="small" disabled=${busy} onClick=${onClose}>Cancel</button>
@@ -292,6 +363,7 @@ export function Step9Build() {
   const [progress, setProgress] = useState(null);
   const [editor, setEditor] = useState(null);       // {day, role, fromName, view:'table'|'list'} | null
   const [adder, setAdder] = useState(null);         // {name} | null — the add-a-shift modal
+  const [waver, setWaver] = useState(null);         // {day, name} | null — the change-wave modal
   const [cands, setCands] = useState(null);         // {loading, error, list} for the current editor
   const [applying, setApplying] = useState(false);
 
@@ -460,10 +532,12 @@ export function Step9Build() {
 
       <h3>Per-driver</h3>
       <p class="hint">Click any day to move that shift — the table lights up green on everyone who can safely
-        take it. The <b>+</b> next to a name adds an extra route or backup for that driver.</p>
+        take it, and the bar above offers <b>Change wave…</b> for that same shift. The <b>+</b> next to a name
+        adds an extra route or backup.</p>
       ${editor && editor.view === 'table' ? html`<${MoveBar} editor=${editor} cands=${cands} busy=${applying}
         onPick=${applySlot} onClose=${() => setEditor(null)}
-        onListView=${() => setEditor({ ...editor, view: 'list' })} />` : ''}
+        onListView=${() => setEditor({ ...editor, view: 'list' })}
+        onWave=${() => { setWaver({ day: editor.day, name: editor.fromName }); setEditor(null); }} />` : ''}
       <div class="scroll-x"><table>
         <thead><tr><th>Driver</th><th>Group</th><th>Road</th><th>Backup</th><th>Other</th><th>Hours</th></tr></thead>
         <tbody>${tierSections.map((t) => {
@@ -552,6 +626,9 @@ export function Step9Build() {
     ${editor && editor.view === 'list' ? html`<${SlotEditor} editor=${editor} cands=${cands} busy=${applying}
       onPick=${applySlot} onClose=${() => setEditor(null)}
       onTableView=${() => setEditor({ ...editor, view: 'table' })} />` : ''}
+
+    ${waver ? html`<${WaveEditor} day=${waver.day} name=${waver.name} onClose=${() => setWaver(null)}
+      onApplied=${(m) => { setWaver(null); commitReport(m); }} />` : ''}
 
     ${adder ? html`<${AddEditor} name=${adder.name} onClose=${() => setAdder(null)}
       onApplied=${(m) => { setAdder(null); commitReport(m); }} />` : ''}
