@@ -14,6 +14,8 @@
  */
 const PYODIDE_VERSION = '0.27.2';
 const PYODIDE_BASE = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+// The app's root folder: this worker lives at <root>/app/worker/solver.worker.js.
+const APP_ROOT = new URL('../../', self.location.href);
 
 let pyodide = null;
 let ready = false;
@@ -38,7 +40,8 @@ async function doWarmup() {
     pyodide = await loadPyodide({ indexURL: PYODIDE_BASE });
 
     progress('packages', 'Installing the spreadsheet engine…');
-    const origin = self.location.origin;
+    // Paths are relative to the app's own folder, so the same files run at the
+    // site root (Netlify) and under /schedule/ (jajb-ops Firebase Hosting).
     const wheels = [
       'et_xmlfile-2.0.0-py3-none-any.whl',
       'openpyxl-3.1.5-py2.py3-none-any.whl',
@@ -49,7 +52,7 @@ async function doWarmup() {
     // clear message if the files somehow aren't deployed.
     pyodide.FS.mkdirTree('/wheels');
     for (const wname of wheels) {
-      const resp = await fetch(`${origin}/pyodide/${wname}`);
+      const resp = await fetch(new URL(`pyodide/${wname}`, APP_ROOT));
       if (!resp.ok) throw new Error(`Could not download ${wname} (HTTP ${resp.status}).`);
       const buf = new Uint8Array(await resp.arrayBuffer());
       if (buf.length < 100 || buf[0] !== 0x50 || buf[1] !== 0x4b) {
@@ -70,8 +73,8 @@ async function doWarmup() {
 
     progress('solver', 'Loading the schedule builder…');
     const [solverSrc, runnerSrc] = await Promise.all([
-      fetch('/solver/build_weekly_schedule.py').then((r) => r.text()),
-      fetch('/solver/runner.py').then((r) => r.text()),
+      fetch(new URL('solver/build_weekly_schedule.py', APP_ROOT)).then((r) => r.text()),
+      fetch(new URL('solver/runner.py', APP_ROOT)).then((r) => r.text()),
     ]);
     pyodide.FS.mkdirTree('/app');
     pyodide.FS.writeFile('/app/build_weekly_schedule.py', solverSrc);

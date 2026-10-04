@@ -4,7 +4,7 @@ import { useStore, setWizard, getState, toast } from '../store.js';
 import { StepNav, goStep } from '../app.js';
 import { Banner } from '../ui.js';
 import { DAYS } from '../lib/waves.js';
-import { storeGet, storePutJSON } from '../api.js';
+import { storeGet, storePutJSON, loadTrainingHistory } from '../api.js';
 import { AUTO_TRAINER, trainerRotation } from '../lib/config-assemble.js';
 
 export const DEFAULT_STANDING = {
@@ -62,7 +62,7 @@ export function Step7Standing() {
       setHasPrefs(!!getState().wizard.standing?.hasPrefs);
       try { const p = await storeGet('standing/prefs.csv'); setHasPrefs(!!p); } catch { setHasPrefs(false); }
       try {
-        const h = await storeGet('standing/training-history.json');
+        const h = await loadTrainingHistory();
         if (h && typeof h === 'object') setWizard({ trainerHistory: h });
       } catch { /* rotation falls back to the marked order */ }
     })();

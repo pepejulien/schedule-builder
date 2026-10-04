@@ -1,5 +1,14 @@
 # JAJB Weekly Schedule Builder
 
+> **Moving to Firebase (2026-10-03):** the same `public/` folder is also served at
+> **https://jajb-ops.web.app/schedule/** — copied in by `JAJB-Hub/firebase/build_site.py`, with the
+> shared JAJB sign-in (`apps.schedule` on the login). There `app/api.js` stores settings in
+> Firestore `schedule/{standing,aliases,prefs}` and each week's training pairs in
+> `schedule_training/{weekStart}` instead of Netlify Blobs. Paths in `public/` are relative so it
+> runs at `/` (Netlify) and `/schedule/` (Firebase). Move the data once with **Settings → Download
+> all settings** (Netlify) → **Load a settings file** (Firebase). Screenshot parsing is Netlify-only
+> for now. Netlify keeps running until it is retired.
+
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's
 inputs, click **Build**, download the finished `Week-NN-Schedule.xlsx`.

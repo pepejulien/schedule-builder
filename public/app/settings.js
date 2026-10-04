@@ -1,8 +1,8 @@
 import { html } from './preact-setup.js';
 import { useState, useEffect } from 'preact/hooks';
 import { toast } from './store.js';
-import { Banner } from './ui.js';
-import { storeGet, storeText } from './api.js';
+import { Banner, download } from './ui.js';
+import { storeGet, storeText, exportSettings, importSettings, onFirebase } from './api.js';
 import { getStoredBoardPw, setStoredBoardPw } from './lib/board-fetch.js';
 import { xlsxFirstSheetToCsv } from './lib/xlsx-to-csv.js';
 
@@ -10,6 +10,27 @@ export function Settings() {
   const [hasPrefs, setHasPrefs] = useState(false);
   const [pwSet, setPwSet] = useState(!!getStoredBoardPw());
   const [prefsErr, setPrefsErr] = useState('');
+  const [moveMsg, setMoveMsg] = useState(null);     // {kind, text}
+
+  // Moving sites: one file carries the standing settings, name matches,
+  // driver preferences and the trainer-rotation history.
+  const onExport = async () => {
+    try {
+      const data = await exportSettings();
+      download(new TextEncoder().encode(JSON.stringify(data, null, 1)).buffer,
+        `schedule-builder-settings-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
+    } catch { toast('Could not export the settings', 'err'); }
+  };
+  const onImport = async (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const done = await importSettings(JSON.parse(await f.text()));
+      setMoveMsg({ kind: 'ok', text: done.length ? `Loaded: ${done.join(', ')}.` : 'The file had nothing to load.' });
+      setHasPrefs(true);
+    } catch (err) { setMoveMsg({ kind: 'err', text: err.message || 'That file could not be loaded.' }); }
+  };
 
   useEffect(() => {
     storeGet('standing/prefs.csv').then((p) => setHasPrefs(!!p)).catch(() => {});
@@ -43,6 +64,17 @@ export function Settings() {
   return html`
     <div class="card">
       <h2>Settings</h2>
+
+      <h3>Move settings between sites</h3>
+      ${onFirebase() ? html`<p class="hint">Bring over everything from the old Netlify Schedule Builder: open it, go to
+          <b>Settings → Download all settings</b>, then load that file here. It carries the trainers and other standing
+          settings, name matches, driver preferences, and who trained whom.</p>
+        <label class="fld"><span>Load a settings file (.json)</span>
+          <input type="file" accept=".json,application/json" onChange=${onImport} /></label>`
+      : html`<p class="hint">The Schedule Builder is moving to the JAJB site (jajb-ops.web.app/schedule/). Download
+          everything here once, then load the file in the new site's Settings.</p>
+        <button onClick=${onExport}>Download all settings</button>`}
+      ${moveMsg ? html`<${Banner} kind=${moveMsg.kind}>${moveMsg.text}<//>` : ''}
 
       <h3>Driver preferences (optional)</h3>
       <p class="hint">A driver-preferences table adds week-to-week "usual day" stickiness. It's a small table

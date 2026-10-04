@@ -5,7 +5,7 @@ import { StepNav } from '../app.js';
 import { Banner, Spinner, readFileBase64 } from '../ui.js';
 import { DAYS, DAY_FULL, portalToSchedule, normalizePortal, parsePortalTime } from '../lib/waves.js';
 import { demandFromPrevSchedule } from '../lib/demand-prefill.js';
-import { parseScreenshot } from '../api.js';
+import { parseScreenshot, canParseScreenshot } from '../api.js';
 
 // The wave times JAJB actually runs; a custom column can be added for odd weeks.
 const DEFAULT_TIMES = ['10:45 AM', '11:05 AM', '11:25 AM'];
@@ -143,8 +143,8 @@ export function Step5Demand() {
       <div class="row" style="margin:8px 0 14px">
         ${wizard.priorWeek?.bytes ? html`<button class="primary" onClick=${onPrefill}>
           Prefill from last week's schedule</button>` : ''}
-        <label class="fld" style="margin:0"><span>…or parse a portal screenshot</span>
-          <input type="file" accept="image/*" onChange=${onScreenshot} disabled=${busy} /></label>
+        ${canParseScreenshot() ? html`<label class="fld" style="margin:0"><span>…or parse a portal screenshot</span>
+          <input type="file" accept="image/*" onChange=${onScreenshot} disabled=${busy} /></label>` : ''}
         ${busy ? html`<span><${Spinner}/> Reading screenshot…</span>` : ''}
       </div>
       ${aiNote ? html`<${Banner} kind="warn">${aiNote}<//>` : ''}

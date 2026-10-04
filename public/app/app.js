@@ -2,7 +2,7 @@ import { html } from './preact-setup.js';
 import { createContext } from 'preact';
 import { useEffect, useState, useContext } from 'preact/hooks';
 import { getState, setState, setWizard, useStore, startFresh, continueWizard, hydrateWizard } from './store.js';
-import { checkAuth, login, logout } from './api.js';
+import { checkAuth, login, logout, whoAmI } from './api.js';
 import { loadDraft } from './draft.js';
 import { readiness } from './readiness.js';
 import { Banner, Spinner, Toast, Icon } from './ui.js';
@@ -75,7 +75,7 @@ function Login() {
   };
   return html`
     <div class="login card">
-      <img src="/assets/logo.png" alt="" class="login-logo" />
+      <img src="assets/logo.png" alt="" class="login-logo" />
       <h2>Schedule Builder</h2>
       <p class="hint">JAJB Logistics · WWV9. Sign in to build this week's driver schedule.</p>
       <form onSubmit=${submit}>
@@ -138,7 +138,7 @@ function Sidebar() {
   const nav = (on, icon, label, onClick, extra) => html`
     <a class=${'nv' + (on ? ' on' : '')} onClick=${onClick}>${Icon(icon)}<span>${label}</span>${extra || ''}</a>`;
   return html`<aside class="sidebar">
-    <div class="sblogo"><img src="/assets/logo.png" alt="" />
+    <div class="sblogo"><img src="assets/logo.png" alt="" />
       <div><div class="sbname">Schedule Builder</div><div class="sbsub">JAJB Logistics · WWV9</div></div></div>
     <nav>
       ${nav(route === 'home', 'home', 'Overview', () => setState({ route: 'home' }))}
@@ -153,6 +153,7 @@ function Sidebar() {
       ${nav(route === 'settings', 'settings', 'Settings', () => setState({ route: 'settings' }))}
     </nav>
     <div class="sbfoot">
+      ${whoAmI() ? html`<div class="sbwho">Signed in as ${whoAmI()}</div>` : ''}
       <a class="nv" onClick=${async () => { await logout(); setState({ auth: 'out' }); }}>${Icon('logout')}<span>Sign out</span></a>
     </div>
   </aside>`;
@@ -197,11 +198,11 @@ export function App() {
 
   useEffect(() => {
     checkAuth().then(async (ok) => {
-      if (ok) {
+      if (ok === true) {
         const d = await loadDraft();
         if (d && d.wizard) hydrateWizard(d.wizard);
       }
-      setState({ auth: ok ? 'in' : 'out' });
+      setState({ auth: ok === 'no-app' ? 'no-app' : ok ? 'in' : 'out' });
     });
   }, []);
 
@@ -209,6 +210,15 @@ export function App() {
     return html`<div class="center" style="margin-top:20vh"><${Spinner}/> Loading…</div>`;
   }
   if (auth === 'out') return html`<${Login}/><${Toast} toast=${toastVal}/>`;
+  // Firebase: signed in, but this login doesn't include the Schedule Builder
+  if (auth === 'no-app') {
+    return html`<div class="login card">
+      <img src="assets/logo.png" alt="" class="login-logo" />
+      <h2>Schedule Builder</h2>
+      <p class="hint">Your login doesn't include the Schedule Builder. Ask Jose if you need it.</p>
+      <a href="/">⌂ All JAJB apps</a>
+    </div>`;
+  }
 
   let body;
   if (route === 'settings') body = html`<${Settings}/>`;

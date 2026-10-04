@@ -345,3 +345,9 @@ tr.cand-row.unavail td:first-child { box-shadow: inset 3px 0 0 var(--err); }
 .override-modal { border-top: 5px solid var(--err); }
 .override-modal h3 { color: var(--err); }
 li.edit-override { color: #8a231c; font-weight: 600; }
+
+/* Build: who trains whom, above the downloads */
+.trainbox { border: 1px solid rgba(47,165,136,.35); background: rgba(47,165,136,.05); border-radius: 14px; padding: 4px 14px 10px; margin: 12px 0 4px; }
+.trainbox h3 { color: var(--accent); }
+.trainbox table th { background: transparent; }
+.sbwho { font-size: 11.5px; color: var(--muted2); padding: 0 11px 6px; }

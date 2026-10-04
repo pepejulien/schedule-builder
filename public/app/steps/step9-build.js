@@ -7,7 +7,7 @@ import { ensureStanding } from './step7-standing.js';
 import { Banner, Spinner, download } from '../ui.js';
 import { assembleFromWizard } from '../build-inputs.js';
 import { build, editRequest } from '../solver-client.js';
-import { storeGet, storePutJSON } from '../api.js';
+import { storeGet, loadTrainingHistory, saveTrainingWeek } from '../api.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { GROUP_OPTIONS } from '../lib/config-assemble.js';
 import { AdvancedPanel } from './advanced-panel.js';
@@ -37,19 +37,6 @@ function translateOverride(line) {
   return line;
 }
 
-// Remember who trained whom this week, so Auto training pairs rotate.
-// Keyed by week start; a rebuild of the same week overwrites its entry.
-async function saveTrainingHistory(weekISO, pairlog) {
-  if (!weekISO) return null;
-  let h = {};
-  try { const cur = await storeGet('standing/training-history.json'); if (cur && typeof cur === 'object') h = cur; } catch { /* start fresh */ }
-  h[weekISO] = (pairlog || []).map((p) => [p[0], p[1], p[2]]);
-  const keep = Object.keys(h).sort().slice(-26);           // ~6 months is plenty
-  const out = {};
-  for (const k of keep) out[k] = h[k];
-  try { await storePutJSON('standing/training-history.json', out); } catch { /* offline: rotation just won't advance */ }
-  return out;
-}
 
 // A deliberate speed bump before scheduling someone on a day they submitted
 // off: tick the box AND type their first name. Compliance rules never get
@@ -81,6 +68,67 @@ function ConfirmOverride({ req, onCancel, onConfirm }) {
           Schedule ${first} on ${req.day} anyway</button>
       </div>
     </div>
+  </div>`;
+}
+
+// Who trains whom this week, shown above the downloads so it's checked
+// before the workbook goes out. Source: the engine's pairlog
+// [trainer, trainee, day]; "Auto-picked …" notes mark rotation picks;
+// "TRAINING: …" lines are new hires the engine couldn't place.
+const DAY_IDX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+// One row per training pair: {trainer, trainee, day, date (ISO), wave,
+// picked: 'auto'|'chosen', solo: [days]}. Shown on the card AND saved as the
+// week's training record (Firestore schedule_training/{weekStart}).
+export function trainingRows(r, startISO) {
+  const auto = {};
+  for (const n of (r.notes || [])) {
+    const m = n.match(/^Auto-picked trainer for (.+): (.+) \(rotation\)$/);
+    if (m) auto[m[1]] = m[2];
+  }
+  const row = Object.fromEntries((r.drivers || []).map((d) => [d.name, d]));
+  const isoOf = (day) => {
+    if (!startISO || DAY_IDX[day] == null) return '';
+    const [y, mo, d] = startISO.split('-').map(Number);
+    const dt = new Date(y, mo - 1, d + DAY_IDX[day]);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  };
+  return (r.pairlog || []).map(([trainer, trainee, day]) => {
+    const cell = (row[trainee]?.cells || {})[day] || '';
+    return {
+      trainer, trainee, day, date: isoOf(day),
+      wave: (cell.match(/^\d{1,2}:\d{2} [AP]M/) || [''])[0],
+      picked: auto[trainee] === trainer ? 'auto' : 'chosen',
+      solo: (row[trainee]?.road_days || []).filter((x) => x !== day).sort((a, b) => DAY_IDX[a] - DAY_IDX[b]),
+    };
+  });
+}
+
+function TrainingCard({ r, startISO }) {
+  const rows = trainingRows(r, startISO);
+  const failed = [...(r.infeasible || []), ...(r.notes || [])].filter((l) => /^TRAINING:/.test(l))
+    .map((l) => l.replace(/^TRAINING:\s*/, ''));
+  const short = (iso) => {
+    if (!iso) return '';
+    const [y, mo, d] = iso.split('-').map(Number);
+    return new Date(y, mo - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+  if (!rows.length && !failed.length) {
+    return html`<p class="muted" style="margin:6px 0 12px">No new hires training this week.</p>`;
+  }
+  return html`<div class="trainbox">
+    <h3>Training this week</h3>
+    <div class="scroll-x"><table>
+      <thead><tr><th>Trainee (drives)</th><th>Trainer (rides along)</th><th>Day</th><th>Wave</th><th>Trainee's solo days</th></tr></thead>
+      <tbody>${rows.map((t) => html`<tr>
+          <td><b>${t.trainee}</b></td>
+          <td>${t.trainer} ${t.picked === 'auto'
+            ? html`<span class="chip blue" title="Picked by the trainer rotation">auto</span>` : ''}</td>
+          <td>${t.day} ${short(t.date)}</td>
+          <td>${t.wave || '—'}</td>
+          <td class="muted">${t.solo.join(' ') || '—'}</td></tr>`)}</tbody>
+    </table></div>
+    ${failed.map((f) => html`<${Banner} kind="err">Not placed: ${f}<//>`)}
   </div>`;
 }
 
@@ -532,7 +580,7 @@ export function Step9Build() {
     // even when Trainers & settings was skipped this session.
     let trainerHistory = wizard.trainerHistory || {};
     try {
-      const h = await storeGet('standing/training-history.json');
+      const h = await loadTrainingHistory();
       if (h && typeof h === 'object') trainerHistory = h;
     } catch { /* use the cached copy */ }
     const { config } = assembleFromWizard({ ...wizard, trainerHistory });
@@ -553,8 +601,14 @@ export function Step9Build() {
       return;
     }
     setWizard({ build: { status: 'done', report: msg.report, xlsx: msg.xlsx, error: null }, trainerHistory });
-    const saved = await saveTrainingHistory(wizard.week.startISO, msg.report.pairlog);
-    if (saved) setWizard({ trainerHistory: saved });
+    // the week's training record: drives the rotation, and (on Firebase) is
+    // the shared record other JAJB apps can read later
+    try {
+      const rows = trainingRows(msg.report, wizard.week.startISO)
+        .map(({ solo, ...keep }) => keep);
+      const saved = await saveTrainingWeek(wizard.week.startISO, wizard.week.label, rows);
+      if (saved) setWizard({ trainerHistory: saved });
+    } catch { toast("Couldn't save this week's training record — the rotation won't advance until the next build.", 'warn'); }
   }
 
   // Not built yet: the old separate Review step sits right here, above the
@@ -626,6 +680,8 @@ export function Step9Build() {
         <b>${status}</b> — max consecutive run ${chk.max_consec} (cap 5),
         ${(chk.errors || []).length} error(s), ${(r.infeasible || []).length} unfilled slot warning(s).
       <//>
+
+      <${TrainingCard} r=${r} startISO=${wizard.week.startISO} />
 
       <div class="row" style="margin:10px 0">
         <button class="accent" onClick=${() => download(b.xlsx.slice(0), `Week-${weekNum}-Schedule.xlsx`, XLSX_MIME)}>
@@ -745,7 +801,6 @@ export function Step9Build() {
         Fair-driver hours: ${chk.pool ? `${chk.pool.min}–${chk.pool.max} (avg ${chk.pool.avg})` : 'n/a'}
       </p>
       ${(chk.fifth_day || []).length ? html`<p class="muted">42h fifth-day backups: ${chk.fifth_day.map((x) => x[0]).join(', ')}</p>` : ''}
-      ${(r.pairlog || []).length ? html`<p class="muted">Training days: ${r.pairlog.map((p) => `${p[1]} drives ${p[2]} with ${p[0]}`).join('; ')}</p>` : ''}
 
       <details style="margin-top:10px"><summary>Full verification log</summary>
         <pre class="log">${r.summary_text}</pre></details>

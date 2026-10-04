@@ -8,7 +8,8 @@ let progressCb = null;
 
 function ensureWorker() {
   if (worker) return worker;
-  worker = new Worker('/app/worker/solver.worker.js');
+  // relative to this module, so it works at / (Netlify) and /schedule/ (Firebase)
+  worker = new Worker(new URL('./worker/solver.worker.js', import.meta.url));
   worker.onmessage = (e) => {
     const msg = e.data || {};
     if (msg.type === 'progress') {
