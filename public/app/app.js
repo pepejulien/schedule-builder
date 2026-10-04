@@ -1,32 +1,44 @@
 import { html } from './preact-setup.js';
-import { useEffect, useState } from 'preact/hooks';
-import { setState, setWizard, useStore, startFresh, continueWizard, hydrateWizard } from './store.js';
+import { createContext } from 'preact';
+import { useEffect, useState, useContext } from 'preact/hooks';
+import { getState, setState, setWizard, useStore, startFresh, continueWizard, hydrateWizard } from './store.js';
 import { checkAuth, login, logout } from './api.js';
 import { loadDraft } from './draft.js';
 import { readiness } from './readiness.js';
-import { Banner, Spinner, Toast } from './ui.js';
+import { Banner, Spinner, Toast, Icon } from './ui.js';
 
-import { Step1Week } from './steps/step1-week.js';
-import { Step2Availability } from './steps/step2-availability.js';
+import { StepFiles } from './steps/step-files.js';
 import { Step3Tiers } from './steps/step3-tiers.js';
-import { Step4PriorWeek } from './steps/step4-priorweek.js';
 import { Step5Demand } from './steps/step5-demand.js';
 import { Step6Backups } from './steps/step6-backups.js';
 import { Step7Standing } from './steps/step7-standing.js';
-import { Step8Review } from './steps/step8-review.js';
 import { Step9Build } from './steps/step9-build.js';
 import { Settings } from './settings.js';
 
+// A step rendered INSIDE another step hides its own Back/Next bar.
+export const Embedded = createContext(false);
+
+// Routes + backups are one decision ("how many people each day"), so they
+// share a screen.
+function StepRoutes() {
+  const demand = useStore((s) => s.wizard.demand);
+  const anyRoutes = Object.values(demand || {}).some((rows) => (rows || []).some((r) => (parseInt(r.count, 10) || 0) > 0));
+  return html`
+    <${Embedded.Provider} value=${true}>
+      <${Step5Demand} />
+      <${Step6Backups} />
+    <//>
+    <div class="card navcard"><${StepNav} canNext=${anyRoutes} /></div>`;
+}
+
+// Five steps (Jose 2026-10-03: the old nine — with the two files uploaded in
+// separate steps — were confusing). Schedule Builder's JAJB accent is teal.
 export const STEPS = [
-  { key: 'week', title: 'Week', comp: Step1Week },
-  { key: 'avail', title: 'Availability', comp: Step2Availability },
-  { key: 'tiers', title: 'Tiers & names', comp: Step3Tiers },
-  { key: 'prev', title: 'Prior week', comp: Step4PriorWeek },
-  { key: 'demand', title: 'Route demand', comp: Step5Demand },
-  { key: 'backups', title: 'Backups', comp: Step6Backups },
-  { key: 'standing', title: 'Standing config', comp: Step7Standing },
-  { key: 'review', title: 'Review', comp: Step8Review },
-  { key: 'build', title: 'Build', comp: Step9Build },
+  { key: 'files', title: 'Week & files', icon: 'calendar', sub: 'Drop this week\'s availability and last week\'s schedule', comp: StepFiles },
+  { key: 'tiers', title: 'Drivers', icon: 'users', sub: 'Tiers from the driver board and each driver\'s day target', comp: Step3Tiers },
+  { key: 'routes', title: 'Routes & backups', icon: 'truck', sub: 'How many routes per wave each day, plus backups', comp: StepRoutes },
+  { key: 'standing', title: 'Trainers & settings', icon: 'cap', sub: 'Trainers, training pairs, dispatch, exclusions', comp: Step7Standing },
+  { key: 'build', title: 'Build', icon: 'build', sub: 'Check, build, adjust, download', comp: Step9Build },
 ];
 
 export function goStep(i) {
@@ -34,9 +46,11 @@ export function goStep(i) {
   window.scrollTo(0, 0);
 }
 
-// A shared footer nav each step renders.
+// A shared footer nav each step renders (hidden when embedded).
 export function StepNav({ canNext = true, onNext, nextLabel = 'Next', hideNext = false, hideBack = false }) {
   const step = useStore((s) => s.wizard.step);
+  const embedded = useContext(Embedded);
+  if (embedded) return null;
   return html`
     <div class="stepnav">
       <div>${!hideBack && step > 0
@@ -61,8 +75,9 @@ function Login() {
   };
   return html`
     <div class="login card">
-      <h2>JAJB Schedule Builder</h2>
-      <p class="hint">Sign in to build this week's driver schedule.</p>
+      <img src="/assets/logo.png" alt="" class="login-logo" />
+      <h2>Schedule Builder</h2>
+      <p class="hint">JAJB Logistics · WWV9. Sign in to build this week's driver schedule.</p>
       <form onSubmit=${submit}>
         <label class="fld"><span>Password</span>
           <input type="password" value=${pw} onInput=${(e) => setPw(e.target.value)}
@@ -74,98 +89,110 @@ function Login() {
     </div>`;
 }
 
-const STATUS_ICON = { done: '✅', warn: '⚠️', todo: '○' };
+const STATUS_CHIP = { done: ['open', 'Ready'], warn: ['lock', 'Check'], todo: ['todo', 'To do'] };
 
 function Home() {
   const wizard = useStore((s) => s.wizard);
   const r = readiness(wizard);
   const started = !!(wizard.availability || wizard.week?.num || wizard.build?.status === 'done');
 
+  if (!started) {
+    return html`<div class="card hero">
+      <div class="hero-ico">${Icon('calendar', 24)}</div>
+      <h2>Build next week's schedule</h2>
+      <p class="hint">Five short steps. Have two files ready: this week's <b>availability export</b> and <b>last week's schedule</b> (the Week-NN-Schedule.xlsx this app made). Progress saves automatically.</p>
+      <button class="accent" onClick=${startFresh}>Start a new schedule ${Icon('arrow', 16)}</button>
+    </div>`;
+  }
+
   return html`
-    <div class="wrap">
-      <div class="card">
-        <div class="row" style="justify-content:space-between">
-          <div>
-            <h2>${started ? wizard.week?.label || 'This week\'s build' : 'Build a weekly schedule'}</h2>
-            <p class="hint">${started
-              ? `${r.doneCount} of 9 steps ready.`
-              : 'Walk through the steps, then download the finished workbook. Your progress is saved automatically.'}</p>
-          </div>
-          <div class="row">
-            ${started
-              ? html`<button class="accent" onClick=${() => { continueWizard(); setWizard({ step: r.firstTodoIdx }); }}>Continue →</button>
-                     <button class="ghost" onClick=${startFresh}>Start over</button>`
-              : html`<button class="accent" onClick=${startFresh}>Start a new schedule</button>`}
-          </div>
-        </div>
-
-        ${started ? html`
-          <div class="row" style="gap:18px; margin:12px 0">
-            <div><div class="big">${r.numbers.drivers}</div><div class="muted">drivers</div></div>
-            <div><div class="big">${r.numbers.operatingDays}</div><div class="muted">days</div></div>
-            <div><div class="big">${r.numbers.routeTotal}</div><div class="muted">routes</div></div>
-            ${r.numbers.tiersAsOf ? html`<div><div class="big" style="font-size:15px">${r.numbers.tiersAsOf}</div><div class="muted">board as of</div></div>` : ''}
-          </div>
-
-          ${r.warnings.map((wn) => html`<${Banner} kind="warn">${wn}<//>`)}
-
-          <div class="scroll-x"><table>
-            <thead><tr><th></th><th>Step</th><th>Status</th><th></th></tr></thead>
-            <tbody>${r.steps.map((s) => html`
-              <tr>
-                <td>${STATUS_ICON[s.status]}</td>
-                <td>${s.title}</td>
-                <td class="muted">${s.detail}</td>
-                <td class="right"><button class="ghost small"
-                  onClick=${() => { continueWizard(); setWizard({ step: s.idx }); }}>open</button></td>
-              </tr>`)}</tbody>
-          </table></div>
-        ` : ''}
-      </div>
+    <div class="stats">
+      <div class="stat"><div class="big">${r.numbers.drivers}</div><div class="muted">drivers</div></div>
+      <div class="stat"><div class="big">${r.numbers.operatingDays}</div><div class="muted">operating days</div></div>
+      <div class="stat"><div class="big">${r.numbers.routeTotal}</div><div class="muted">routes</div></div>
+      <div class="stat"><div class="big">${r.doneCount}/${STEPS.length}</div><div class="muted">steps ready</div></div>
+    </div>
+    ${r.warnings.map((wn) => html`<${Banner} kind="warn">${wn}<//>`)}
+    <div class="steps-grid">
+      ${r.steps.map((s) => {
+        const [cls, lab] = STATUS_CHIP[s.status];
+        return html`<button class="steptile" onClick=${() => { continueWizard(); setWizard({ step: s.idx }); }}>
+          <span class="tico">${Icon(STEPS[s.idx].icon, 20)}</span>
+          <span class="tname">${s.idx + 1}. ${s.title}</span>
+          <span class="tdesc">${s.detail}</span>
+          <span class=${'chip ' + cls}>${lab}</span>
+        </button>`;
+      })}
+    </div>
+    <div class="row" style="margin-top:18px">
+      <button class="ghost" onClick=${() => { if (confirm('Start over? This clears the current build from this browser.')) startFresh(); }}>
+        Start over with a new week</button>
     </div>`;
 }
 
-function Rail() {
-  const step = useStore((s) => s.wizard.step);
-  return html`
-    <div class="rail">
-      ${STEPS.map((s, i) => html`
-        <div class=${'step ' + (i === step ? 'active' : i < step ? 'done' : '')}
-             onClick=${() => (i <= step ? goStep(i) : null)}>
-          <div class="num">${i < step ? '✓' : i + 1}</div>
-          <div>${s.title}</div>
-        </div>`)}
-    </div>`;
-}
-
-function WizardShell() {
-  const step = useStore((s) => s.wizard.step);
-  const Comp = STEPS[step].comp;
-  return html`
-    <div class="wrap">
-      <div class="wizard">
-        <${Rail} />
-        <div><${Comp} /></div>
-      </div>
-    </div>`;
-}
-
-function AppBar() {
+function Sidebar() {
   const route = useStore((s) => s.route);
-  return html`
-    <div class="appbar">
-      <h1>JAJB Schedule Builder</h1>
-      <span class="sub">WWV9 · JAJB Logistics</span>
-      <div class="spacer"></div>
-      <button class="small" onClick=${() => setState({ route: 'home' })}>Home</button>
-      <button class="small" onClick=${() => setState({ route: 'settings' })}>Settings</button>
-      <button class="small" onClick=${async () => { await logout(); setState({ auth: 'out' }); }}>Sign out</button>
-    </div>`;
+  const step = useStore((s) => s.wizard.step);
+  const wizard = useStore((s) => s.wizard);
+  const r = readiness(wizard);
+  const nav = (on, icon, label, onClick, extra) => html`
+    <a class=${'nv' + (on ? ' on' : '')} onClick=${onClick}>${Icon(icon)}<span>${label}</span>${extra || ''}</a>`;
+  return html`<aside class="sidebar">
+    <div class="sblogo"><img src="/assets/logo.png" alt="" />
+      <div><div class="sbname">Schedule Builder</div><div class="sbsub">JAJB Logistics · WWV9</div></div></div>
+    <nav>
+      ${nav(route === 'home', 'home', 'Overview', () => setState({ route: 'home' }))}
+      <div class="sbgroup">This week</div>
+      ${STEPS.map((s, i) => {
+        const st = r.steps[i]?.status;
+        return nav(route === 'wizard' && step === i, s.icon, `${i + 1}. ${s.title}`,
+          () => { continueWizard(); goStep(i); },
+          st === 'done' ? html`<span class="nvok">${Icon('check', 14)}</span>` : '');
+      })}
+      <div class="sbgroup">App</div>
+      ${nav(route === 'settings', 'settings', 'Settings', () => setState({ route: 'settings' }))}
+    </nav>
+    <div class="sbfoot">
+      <a class="nv" onClick=${async () => { await logout(); setState({ auth: 'out' }); }}>${Icon('logout')}<span>Sign out</span></a>
+    </div>
+  </aside>`;
+}
+
+function TopBar() {
+  const route = useStore((s) => s.route);
+  const step = useStore((s) => s.wizard.step);
+  const week = useStore((s) => s.wizard.week);
+  let title = 'Overview', sub = 'Where this week\'s schedule stands';
+  if (route === 'settings') { title = 'Settings'; sub = 'Saved for every week'; }
+  else if (route === 'wizard') { title = STEPS[step].title; sub = `Step ${step + 1} of ${STEPS.length} · ${STEPS[step].sub}`; }
+  return html`<header class="topbar"><div class="tbrow">
+    <div>
+      <div class="tbtitle"><h1>${title}</h1>${week?.label ? html`<span class="wkpill">${week.label}</span>` : ''}</div>
+      <div class="tbsub">${sub}</div>
+    </div>
+    ${route === 'home' && (week?.num || step) ? html`<button class="rbtn" onClick=${() => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); }}>
+      Continue ${Icon('arrow', 16)}</button>` : ''}
+  </div></header>`;
+}
+
+// Below 1000px the sidebar hides; this pill row keeps every page reachable.
+function MobileSteps() {
+  const route = useStore((s) => s.route);
+  const step = useStore((s) => s.wizard.step);
+  return html`<div class="msteps">
+    <button class=${'mstep' + (route === 'home' ? ' on' : '')} onClick=${() => setState({ route: 'home' })}>Overview</button>
+    ${STEPS.map((s, i) => html`
+    <button class=${'mstep' + (route === 'wizard' && i === step ? ' on' : '')}
+      onClick=${() => { continueWizard(); goStep(i); }}>${i + 1}. ${s.title}</button>`)}
+    <button class=${'mstep' + (route === 'settings' ? ' on' : '')} onClick=${() => setState({ route: 'settings' })}>Settings</button>
+    <button class="mstep" onClick=${async () => { await logout(); setState({ auth: 'out' }); }}>Sign out</button>
+  </div>`;
 }
 
 export function App() {
   const auth = useStore((s) => s.auth);
   const route = useStore((s) => s.route);
+  const step = useStore((s) => s.wizard.step);
   const toastVal = useStore((s) => s.toast);
 
   useEffect(() => {
@@ -179,19 +206,23 @@ export function App() {
   }, []);
 
   if (auth === 'unknown') {
-    return html`<div class="wrap center" style="margin-top:20vh"><${Spinner}/> Loading…</div>`;
+    return html`<div class="center" style="margin-top:20vh"><${Spinner}/> Loading…</div>`;
   }
   if (auth === 'out') return html`<${Login}/><${Toast} toast=${toastVal}/>`;
 
   let body;
-  if (route === 'settings') body = html`<div class="wrap"><${Settings}/></div>`;
-  else if (route === 'wizard') body = html`<${WizardShell}/>`;
+  if (route === 'settings') body = html`<${Settings}/>`;
+  else if (route === 'wizard') { const Comp = STEPS[Math.min(step, STEPS.length - 1)].comp; body = html`<${Comp}/>`; }
   else body = html`<${Home}/>`;
 
   return html`
-    <div>
-      <${AppBar}/>
-      ${body}
+    <div class="layout">
+      <${Sidebar}/>
+      <div class="maincol">
+        <${TopBar}/>
+        <${MobileSteps}/>
+        <main>${body}</main>
+      </div>
       <${Toast} toast=${toastVal}/>
     </div>`;
 }

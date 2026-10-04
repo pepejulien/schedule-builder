@@ -9,6 +9,7 @@ export function assembleFromWizard(w) {
     demand: w.demand || {},
     backups: w.backups || { mode: 'pct', pct: 0.15 },
     standing: w.standing || {},
+    trainerHistory: w.trainerHistory || {},
     advanced: w.advanced || {},
     priorWeekAvailable: !!(w.priorWeek && w.priorWeek.bytes),
   };

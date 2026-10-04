@@ -5,7 +5,8 @@ import { saveDraft, clearDraft } from './draft.js';
 
 function freshWizard() {
   return {
-    step: 0,                       // 0..8 wizard steps
+    flow: 2,                       // 2 = the 5-step flow (2026-10); drafts without it used 9 steps
+    step: 0,                       // 0..4 wizard steps
     week: { num: '', startISO: toISODate(nextSunday()), label: '' },
     availability: null,            // { fileName, bytes(ArrayBuffer), drivers, counts, rosterNames }
     tierByDriver: {},              // rosterName -> { tier, routes, rate, groupValue, conflict }
@@ -15,6 +16,7 @@ function freshWizard() {
     demandConfirmedClosed: {},     // day -> bool (explicit closed confirmation)
     backups: { mode: 'pct', pct: 0.15, perDay: {} },
     standing: null,                // loaded from Blobs: { exclude, bench, dispatch, trainers, trainingPairs, hasPrefs }
+    trainerHistory: {},            // loaded from Blobs: { weekStartISO: [[trainer, trainee, day]] } - trainer rotation
     advanced: {},                  // config overrides
     build: { status: 'idle', report: null, xlsx: null, error: null, savedName: null },
   };
@@ -55,6 +57,11 @@ export function setWizard(patch) {
 // Restore a saved draft (merged onto a fresh wizard so new fields exist).
 export function hydrateWizard(wizard) {
   const merged = { ...freshWizard(), ...wizard };
+  // Drafts saved under the old 9-step flow: map the step to its new home.
+  if (!wizard.flow) {
+    merged.step = [0, 0, 1, 0, 2, 2, 3, 4, 4][wizard.step] ?? 0;
+    merged.flow = 2;
+  }
   // A 'building' status saved mid-build has no live engine after a page reload,
   // so nothing would ever finish it — reset to 'idle' so the user sees the
   // Build button instead of a frozen spinner.

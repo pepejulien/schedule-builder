@@ -77,8 +77,18 @@ export function Step3Tiers() {
     setWizard({ tierByDriver: seedRows(), tierMeta: { asof: null, fetched: true, warnings: ['Manual tier entry — the board was not loaded.'] } });
   }
 
+  // Changing a tier or route count re-derives the day target (an Unrated
+  // driver defaults to "Exactly 3" -- re-tiering them to Solid must lift that),
+  // unless HR already picked a day target by hand for this driver.
   function setRow(name, patch) {
-    setWizard((w) => ({ tierByDriver: { ...w.tierByDriver, [name]: { ...w.tierByDriver[name], ...patch, touched: true, conflict: false } } }));
+    setWizard((w) => {
+      const next = { ...w.tierByDriver[name], ...patch, touched: true, conflict: false };
+      if ('groupValue' in patch) next.groupTouched = true;
+      else if (!next.groupTouched && ('tier' in patch || 'routes' in patch)) {
+        next.groupValue = groupToValue(deriveGroup(next.tier, next.routes));
+      }
+      return { tierByDriver: { ...w.tierByDriver, [name]: next } };
+    });
   }
 
   async function assignUnmatched(idx, rosterName) {
@@ -104,7 +114,7 @@ export function Step3Tiers() {
 
   return html`
     <div class="card">
-      <h2>Step 3 — Driver tiers & names</h2>
+      <h2>Driver tiers & day targets</h2>
       <p class="hint">Pull each driver's tier, 30-day routes and rate straight from the JAJB driver board.
         The board password stays on this device and is never sent anywhere.</p>
 

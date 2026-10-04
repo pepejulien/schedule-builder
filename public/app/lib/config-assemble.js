@@ -43,6 +43,36 @@ export function valueToGroup(v) {
   return { kind: v };
 }
 
+// A training pair whose trainer is AUTO_TRAINER lets the engine pick one of
+// the marked trainers by rotation.
+export const AUTO_TRAINER = '__auto__';
+
+// Rotation order for the marked trainers: never-used first, then whoever
+// trained longest ago, then fewest trainings, then the order they were marked.
+// history = { weekStartISO: [[trainer, trainee, day], ...] }; the current
+// week is ignored so rebuilding the same week doesn't reshuffle the line.
+export function trainerRotation(trainers, history, currentWeekISO) {
+  const last = {}, count = {};
+  for (const [wk, rows] of Object.entries(history || {})) {
+    if (wk === currentWeekISO || !Array.isArray(rows)) continue;
+    for (const row of rows) {
+      const t = row && row[0];
+      if (!t) continue;
+      count[t] = (count[t] || 0) + 1;
+      if (!last[t] || wk > last[t]) last[t] = wk;
+    }
+  }
+  return (trainers || []).map((t, i) => ({ t, i }))
+    .sort((a, b) => {
+      const la = last[a.t] || '', lb = last[b.t] || '';
+      if (la !== lb) return la < lb ? -1 : 1;
+      const ca = count[a.t] || 0, cb = count[b.t] || 0;
+      if (ca !== cb) return ca - cb;
+      return a.i - b.i;
+    })
+    .map((x) => ({ name: x.t, lastWeek: last[x.t] || null, times: count[x.t] || 0 }));
+}
+
 // Build waves for one day from its portal-time rows -> {scheduleTime: totalCount}.
 function dayWaves(rows) {
   const out = {};
@@ -61,7 +91,8 @@ function dayWaves(rows) {
 //   tierByDriver:{ name:{tier, routes, rate, groupValue} },
 //   demand:{ day:[{portalTime,count}] },
 //   backups:{mode,pct,perDay},
-//   standing:{exclude:[], bench:[], dispatch:{name:[days]}, trainingPairs:[{trainer,trainee}], hasPrefs},
+//   standing:{exclude:[], bench:[], dispatch:{name:[days]}, trainers:[], trainingPairs:[{trainer|AUTO_TRAINER,trainee}], hasPrefs},
+//   trainerHistory:{ weekStartISO:[[trainer, trainee, day]] },
 //   advanced:{ free_primary_cap, max_primary_days, weekly_hours_cap, ... },
 //   priorWeekAvailable:bool,
 // }
@@ -91,12 +122,24 @@ export function assembleConfig(state) {
   const canonList = (arr) => [...new Set((arr || []).map(canon).filter(Boolean))];
 
   // --- per-driver day-target groups ---
-  const trainingPairs = (standing.trainingPairs || [])
-    .map((p) => ({ trainer: canon(p.trainer), trainee: canon(p.trainee) }))
-    .filter((p) => p.trainer && p.trainee);
-  const trainees = new Set(trainingPairs.map((p) => p.trainee));
   const bench = new Set(canonList(standing.bench));
   const exclude = new Set(canonList(standing.exclude));
+  const pairsIn = standing.trainingPairs || [];
+  const trainingPairs = pairsIn
+    .filter((p) => p.trainer !== AUTO_TRAINER)
+    .map((p) => ({ trainer: canon(p.trainer), trainee: canon(p.trainee) }))
+    .filter((p) => p.trainer && p.trainee);
+  // Auto pairs: the engine picks from this week's marked trainers in rotation
+  // order (benched / excluded trainers can't train).
+  const pool = trainerRotation(canonList(standing.trainers), state.trainerHistory, state.week?.startISO)
+    .map((x) => x.name).filter((n) => !bench.has(n) && !exclude.has(n));
+  const auto_training = pairsIn
+    .filter((p) => p.trainer === AUTO_TRAINER && canon(p.trainee))
+    .map((p) => ({ trainee: canon(p.trainee), pool: pool.filter((n) => n !== canon(p.trainee)) }));
+  for (const a of auto_training) {
+    if (!a.pool.length) warnings.push(`No trainers are marked for this week's roster — ${a.trainee} won't get a training day. Mark trainers in Trainers & settings.`);
+  }
+  const trainees = new Set([...trainingPairs, ...auto_training].map((p) => p.trainee));
   const dispatch = {};
   for (const [nm, days] of Object.entries(standing.dispatch || {})) {
     const c = canon(nm);
@@ -113,10 +156,11 @@ export function assembleConfig(state) {
     const info = tierByDriver[name] || {};
     if (info.rate != null && Number.isFinite(info.rate)) driver_rates[name] = info.rate;
 
-    // Resolve the effective group: bench list / trainee override win, else HR's
-    // grid choice (which defaults to deriveGroup()).
+    // Resolve the effective group: bench list wins, then a day target HR picked
+    // by hand, then the trainee default (3), else the grid's derived choice.
     let g;
     if (bench.has(name)) g = { kind: 'exact', n: 0 };
+    else if (info.groupTouched && info.groupValue) g = valueToGroup(info.groupValue);
     else if (trainees.has(name)) g = { kind: 'exact', n: 3 };
     else if (info.groupValue) g = valueToGroup(info.groupValue);
     else g = deriveGroup(info.tier, info.routes);
@@ -182,6 +226,7 @@ export function assembleConfig(state) {
     use_premade_shifts: adv.use_premade_shifts ?? true,
     weekend_spread: adv.weekend_spread ?? true,
     training_pairs: trainingPairs,
+    auto_training,
     extra_worked_days: dispatch,
     backup_eligible_extra: canonList([
       ...(standing.backup_eligible_extra || []),
@@ -209,6 +254,7 @@ export function assembleConfig(state) {
     ...config.most_days,
     ...Object.keys(config.driver_rates),
     ...config.training_pairs.flatMap((p) => [p.trainer, p.trainee]),
+    ...config.auto_training.map((p) => p.trainee),
     ...Object.keys(config.extra_worked_days),
     ...config.backup_fallback.flat(),
   ];

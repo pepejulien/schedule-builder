@@ -136,7 +136,7 @@ export function Step5Demand() {
 
   return html`
     <div class="card">
-      <h2>Step 5 — Route demand</h2>
+      <h2>Routes per wave</h2>
       <p class="hint">Type the route count for each <b>portal</b> wave time — the schedule time (20 min earlier)
         is under each column. Leave a day empty for <b>closed</b>. Fill the first day, then use ⧉ to copy it down.</p>
 

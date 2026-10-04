@@ -33,7 +33,7 @@ export function Settings() {
     if (!firstLine.includes('driver')) {
       setPrefsErr('This doesn\'t look like a driver-preferences table — it needs a "driver" column '
         + '(plus usual_days, often_off_soft, unavailable_hard, weeks_present). '
-        + 'If this is a schedule, it goes in Step 4 of a build, not here.');
+        + 'If this is a schedule, drop it in Week & files of a build, not here.');
       return;
     }
     try { await storeText('standing/prefs.csv', text); setHasPrefs(true); toast('Driver preferences saved'); }
@@ -63,8 +63,8 @@ export function Settings() {
       <h3>First-run checklist</h3>
       <ul class="hint">
         <li>Upload the Driver-Preferences.csv above (optional).</li>
-        <li>Standing settings (exclusions, dispatch, trainers) are edited in Step 7 of a build.</li>
-        <li>For the very first week, upload last week's schedule in Step 4 (there's nothing saved yet).</li>
+        <li>Trainers, exclusions and dispatch duty are edited in Trainers & settings of a build.</li>
+        <li>Each week, drop this week's availability and last week's schedule together in Week & files.</li>
       </ul>
     </div>`;
 }

@@ -1,10 +1,11 @@
 import { html } from '../preact-setup.js';
 import { useState, useEffect } from 'preact/hooks';
-import { useStore, setWizard, toast } from '../store.js';
-import { StepNav } from '../app.js';
+import { useStore, setWizard, getState, toast } from '../store.js';
+import { StepNav, goStep } from '../app.js';
 import { Banner } from '../ui.js';
 import { DAYS } from '../lib/waves.js';
 import { storeGet, storePutJSON } from '../api.js';
+import { AUTO_TRAINER, trainerRotation } from '../lib/config-assemble.js';
 
 export const DEFAULT_STANDING = {
   exclude: ['Zackary McDonald', 'Rachel Rhoades', 'Greyson Turner'],
@@ -36,19 +37,34 @@ function DayPicker({ days, onChange }) {
       <input type="checkbox" checked=${days.includes(d)} onChange=${() => toggle(d)} style="display:none"/>${d}</label>`)}</div>`;
 }
 
+// Load the saved standing settings (exclusions, trainers, dispatch...) into
+// the build if this session hasn't yet — so skipping this step never drops
+// them. Safe to call repeatedly.
+export async function ensureStanding() {
+  if (getState().wizard.standing) return;
+  let cfg = null, hasPrefs = false;
+  try { cfg = await storeGet('standing/config.json'); } catch { /* defaults */ }
+  try { hasPrefs = !!(await storeGet('standing/prefs.csv')); } catch { /* none */ }
+  if (!getState().wizard.standing) setWizard({ standing: { ...DEFAULT_STANDING, ...(cfg || {}), hasPrefs } });
+}
+
 export function Step7Standing() {
   const avail = useStore((s) => s.wizard.availability);
   const standing = useStore((s) => s.wizard.standing);
+  const history = useStore((s) => s.wizard.trainerHistory);
+  const weekISO = useStore((s) => s.wizard.week.startISO);
   const roster = avail?.rosterNames || [];
   const [hasPrefs, setHasPrefs] = useState(false);
 
   useEffect(() => {
     (async () => {
-      let cfg = null;
-      try { cfg = await storeGet('standing/config.json'); } catch { /* ignore */ }
-      const merged = { ...DEFAULT_STANDING, ...(cfg || {}) };
-      if (!standing) setWizard({ standing: { ...merged, hasPrefs: false } });
+      await ensureStanding();
+      setHasPrefs(!!getState().wizard.standing?.hasPrefs);
       try { const p = await storeGet('standing/prefs.csv'); setHasPrefs(!!p); } catch { setHasPrefs(false); }
+      try {
+        const h = await storeGet('standing/training-history.json');
+        if (h && typeof h === 'object') setWizard({ trainerHistory: h });
+      } catch { /* rotation falls back to the marked order */ }
     })();
   }, []);
 
@@ -66,10 +82,16 @@ export function Step7Standing() {
   };
 
   const dispatchRows = Object.entries(standing.dispatch);
+  const trainers = standing.trainers || [];
+  // Rotation line for this week's roster (who the engine tries first).
+  const lineup = trainerRotation(trainers.filter((t) => roster.includes(t)), history, weekISO);
+  const setPair = (i, patch) => {
+    const t = standing.trainingPairs.slice(); t[i] = { ...t[i], ...patch }; set({ trainingPairs: t });
+  };
 
   return html`
     <div class="card">
-      <h2>Step 7 — Standing settings</h2>
+      <h2>Trainers & settings</h2>
       <p class="hint">These carry over week to week. Edit as needed — changes are saved for next time.</p>
 
       <h3>Excluded (removed from the sheet)</h3>
@@ -95,23 +117,39 @@ export function Step7Standing() {
         ${roster.filter((r) => !(r in standing.dispatch)).map((r) => html`<option value=${r}>${r}</option>`)}
       </select>
 
+      <h3>Trainers</h3>
+      <p class="hint">Mark who can train new hires. A training pair set to <b>Auto</b> picks from this list,
+        taking turns so the same person isn't always riding along.</p>
+      <${NameChips} names=${trainers} roster=${nameOptions}
+        onChange=${(v) => set({ trainers: v })} placeholder="+ mark a trainer" />
+      ${lineup.length ? html`<p class="muted" style="margin-top:6px">${'Next up: '}${lineup.map((x, i) => html`${i ? ', ' : ''}<b>${x.name}</b>${x.lastWeek
+          ? html` <span class="muted">(last trained wk of ${x.lastWeek})</span>` : ' (not yet)'}`)}</p>` : ''}
+      ${trainers.length && !lineup.length ? html`<${Banner} kind="warn">None of the marked trainers are on this
+        week's roster, so Auto pairs can't be filled.<//>` : ''}
+
       <h3>Training pairs (this week)</h3>
       <p class="hint">A brand-new hire gets one training day: they drive with the trainer riding along.
-        After that they're scheduled like a regular driver.</p>
+        After that they're scheduled like a regular driver. Leave the trainer on <b>Auto</b> to let the
+        system pick the next trainer in the rotation who can work that day.</p>
       ${standing.trainingPairs.map((p, i) => html`
         <div class="row" style="margin:6px 0">
-          <select value=${p.trainer} onChange=${(e) => { const t = standing.trainingPairs.slice(); t[i] = { ...t[i], trainer: e.target.value }; set({ trainingPairs: t }); }}>
+          <select value=${p.trainer} onChange=${(e) => setPair(i, { trainer: e.target.value })}>
+            <option value=${AUTO_TRAINER}>Auto — rotate trainers</option>
             <option value="">trainer…</option>
-            ${nameOptions.map((r) => html`<option value=${r}>${r}</option>`)}
+            ${trainers.length ? html`<optgroup label="Trainers">
+              ${trainers.map((r) => html`<option value=${r}>${r}</option>`)}</optgroup>` : ''}
+            <optgroup label="Everyone else">
+              ${nameOptions.filter((r) => !trainers.includes(r)).map((r) => html`<option value=${r}>${r}</option>`)}
+            </optgroup>
           </select>
           <span class="muted">trains</span>
-          <select value=${p.trainee} onChange=${(e) => { const t = standing.trainingPairs.slice(); t[i] = { ...t[i], trainee: e.target.value }; set({ trainingPairs: t }); }}>
+          <select value=${p.trainee} onChange=${(e) => setPair(i, { trainee: e.target.value })}>
             <option value="">trainee…</option>
             ${roster.map((r) => html`<option value=${r}>${r}</option>`)}
           </select>
           <button class="ghost small" onClick=${() => set({ trainingPairs: standing.trainingPairs.filter((_, j) => j !== i) })}>remove</button>
         </div>`)}
-      <button class="small" onClick=${() => set({ trainingPairs: [...standing.trainingPairs, { trainer: '', trainee: '' }] })}>+ add a training pair</button>
+      <button class="small" onClick=${() => set({ trainingPairs: [...standing.trainingPairs, { trainer: AUTO_TRAINER, trainee: '' }] })}>+ add a training pair</button>
 
       ${!hasPrefs ? html`<${Banner} kind="info">No Driver-Preferences.csv is saved yet. You can upload one in
         <b>Settings</b> to add week-to-week "usual day" stickiness. It's optional.<//>` : ''}
@@ -120,6 +158,6 @@ export function Step7Standing() {
         <button onClick=${save}>Save standing settings</button>
       </div>
 
-      <${StepNav} onNext=${() => { save(); setWizard({ standing: { ...standing, hasPrefs } }); setWizard((w) => ({ step: 7 })); window.scrollTo(0, 0); }} />
+      <${StepNav} onNext=${() => { save(); setWizard({ standing: { ...standing, hasPrefs } }); goStep(4); }} />
     </div>`;
 }

@@ -1334,6 +1334,14 @@ def _portal_color(schedule_time):
     return pal.get(m.group(1))
 
 
+def _filled_counts(day_cells):
+    """(route slots, backup slots) actually filled on one day. A training
+    HELPER rides in the trainee's van, so it is not a route slot."""
+    r = sum(1 for v in day_cells.values() if 'Backup' not in v and 'TRAIN helper' not in v)
+    b = sum(1 for v in day_cells.values() if 'Backup' in v)
+    return r, b
+
+
 def write_xlsx(res):
     cfg, roster, cell = res.cfg, res.roster, res.cell
     waves, routes, backup = res.waves, res.routes, res.backup
@@ -1386,15 +1394,26 @@ def write_xlsx(res):
     heads = ['Associate Name'] + (['Tier'] if tcol else []) + ['Transporter ID']
     for j, h in enumerate(heads, 1):
         c = setc(4, j, h); c.font = white; c.fill = hf; c.alignment = ctr; c.border = bd
+    # Totals row = who is ACTUALLY on the sheet (Jose 2026-10-03). It used to
+    # print the requested routes+backups, which overstated a day the engine
+    # couldn't fill. A short day now reads e.g. '5+0=5 (need 6+1)' in red.
     setc(5, 1, 'Total Scheduled (routes + backup)').font = bold
     for cc in range(1, d0):
         ws.cell(5, cc).fill = tf
+    shortf = PatternFill('solid', fgColor='F8CBAD')
     for j, d in enumerate(COLS):
+        short = False
         if d in closed or d not in DAYS:
             txt = 'CLOSED'
         else:
-            txt = f'{routes[d]}+{backup[d]}={routes[d] + backup[d]}'
-        c = setc(5, d0 + j, txt); c.font = bold; c.fill = tf; c.alignment = ctr; c.border = bd
+            fr, fb = _filled_counts(cell[d])
+            txt = f'{fr}+{fb}={fr + fb}'
+            short = fr < routes[d] or fb < backup[d]
+            if short:
+                txt += f' (need {routes[d]}+{backup[d]})'
+        c = setc(5, d0 + j, txt); c.alignment = ctr; c.border = bd
+        c.fill = shortf if short else tf
+        c.font = Font(bold=True, color='C00000') if short else bold
     order = sorted(range(len(roster)), key=lambda i: roster[i]['name'].lower()); r = 6
     for i in order:
         dr = roster[i]
@@ -1458,20 +1477,36 @@ def write_xlsx(res):
         c = ws2.cell(3, 2 + j, f"{d} {DATEALL[d].strftime('%d/%b')}")
         c.font = white; c.fill = hf; c.alignment = ctr; c.border = bd
     alltimes = sorted({t for d in DAYS for t in waves[d]})
+    # Counts here are what was actually FILLED; a short cell reads '3 of 4'
+    # in red (Jose 2026-10-03).
+    redf = Font(bold=True, color='C00000')
+
+    def _put(r_, c_, got, want, font=None):
+        c = ws2.cell(r_, c_, got if got >= want else f'{got} of {want}')
+        c.alignment = ctr
+        if got < want:
+            c.font = redf; c.fill = PatternFill('solid', fgColor='F8CBAD')
+        elif font:
+            c.font = font
     rr = 4
     for t in alltimes:
         ws2.cell(rr, 1, asciize(t)).font = bold
         for j, d in enumerate(DAYS):
-            ws2.cell(rr, 2 + j, waves[d].get(t, '')).alignment = ctr
+            if t not in waves[d]:
+                continue
+            got = sum(1 for v in cell[d].values() if v.startswith(t)
+                      and 'Backup' not in v and 'TRAIN helper' not in v)
+            _put(rr, 2 + j, got, waves[d][t])
         rr += 1
-    for lab, val in [('Routes', routes), ('Backup', backup)]:
+    fills = {d: _filled_counts(cell[d]) for d in DAYS}
+    for k, (lab, val) in enumerate([('Routes', routes), ('Backup', backup)]):
         ws2.cell(rr, 1, lab).font = bold
         for j, d in enumerate(DAYS):
-            ws2.cell(rr, 2 + j, val[d]).alignment = ctr
+            _put(rr, 2 + j, fills[d][k], val[d])
         rr += 1
     ws2.cell(rr, 1, 'Total').font = bold
     for j, d in enumerate(DAYS):
-        ws2.cell(rr, 2 + j, routes[d] + backup[d]).font = bold
+        _put(rr, 2 + j, sum(fills[d]), routes[d] + backup[d], bold)
     start = rr + 2
     ws2.cell(start - 1, 1, 'Roster by wave (Backups shaded)').font = Font(bold=True, italic=True)
     for j, d in enumerate(DAYS):

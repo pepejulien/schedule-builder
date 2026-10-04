@@ -17,29 +17,28 @@ export function readiness(wizard) {
   } catch { /* incomplete state */ }
 
   const step = (title, status, detail, idx) => ({ title, status, detail, idx });
+  const weekOk = !!(w.week?.num && isSunday(w.week?.startISO));
+  const priorOk = !!(w.priorWeek?.bytes || w.priorWeek?.source === 'none');
+  const filesStatus = weekOk && w.availability && priorOk ? (w.priorWeek?.source === 'none' ? 'warn' : 'done') : 'todo';
+  const filesDetail = !w.availability ? 'availability not uploaded'
+    : !priorOk ? "last week's schedule not uploaded"
+    : !weekOk ? 'week number / date not set'
+    : `${w.week.label || 'week set'} · ${w.availability.counts.drivers} drivers`;
   const steps = [
-    step('Week', (w.week?.num && isSunday(w.week?.startISO)) ? 'done' : 'todo',
-      w.week?.label || 'not set', 0),
-    step('Availability', w.availability ? 'done' : 'todo',
-      w.availability ? `${w.availability.counts.drivers} drivers` : 'no file uploaded', 1),
-    step('Tiers & names', !w.tierMeta?.fetched ? 'todo' : (conflicts ? 'warn' : 'done'),
-      !w.tierMeta?.fetched ? 'not fetched' : (conflicts ? `${conflicts} conflict(s) to resolve` : `as of ${w.tierMeta.asof || 'manual'}`), 2),
-    step('Prior week', (w.priorWeek?.bytes || w.priorWeek?.source === 'none') ? (w.priorWeek?.source === 'none' ? 'warn' : 'done') : 'todo',
-      w.priorWeek?.source === 'upload' ? (w.priorWeek.fileName || 'uploaded') : w.priorWeek?.source === 'none' ? 'none (first week)' : 'not set', 3),
-    step('Route demand', operating.length ? 'done' : 'todo',
-      operating.length ? `${operating.length} operating day(s)` : 'no routes entered', 4),
-    step('Backups', operating.length ? 'done' : 'todo',
-      w.backups?.mode === 'perday' ? 'per-day counts' : `${Math.round((w.backups?.pct ?? 0.15) * 100)}%`, 5),
-    step('Standing settings', w.standing ? 'done' : 'todo', w.standing ? 'loaded' : 'not opened', 6),
-    step('Review', nameProblems.length ? 'warn' : 'done',
-      nameProblems.length ? `${nameProblems.length} name issue(s)` : 'ready', 7),
+    step('Week & files', filesStatus, filesDetail, 0),
+    step('Drivers', !w.tierMeta?.fetched ? 'todo' : (conflicts ? 'warn' : 'done'),
+      !w.tierMeta?.fetched ? 'tiers not loaded' : (conflicts ? `${conflicts} conflict(s) to resolve` : `board as of ${w.tierMeta.asof || 'manual entry'}`), 1),
+    step('Routes & backups', operating.length ? 'done' : 'todo',
+      operating.length ? `${operating.length} day(s) · backups ${w.backups?.mode === 'perday' ? 'per day' : `${Math.round((w.backups?.pct ?? 0.15) * 100)}%`}` : 'no routes entered', 2),
+    step('Trainers & settings', w.standing ? (nameProblems.length ? 'warn' : 'done') : 'todo',
+      !w.standing ? 'not opened yet' : nameProblems.length ? `${nameProblems.length} name issue(s)` : 'loaded', 3),
     step('Build', w.build?.status === 'done' ? 'done' : 'todo',
-      w.build?.status === 'done' ? (w.build.report?.clean ? 'clean' : 'has warnings') : 'not built', 8),
+      w.build?.status === 'done' ? (w.build.report?.clean ? 'built — clean' : 'built — has warnings') : 'not built yet', 4),
   ];
 
   const warnings = [];
-  if (conflicts) warnings.push(`${conflicts} tier conflict(s) still need a decision (Step 3).`);
-  if (nameProblems.length) warnings.push(`${nameProblems.length} config name(s) don't match the roster (Step 3 / 7).`);
+  if (conflicts) warnings.push(`${conflicts} tier conflict(s) still need a decision (Drivers).`);
+  if (nameProblems.length) warnings.push(`${nameProblems.length} config name(s) don't match the roster (Drivers / Trainers & settings).`);
   if (w.priorWeek?.source === 'none') warnings.push('No prior week — the consecutive-day rule won\'t span the boundary.');
   if (capacity && !capacity.ok) warnings.push(capacity.message);
 
@@ -55,5 +54,5 @@ export function readiness(wizard) {
   const firstTodo = steps.find((s) => s.status !== 'done');
   const doneCount = steps.filter((s) => s.status === 'done').length;
 
-  return { steps, warnings, numbers, firstTodoIdx: firstTodo ? firstTodo.idx : 8, doneCount };
+  return { steps, warnings, numbers, firstTodoIdx: firstTodo ? firstTodo.idx : 4, doneCount };
 }

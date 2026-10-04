@@ -4,7 +4,8 @@
 // The workbook's shift cells carry SCHEDULE times ('10:25 AM', sometimes with
 // a TRAIN note); demand is entered as PORTAL times (20 min later), so each
 // counted time is shifted before it's returned. Backup and TRAIN-helper cells
-// are not route slots and are skipped, as are Unavailable/Dispatch/Meeting.
+// are not route slots and are skipped, as are Unavailable/Dispatch/Meeting
+// (a meeting cell like '9:00 AM Safety Meeting' starts with a time too).
 import * as XLSX from '../../vendor/xlsx.mjs';
 import { DAYS, scheduleToPortal, parsePortalTime } from './waves.js';
 
@@ -44,7 +45,7 @@ export function demandFromPrevSchedule(arrayBuffer) {
     for (const [c, day] of Object.entries(dayCols)) {
       const v = String(row[c] || '').trim();
       const m = v.match(/^(\d{1,2}:\d{2}\s*[AP]M)/i);
-      if (!m || /backup/i.test(v) || /TRAIN helper/i.test(v)) continue;
+      if (!m || /backup|TRAIN helper|meeting|dispatch|unavail/i.test(v)) continue;
       (counts[day] = counts[day] || {})[m[1].toUpperCase()] = (counts[day]?.[m[1].toUpperCase()] || 0) + 1;
     }
   }

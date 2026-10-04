@@ -1,12 +1,13 @@
 // Authenticated key-value proxy over Netlify Blobs. Stores only app SETTINGS
-// (standing config, name aliases, the optional preferences CSV) — never the
+// (standing config, name aliases, the optional preferences CSV, the trainer
+// rotation log of who trained whom each week) — never the
 // built schedules themselves. The schedules live in the user's own files.
 //   GET  /api/store?key=<key>       -> content (json / csv)
 //   PUT  /api/store?key=<key>       -> 204 (body = json / text)
 import { getStore } from '@netlify/blobs';
 import { requireAuth } from '../lib/session.mjs';
 
-const KEY_RE = /^standing\/(config\.json|prefs\.csv|aliases\.json)$/;
+const KEY_RE = /^standing\/(config\.json|prefs\.csv|aliases\.json|training-history\.json)$/;
 
 function contentTypeFor(key) {
   if (key.endsWith('.json')) return 'application/json';

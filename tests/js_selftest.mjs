@@ -5,7 +5,7 @@
 import { computeTiers } from '../public/app/lib/board-metrics.js';
 import { normalizePortal, portalToSchedule, scheduleToPortal } from '../public/app/lib/waves.js';
 import { norm, resolveFuzzy, matchName } from '../public/app/lib/names.js';
-import { deriveGroup, hasTierOverlap, assembleConfig } from '../public/app/lib/config-assemble.js';
+import { deriveGroup, hasTierOverlap, assembleConfig, trainerRotation, AUTO_TRAINER } from '../public/app/lib/config-assemble.js';
 import { weekLabel, isSunday } from '../public/app/lib/weeks.js';
 import { driverCsv } from '../public/app/lib/driver-csv.js';
 import { readiness } from '../public/app/readiness.js';
@@ -120,6 +120,27 @@ eq('adv backup_eligible_extra canonicalized', advCfg.backup_eligible_extra, ['Ca
 eq('no max_weekend_days by default', assembleConfig(state).config.max_weekend_days, undefined);
 eq('no merge by default', assembleConfig(state).config.merge_standing_unavailable, undefined);
 
+// trainer rotation: never-used first, then longest ago, then fewest, then marked order
+const hist = { '2026-07-19': [['Aaron Bell', 'X', 'Sun']], '2026-07-26': [['Daniel Lynch', 'Y', 'Mon']],
+  '2026-08-02': [['Casey Church', 'Z', 'Tue']] };
+eq('rotation order', trainerRotation(['Daniel Lynch', 'Aaron Bell', 'Joshua Workman'], hist, '2026-09-01').map((x) => x.name),
+  ['Joshua Workman', 'Aaron Bell', 'Daniel Lynch']);
+eq('rotation ignores current week', trainerRotation(['Casey Church', 'Aaron Bell'], hist, '2026-08-02').map((x) => x.name),
+  ['Casey Church', 'Aaron Bell']);
+// auto pairs -> auto_training with a rotation-ordered pool (no trainee, no benched)
+const autoState = { ...state, trainerHistory: hist,
+  standing: { ...state.standing, bench: ['Karl Berkley'],
+    trainers: ['Daniel Lynch', 'Aaron Bell', 'Karl Berkley', 'Joshua Workman'],
+    trainingPairs: [{ trainer: AUTO_TRAINER, trainee: 'Joshua Workman' }] } };
+const autoCfg = assembleConfig(autoState).config;
+eq('auto pair not in training_pairs', autoCfg.training_pairs, []);
+eq('auto_training pool', autoCfg.auto_training, [{ trainee: 'Joshua Workman', pool: ['Aaron Bell', 'Daniel Lynch'] }]);
+eq('auto trainee gets exact 3', autoCfg.exact_days['Joshua Workman'], 3);
+// a day target HR picked by hand beats the trainee default
+const handState = { ...autoState, tierByDriver: { ...state.tierByDriver,
+  'Joshua Workman': { ...state.tierByDriver['Joshua Workman'], groupValue: 'most', groupTouched: true } } };
+ok('hand-picked target beats trainee pin', assembleConfig(handState).config.most_days.includes('Joshua Workman'));
+
 // driver CSV
 const report = { drivers: [
   { name: 'Beta', cells: { Sun: '10:45 AM', Mon: 'Unavailable', Tue: '', Wed: '', Thu: '', Fri: '', Sat: '10:45 AM Backup' }, hours: 22, cls: 'free' },
@@ -147,9 +168,9 @@ const wiz = {
   build: { status: 'idle' },
 };
 const rd = readiness(wiz);
-eq('readiness has 9 steps', rd.steps.length, 9);
-eq('readiness week done', rd.steps[0].status, 'done');
-eq('readiness prior-week warn (none)', rd.steps[3].status, 'warn');
+eq('readiness has 5 steps', rd.steps.length, 5);
+eq('readiness week & files warn (no prior week)', rd.steps[0].status, 'warn');
+eq('readiness drivers done', rd.steps[1].status, 'done');
 ok('readiness numbers.drivers', rd.numbers.drivers === 5, JSON.stringify(rd.numbers));
 ok('readiness firstTodoIdx is a number', typeof rd.firstTodoIdx === 'number');
 

@@ -1,7 +1,8 @@
 import { html } from '../preact-setup.js';
 import { useState } from 'preact/hooks';
 import { useStore } from '../store.js';
-import { StepNav } from '../app.js';
+import { StepNav, Embedded } from '../app.js';
+import { useContext } from 'preact/hooks';
 import { Banner } from '../ui.js';
 import { assembleFromWizard } from '../build-inputs.js';
 import { DAYS } from '../lib/waves.js';
@@ -10,7 +11,8 @@ import { AdvancedPanel } from './advanced-panel.js';
 export function Step8Review() {
   const wizard = useStore((s) => s.wizard);
   const [showJson, setShowJson] = useState(false);
-  const { config, nameProblems, capacity } = assembleFromWizard(wizard);
+  const embedded = useContext(Embedded);
+  const { config, nameProblems, capacity, warnings } = assembleFromWizard(wizard);
   const roster = wizard.availability?.rosterNames || [];
 
   const opDays = DAYS.filter((d) => config.waves[d]);
@@ -19,14 +21,14 @@ export function Step8Review() {
 
   return html`
     <div class="card">
-      <h2>Step 8 — Review before building</h2>
+      <h2>Before you build</h2>
       <p class="hint">A quick sanity check of what the schedule engine will run.</p>
 
       ${nameProblems.length ? html`
         <${Banner} kind="err">
           <b>Some names don't match the roster</b> and would stop the build:
           <ul>${nameProblems.map((p) => html`<li>${p.name} — ${p.reason}</li>`)}</ul>
-          Fix these in Step 3 (tiers & names) or Step 7 (standing settings).
+          Fix these in <b>Drivers</b> or <b>Trainers & settings</b>.
         <//>` : ''}
 
       <h3>Week</h3>
@@ -56,8 +58,11 @@ export function Step8Review() {
         <span class="chip lav">Fair</span> the rest
       </p>
 
-      ${config.training_pairs.length ? html`<h3>Training pairs</h3>
-        <p>${config.training_pairs.map((p) => `${p.trainer} → ${p.trainee}`).join('; ')}</p>` : ''}
+      ${config.training_pairs.length || config.auto_training.length ? html`<h3>Training pairs</h3>
+        <p>${[...config.training_pairs.map((p) => `${p.trainer} → ${p.trainee}`),
+          ...config.auto_training.map((p) => `Auto (next up: ${p.pool.slice(0, 3).join(', ') || 'no trainers marked'}) → ${p.trainee}`)]
+          .join('; ')}</p>` : ''}
+      ${warnings.map((w) => html`<${Banner} kind="warn">${w}<//>`)}
       ${Object.keys(config.extra_worked_days).length ? html`<h3>Dispatch duty</h3>
         <p>${Object.entries(config.extra_worked_days).map(([n, d]) => `${n}: ${d.join('/')}`).join('; ')}</p>` : ''}
       ${config.exclude.length ? html`<p class="muted">Excluded from the sheet: ${config.exclude.join(', ')}</p>` : ''}
@@ -73,7 +78,7 @@ export function Step8Review() {
       </div>
     </div>
     <${AdvancedPanel} roster=${roster} />
-    <div class="card">
+    ${!embedded ? html`<div class="card">
       <${StepNav} canNext=${canBuild} nextLabel="Build schedule" />
-    </div>`;
+    </div>` : ''}`;
 }

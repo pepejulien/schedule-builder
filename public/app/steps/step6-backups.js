@@ -31,7 +31,7 @@ export function Step6Backups() {
 
   return html`
     <div class="card">
-      <h2>Step 6 — Backups</h2>
+      <h2>Backups</h2>
       <p class="hint">Backups are extra drivers on standby, on top of routes. Jose's band is 10–20% of routes;
         the standing default is 15%.</p>
 

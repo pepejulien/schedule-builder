@@ -78,23 +78,28 @@ The home screen is a **readiness dashboard** — it shows which steps are ready,
 warnings to resolve, and the key numbers, and lets you jump to any step or
 **Continue** where you left off (progress auto-saves in the browser).
 
-1. **Week** — week number + the Sunday it starts.
-2. **Availability** — upload the `Week-NN` availability workbook drivers submitted.
-3. **Tiers & names** — click "Fetch tiers from board"; review the tier grid.
-   Any driver matching two rules (e.g. Top performer *and* under 5 routes) is
-   flagged and must be resolved before continuing.
-4. **Prior week** — upload last week's schedule from your own files.
-5. **Route demand** — type the portal wave times + counts (the app shows the
-   −20 min schedule time), or upload a portal screenshot to pre-fill them.
-6. **Backups** — 15% by default, or exact per-day counts.
-7. **Standing settings** — exclusions, dispatch duty, trainers, training pairs
-   (carried over week to week).
-8. **Review** — a sanity check of everything, plus an **Advanced settings** panel
-   for one-off, this-week-only overrides (day/hours caps, weekend cap, merge
-   standing days-off, per-week backup exceptions — they reset next week).
-9. **Build** — runs the solver in-browser. Download the **workbook** and the
-   optional **driver-notices CSV**, and use **Adjust &amp; rebuild** to tweak a
-   driver's days / backups / advanced settings and re-run without starting over.
+Five steps (the look matches the JAJB Hub / Scorecard Board):
+
+1. **Week & files** — drop **both** files at once, in any order: this week's
+   availability export and last week's `Week-NN-Schedule.xlsx`. The app tells
+   them apart (a built schedule has the *By Day* sheet and totals row), fills in
+   the week number and start Sunday, and pre-fills route counts from last week.
+   A **Swap** link fixes a wrong guess.
+2. **Drivers** — click "Fetch tiers from board"; review the tier grid. Changing a
+   tier updates the day target unless you picked one by hand.
+3. **Routes & backups** — portal wave counts per day (pre-filled) and the backup
+   percentage, on one screen.
+4. **Trainers & settings** — mark trainers, add training pairs (leave the
+   trainer on **Auto** to rotate), exclusions, dispatch duty. Saved week to week;
+   loaded automatically even if you skip this step.
+5. **Build** — a quick check of everything, then **Build schedule**. Download the
+   workbook and the driver-notices CSV; edit shifts in place (compliance rules are
+   locked, a driver's day off needs a typed confirmation, policy breaks are
+   flagged); **Adjust & rebuild** for bigger changes.
+
+The workbook's **Total Scheduled** row and the *By Day* sheet count who was
+actually placed; a day the engine couldn't fully staff shows in red, e.g.
+`10+0=10 (need 12+2)`.
 
 ---
 
