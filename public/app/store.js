@@ -24,7 +24,7 @@ function freshWizard() {
 
 let state = {
   auth: 'unknown',                 // 'unknown' | 'in' | 'out'
-  route: 'home',                   // 'home' | 'wizard' | 'settings'
+  route: 'home',                   // 'home' | 'wizard' | 'settings' | 'live'
   wizard: freshWizard(),
   toast: null,
 };

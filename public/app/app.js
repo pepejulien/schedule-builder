@@ -2,7 +2,7 @@ import { html } from './preact-setup.js';
 import { createContext } from 'preact';
 import { useEffect, useState, useContext } from 'preact/hooks';
 import { getState, setState, setWizard, useStore, startFresh, continueWizard, hydrateWizard } from './store.js';
-import { checkAuth, login, logout, whoAmI } from './api.js';
+import { checkAuth, login, logout, whoAmI, canLive } from './api.js';
 import { loadDraft } from './draft.js';
 import { readiness } from './readiness.js';
 import { Banner, Spinner, Toast, Icon } from './ui.js';
@@ -14,6 +14,7 @@ import { Step6Backups } from './steps/step6-backups.js';
 import { Step7Standing } from './steps/step7-standing.js';
 import { Step9Build } from './steps/step9-build.js';
 import { Settings } from './settings.js';
+import { LiveBoard } from './live/live-board.js';
 
 // A step rendered INSIDE another step hides its own Back/Next bar.
 export const Embedded = createContext(false);
@@ -96,16 +97,24 @@ function Home() {
   const r = readiness(wizard);
   const started = !!(wizard.availability || wizard.week?.num || wizard.build?.status === 'done');
 
+  const promo = canLive() ? html`<div class="card buildcard lv-promo">
+      <div><h2>Live schedule</h2>
+        <p class="hint">The published week, day by day: call-outs, extra shifts, who can still work, and every change logged.</p></div>
+      <button class="primary" onClick=${() => setState({ route: 'live' })}>Open the Live board ${Icon('arrow', 16)}</button>
+    </div>` : '';
+
   if (!started) {
-    return html`<div class="card hero">
+    return html`${promo}<div class="card hero">
       <div class="hero-ico">${Icon('calendar', 24)}</div>
       <h2>Build next week's schedule</h2>
-      <p class="hint">Five short steps. Have two files ready: this week's <b>availability export</b> and <b>last week's schedule</b> (the Week-NN-Schedule.xlsx this app made). Progress saves automatically.</p>
+      <p class="hint">Five short steps. Have this week's <b>availability export</b> ready${canLive()
+        ? html` — last week comes from the Live board` : html`, plus <b>last week's schedule</b> (the Week-NN-Schedule.xlsx this app made)`}. Progress saves automatically.</p>
       <button class="accent" onClick=${startFresh}>Start a new schedule ${Icon('arrow', 16)}</button>
     </div>`;
   }
 
   return html`
+    ${promo}
     <div class="stats">
       <div class="stat"><div class="big">${r.numbers.drivers}</div><div class="muted">drivers</div></div>
       <div class="stat"><div class="big">${r.numbers.operatingDays}</div><div class="muted">operating days</div></div>
@@ -142,7 +151,8 @@ function Sidebar() {
       <div><div class="sbname">Schedule Builder</div><div class="sbsub">JAJB Logistics · WWV9</div></div></div>
     <nav>
       ${nav(route === 'home', 'home', 'Overview', () => setState({ route: 'home' }))}
-      <div class="sbgroup">This week</div>
+      ${nav(route === 'live', 'live', 'Live schedule', () => setState({ route: 'live' }))}
+      <div class="sbgroup">Build a week</div>
       ${STEPS.map((s, i) => {
         const st = r.steps[i]?.status;
         return nav(route === 'wizard' && step === i, s.icon, `${i + 1}. ${s.title}`,
@@ -165,10 +175,11 @@ function TopBar() {
   const week = useStore((s) => s.wizard.week);
   let title = 'Overview', sub = 'Where this week\'s schedule stands';
   if (route === 'settings') { title = 'Settings'; sub = 'Saved for every week'; }
+  else if (route === 'live') { title = 'Live schedule'; sub = 'The published week, worked day by day — every change is logged'; }
   else if (route === 'wizard') { title = STEPS[step].title; sub = `Step ${step + 1} of ${STEPS.length} · ${STEPS[step].sub}`; }
   return html`<header class="topbar"><div class="tbrow">
     <div>
-      <div class="tbtitle"><h1>${title}</h1>${week?.label ? html`<span class="wkpill">${week.label}</span>` : ''}</div>
+      <div class="tbtitle"><h1>${title}</h1>${week?.label && route !== 'live' ? html`<span class="wkpill">${week.label}</span>` : ''}</div>
       <div class="tbsub">${sub}</div>
     </div>
     ${route === 'home' && (week?.num || step) ? html`<button class="rbtn" onClick=${() => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); }}>
@@ -182,6 +193,7 @@ function MobileSteps() {
   const step = useStore((s) => s.wizard.step);
   return html`<div class="msteps">
     <button class=${'mstep' + (route === 'home' ? ' on' : '')} onClick=${() => setState({ route: 'home' })}>Overview</button>
+    <button class=${'mstep' + (route === 'live' ? ' on' : '')} onClick=${() => setState({ route: 'live' })}>Live schedule</button>
     ${STEPS.map((s, i) => html`
     <button class=${'mstep' + (route === 'wizard' && i === step ? ' on' : '')}
       onClick=${() => { continueWizard(); goStep(i); }}>${i + 1}. ${s.title}</button>`)}
@@ -222,6 +234,7 @@ export function App() {
 
   let body;
   if (route === 'settings') body = html`<${Settings}/>`;
+  else if (route === 'live') body = html`<${LiveBoard}/>`;
   else if (route === 'wizard') { const Comp = STEPS[Math.min(step, STEPS.length - 1)].comp; body = html`<${Comp}/>`; }
   else body = html`<${Home}/>`;
 

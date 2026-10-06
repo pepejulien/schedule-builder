@@ -351,3 +351,48 @@ li.edit-override { color: #8a231c; font-weight: 600; }
 .trainbox h3 { color: var(--accent); }
 .trainbox table th { background: transparent; }
 .sbwho { font-size: 11.5px; color: var(--muted2); padding: 0 11px 6px; }
+
+/* ---- Live schedule (2026-10-06) ---- */
+.lv-promo { border-left-color: var(--navy); }
+.lv-head { padding: 14px 20px; }
+.lv-head select { min-width: 260px; max-width: 100%; }
+.lv-pub { font-size: 12px; }
+.lv-wrap { margin-top: 12px; max-height: 70vh; overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+table.lv-grid { font-size: 12.5px; }
+.lv-grid th { text-align: center; white-space: nowrap; z-index: 2; }
+.lv-grid th.lv-namecol, .lv-grid td.lv-namecol { text-align: left; position: sticky; left: 0; background: #fff; z-index: 1; }
+.lv-grid th.lv-namecol { z-index: 3; background: #fbfbfd; }
+.lv-grid td { text-align: center; padding: 6px 8px; white-space: nowrap; }
+.lv-grid th.today { background: rgba(223,115,50,.14); color: #a24d17; }
+.lv-grid th.closed, .lv-grid td.closed { background: #f4f4f6; color: var(--faint); }
+.lv-date { font-weight: 500; text-transform: none; letter-spacing: 0; }
+.lv-fill { font-weight: 500; text-transform: none; letter-spacing: 0; font-size: 10.5px; color: var(--muted2); }
+.lv-name { font-weight: 600; color: var(--ink); text-align: left; padding: 0; }
+.lv-cell { cursor: pointer; font-variant-numeric: tabular-nums; border-left: 1px solid var(--line); }
+.lv-cell:hover { outline: 2px solid var(--navy); outline-offset: -2px; }
+.lv-cell.today { border-left: 2px solid rgba(223,115,50,.55); border-right: 2px solid rgba(223,115,50,.55); }
+.lv-grid tr.tier-sep td { text-align: left; }
+.lv-cell.closed { cursor: default; }
+.lv-cell.closed:hover { outline: none; }
+.k-road { background: #eef4fb; color: #234b73; font-weight: 600; }
+.k-bk { background: #fdf1e7; color: #8a5a1a; font-weight: 600; }
+.k-train { background: rgba(47,165,136,.14); color: #1d6f5b; font-weight: 600; }
+.k-mark { background: #fde4e1; color: #8a231c; font-weight: 700; }
+.k-off { color: var(--faint); }
+.k-disp, .k-meet { background: rgba(111,90,168,.12); color: #6f5aa8; }
+.lv-bad { color: var(--err) !important; font-weight: 700; }
+.lv-warn { color: #c0603a; font-weight: 700; }
+.lv-warnc { color: var(--warn) !important; }
+.lv-open { color: var(--err); font-weight: 600; }
+.lv-legend { margin-top: 10px; }
+.lv-sw { display: inline-block; padding: 0 6px; border-radius: 6px; font-size: 11.5px; }
+.lv-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 10px; }
+.lv-radio { margin: 6px 0; align-items: flex-start; }
+.lv-log { list-style: none; padding: 0; margin: 8px 0 0; }
+.lv-log li { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.lv-log li.k-publish { color: var(--navy); }
+.lv-log li.k-mark { color: #8a231c; }
+.lv-when { color: var(--muted2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pubbox { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap;
+  border: 1px solid rgba(36,55,98,.18); background: rgba(36,55,98,.04); border-radius: 14px; padding: 12px 14px; margin: 4px 0 12px; }
+.pubbox.done { border-color: rgba(47,143,86,.35); background: rgba(67,176,106,.06); }

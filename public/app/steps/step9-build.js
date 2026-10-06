@@ -7,14 +7,15 @@ import { ensureStanding } from './step7-standing.js';
 import { Banner, Spinner, download } from '../ui.js';
 import { assembleFromWizard } from '../build-inputs.js';
 import { build, editRequest } from '../solver-client.js';
-import { storeGet, loadTrainingHistory, saveTrainingWeek } from '../api.js';
+import { storeGet, loadTrainingHistory, saveTrainingWeek, canLive, liveWeek } from '../api.js';
+import { saveWeek } from '../live/live-model.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { GROUP_OPTIONS } from '../lib/config-assemble.js';
 import { AdvancedPanel } from './advanced-panel.js';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-function translateInfeasible(line) {
+export function translateInfeasible(line) {
   let m = line.match(/P1 INFEASIBLE (\w+): filled (\d+)\/(\d+)/);
   if (m) return `${m[1]}: only ${m[2]} of ${m[3]} routes could be filled — not enough available drivers.`;
   m = line.match(/P2 SHORT (\w+): (\d+)\/(\d+)/);
@@ -23,7 +24,7 @@ function translateInfeasible(line) {
 }
 
 // Verifier lines for rules a manual override knowingly broke -> plain words.
-function translateOverride(line) {
+export function translateOverride(line) {
   let m = line.match(/^UNAVAIL violated: (.+) (\w{3})$/);
   if (m) return `${m[1]} works ${m[2]} — they marked that day Unavailable.`;
   m = line.match(/^TARGET (.+): want (\d+) got (\d+)/);
@@ -41,7 +42,7 @@ function translateOverride(line) {
 // A deliberate speed bump before scheduling someone on a day they submitted
 // off: tick the box AND type their first name. Compliance rules never get
 // here — those can't be overridden at all.
-function ConfirmOverride({ req, onCancel, onConfirm }) {
+export function ConfirmOverride({ req, onCancel, onConfirm }) {
   const [ack, setAck] = useState(false);
   const [typed, setTyped] = useState('');
   const first = req.name.trim().split(/\s+/)[0];
@@ -140,18 +141,18 @@ async function bytesToText(v) {
 
 // Group the per-driver rows by day-target tier, highest tier at the top.
 // Chip colors match the tiers. (Module-level so the slot editor shares it.)
-const TIER_META = {
+export const TIER_META = {
   most: { label: 'Top / Solid', chip: 'green', short: 'top/solid' },
   free: { label: 'Fair', chip: 'lav', short: 'fair' },
   reduced: { label: 'Underperforming / Termination', chip: 'gray', short: 'reduced' },
   exact: { label: 'Exact / pinned', chip: 'blue', short: 'exact' },
 };
-const TIER_ORDER = ['most', 'free', 'reduced', 'exact'];
+export const TIER_ORDER = ['most', 'free', 'reduced', 'exact'];
 
 // Compact-list view for moving/filling one (day, role) slot. Purely
 // presentational — the candidate fetch and the apply live in Step9Build so
 // this modal and the in-table move mode share the same data.
-function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView }) {
+export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, onRemove }) {
   const { day, role, fromName } = editor;
   const what = role === 'road' ? 'route' : 'backup';
   const st = cands || { loading: true, error: null, list: null };
@@ -208,9 +209,9 @@ function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView }) {
       })}
 
       <div class="row" style="margin-top:12px">
-        <button disabled=${busy} onClick=${onTableView}>Pick from the table instead</button>
-        ${fromName && role === 'backup' ? html`<button disabled=${busy}
-          onClick=${() => onPick(null)}>Remove — leave this backup slot unfilled</button>` : ''}
+        ${onTableView ? html`<button disabled=${busy} onClick=${onTableView}>Pick from the table instead</button>` : ''}
+        ${fromName && (role === 'backup' || onRemove) ? html`<button disabled=${busy}
+          onClick=${() => (onRemove ? onRemove() : onPick(null))}>Remove — leave this ${what} slot unfilled</button>` : ''}
         <button disabled=${busy} onClick=${onClose}>Cancel</button>
         ${busy ? html`<span><${Spinner}/> Applying…</span>` : ''}
       </div>
@@ -222,7 +223,7 @@ function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView }) {
 // what they're doing now and whether a route / backup can be added. A route
 // on a full day opens the swap step: pick who steps down to backup (freeing
 // their slot), or add it as a genuine extra route.
-function AddEditor({ name, onClose, onApplied }) {
+export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
   const [opts, setOpts] = useState({ loading: true, error: null, data: null });
   const [swap, setSwap] = useState(null);   // {day, want, confirmed, loading, error, list} | null
   const [busy, setBusy] = useState(false);
@@ -232,7 +233,7 @@ function AddEditor({ name, onClose, onApplied }) {
     let alive = true;
     setOpts({ loading: true, error: null, data: null });
     setSwap(null);
-    editRequest('add_options', { name }).then((m) => {
+    req('add_options', { name }).then((m) => {
       if (!alive) return;
       setOpts(m.ok ? { loading: false, error: null, data: m.data }
         : { loading: false, error: m.error, data: null });
@@ -242,7 +243,7 @@ function AddEditor({ name, onClose, onApplied }) {
 
   async function openSwap(day, want, confirmed = false) {
     setSwap({ day, want, confirmed, loading: true, error: null, list: null });
-    const m = await editRequest('swap_candidates', { day, for_name: name });
+    const m = await req('swap_candidates', { day, for_name: name });
     setSwap((s) => (s && s.day === day)
       ? (m.ok ? { day, want, confirmed, loading: false, error: null, list: m.data.candidates }
         : { day, want, confirmed, loading: false, error: m.error, list: null })
@@ -262,7 +263,7 @@ function AddEditor({ name, onClose, onApplied }) {
 
   async function apply(payload) {
     setBusy(true);
-    const m = await editRequest('apply_add', { name, ...payload });
+    const m = await req('apply_add', { name, ...payload });
     setBusy(false);
     if (!m.ok) { setOpts((o) => ({ ...o, error: m.error })); return; }
     onApplied(m);
@@ -362,14 +363,14 @@ function AddEditor({ name, onClose, onApplied }) {
 // Modal for moving one driver's shift on one day into a DIFFERENT WAVE.
 // Route counts per wave are exact, so a route change is a time swap with a
 // driver already in the target wave; backups just relabel.
-function WaveEditor({ day, name, onClose, onApplied }) {
+export function WaveEditor({ day, name, onClose, onApplied, req = editRequest }) {
   const [st, setSt] = useState({ loading: true, error: null, data: null });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
     setSt({ loading: true, error: null, data: null });
-    editRequest('wave_options', { day, name }).then((m) => {
+    req('wave_options', { day, name }).then((m) => {
       if (!alive) return;
       setSt(m.ok ? { loading: false, error: null, data: m.data }
         : { loading: false, error: m.error, data: null });
@@ -379,7 +380,7 @@ function WaveEditor({ day, name, onClose, onApplied }) {
 
   async function apply(wave, swapName) {
     setBusy(true);
-    const m = await editRequest('apply_wave', { day, name, wave, swap_name: swapName });
+    const m = await req('apply_wave', { day, name, wave, swap_name: swapName });
     setBusy(false);
     if (!m.ok) { setSt((s) => ({ ...s, error: m.error })); return; }
     onApplied(m);
@@ -454,6 +455,59 @@ function MoveBar({ editor, cands, busy, onPick, onClose, onListView, onWave }) {
       ${cands.error.kind === 'no_state' ? html`<div class="hint">Manual edits work on the build from this
         session. Hit “Rebuild with changes” once, then edit.</div>` : ''}
     <//></div>` : ''}
+  </div>`;
+}
+
+// Publish the finished build to the Live board (Firebase): the week the team
+// works on day to day. Publishing a week that's already there replaces it,
+// midweek changes included — so that asks first.
+function PublishCard({ wizard, r }) {
+  const [st, setSt] = useState({ busy: false, err: '' });
+  const pub = wizard.build.published;               // {rev, edits, label} once published
+  const changed = pub && (pub.edits !== (r.edits || []).length || pub.label !== wizard.week.label);
+  if (!canLive()) {
+    return html`<p class="hint">Save the workbook wherever you keep your schedules — you'll upload it as "last week" next time.
+      (The Live board, where the week is worked day by day, is on jajb-ops.web.app/schedule/.)</p>`;
+  }
+  async function publish() {
+    setSt({ busy: true, err: '' });
+    try {
+      const weekISO = wizard.week.startISO;
+      const cur = await liveWeek(weekISO);
+      if (cur && !window.confirm(`${cur.meta.label} is already on the Live board (last change by ${cur.meta.by || 'someone'}).\n\n`
+        + 'Publishing replaces it — including any changes made there during the week (they stay in the change log).\n\nReplace it?')) {
+        setSt({ busy: false, err: '' });
+        return;
+      }
+      const n = (r.edits || []).length;
+      const text = cur ? `Republished ${wizard.week.label} from a new build — replaces the earlier version`
+        : `Published ${wizard.week.label}` + (n ? ` (with ${n} manual edit${n === 1 ? '' : 's'} from the builder)` : '');
+      const { rev } = await saveWeek({ slot: 'build', weekISO, meta: { label: wizard.week.label, num: wizard.week.num },
+        report: r, expectRev: cur ? cur.meta.rev : 0, log: [{ text, kind: 'publish' }], publish: true });
+      setWizard((w) => ({ build: { ...w.build, published: { rev, edits: n, label: wizard.week.label } } }));
+      setSt({ busy: false, err: '' });
+      toast('Published to the Live board');
+    } catch (e) {
+      const msg = e.code === 'conflict' ? e.message + ' Try Publish again.'
+        : e.kind === 'no_state' || /no schedule in memory/.test(e.message || '')
+          ? 'The engine lost this build (the page was reloaded). Press "Rebuild with changes" below, then publish.'
+          : (e.message || String(e));
+      setSt({ busy: false, err: msg });
+    }
+  }
+  return html`<div class=${'pubbox' + (pub && !changed ? ' done' : '')}>
+    <div>
+      <b>${pub && !changed ? 'On the Live board' : 'Publish to the Live board'}</b>
+      <div class="hint" style="margin:2px 0 0">${pub && !changed
+        ? 'Everyone with the Schedule Builder can now work this week day by day. Changes are logged.'
+        : changed ? 'You changed the schedule since publishing — publish again to update the Live board.'
+        : 'Puts this week on the shared Live board: call-outs, extra shifts and hours during the week, with history. Next week\'s build reads it as "last week".'}</div>
+      ${st.err ? html`<${Banner} kind="err">${st.err}<//>` : ''}
+    </div>
+    <div class="row">
+      ${pub && !changed ? html`<button class="primary" onClick=${() => setState({ route: 'live' })}>Open the Live board</button>`
+        : html`<button class="accent" disabled=${st.busy} onClick=${publish}>${st.busy ? html`<${Spinner}/> Publishing…` : changed ? 'Publish again' : 'Publish'}</button>`}
+    </div>
   </div>`;
 }
 
@@ -691,7 +745,7 @@ export function Step9Build() {
           `Week-${weekNum}-Driver-Notices.csv`, 'text/csv')}>
           Download driver notices (CSV)</button>
       </div>
-      <p class="hint">Save the workbook wherever you keep your schedules — you'll upload it as "last week" next time.</p>
+      <${PublishCard} wizard=${wizard} r=${r} />
 
       ${(r.infeasible || []).length ? html`<${Banner} kind="warn">
         <b>Some slots could not be filled:</b>

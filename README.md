@@ -9,6 +9,18 @@
 > all settings** (Netlify) → **Load a settings file** (Firebase). Screenshot parsing is Netlify-only
 > for now. Netlify keeps running until it is retired.
 
+> **Live schedule (2026-10-06, Firebase only):** a finished build is **published** to a shared
+> Live board — Firestore `schedule_weeks/{weekStart}` (+ `data/summary`, `data/engine`, `log/*`).
+> Everyone with the Schedule Builder works the week there: call-outs / no-shows / days off, moves,
+> extra shifts, "who can work extra?", scheduled hours and days-in-a-row per driver. Every change
+> is one transaction (the week's `rev` must match, so two people can't overwrite each other) and
+> a line in the change log. Past weeks stay browsable and editable; Step 1 can read last week
+> straight from the board (midweek changes included). The rules are the builder's own: the
+> engine runs a second **slot** (`runner.use_slot('live')`) and saves/reloads its whole state
+> (`export_state` / `load_state`). Test locally without Firestore: `python tests/live_mock/serve.py`
+> (mock `window.JAJB` in localStorage; `?as=Name` plays a second person) and
+> `python tests/live_state_test.py` for the engine.
+
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's
 inputs, click **Build**, download the finished `Week-NN-Schedule.xlsx`.
@@ -167,6 +179,8 @@ public/
   app/
     main.js app.js store.js api.js ui.js solver-client.js build-inputs.js settings.js
     draft.js                 IndexedDB auto-save/resume of the in-progress build
+    live/live-board.js       the Live schedule board (published week, midweek edits, change log)
+    live/live-model.js       publish/save/load plumbing for the Live board
     readiness.js             computes the home-screen dashboard
     worker/solver.worker.js  owns Pyodide
     steps/step1..step9 + advanced-panel.js   the wizard
@@ -178,6 +192,8 @@ netlify/
 tests/
   gen_fixtures.py            builds a synthetic test week
   check_modules.py           static ES-module graph check
+  live_state_test.py         Live board engine: save/reload, call-outs, slots, prior-week carryover
+  live_mock/                 local server + fake window.JAJB to click through the Live board
   fixtures/                  generated test inputs/outputs
 driver-schedule-builder skill/  the original skill (canonical solver lives here)
 ```

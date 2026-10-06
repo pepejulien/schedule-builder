@@ -1,13 +1,16 @@
 // Step 1 — the week and BOTH weekly files in one place. HR drops this week's
 // availability export and last week's schedule together (in any order); the
 // app works out which is which, fills in the week number / start Sunday, and
-// pre-fills the route demand from last week.
+// pre-fills the route demand from last week. On the JAJB site last week can
+// come straight from the Live board instead (with its midweek changes).
 import { html } from '../preact-setup.js';
 import { useState } from 'preact/hooks';
 import { useStore, setWizard, toast } from '../store.js';
 import { StepNav } from '../app.js';
 import { Banner, Spinner, Icon, readFileBytes } from '../ui.js';
-import { warmup } from '../solver-client.js';
+import { warmup, editRequest } from '../solver-client.js';
+import { canLive, liveWeek } from '../api.js';
+import { loadEngine, prevISO } from '../live/live-model.js';
 import { DAYS } from '../lib/waves.js';
 import { isSunday, weekLabel } from '../lib/weeks.js';
 import { inspectWorkbook, pairUp } from '../lib/file-detect.js';
@@ -101,6 +104,33 @@ export function StepFiles() {
     }
   }
 
+  // Last week as it really ran: load it from the Live board into a spare
+  // engine slot and write its workbook — the same file HR would upload.
+  async function fromLive() {
+    const prev = prevISO(week.startISO);
+    setBusy(true); setErr('');
+    try {
+      const d = await liveWeek(prev);
+      if (!d) { setErr(`The week before this one (starting ${prev}) isn't on the Live board — drop last week's file instead.`); return; }
+      await loadEngine(prev, d.engine, 'hist');
+      const m = await editRequest('export_xlsx', {}, 'hist');
+      if (!m.ok || !m.xlsx) throw new Error(m.error ? m.error.message : 'no workbook came back');
+      const patch = { priorWeek: { bytes: m.xlsx, source: 'upload', fileName: `${d.meta.label} — from the Live board` } };
+      const empty = !Object.values(demand || {}).some((rows) => (rows || []).length);
+      if (empty) {
+        try {
+          const dem = demandFromPrevSchedule(m.xlsx);
+          if (Object.keys(dem).length) { patch.demand = dem; toast("Route counts pre-filled from last week's schedule"); }
+        } catch { /* fill by hand */ }
+      }
+      setWizard(patch);
+    } catch (e) {
+      setErr('Could not read last week from the Live board: ' + (e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Wrong guess? Swap the two files' roles.
   function swap() {
     if (!avail || !prior.bytes) return;
@@ -145,6 +175,8 @@ export function StepFiles() {
           file=${prior.source === 'upload' ? prior.fileName : prior.source === 'none' ? 'None — first week' : null}
           detail=${prior.source === 'none' ? 'The 5-days-in-a-row rule won\'t look back into last week.' : 'Used for the 5-days-in-a-row rule and last week\'s route counts.'}
           onClear=${() => setWizard({ priorWeek: { bytes: null, source: null } })}>
+          ${!prior.source && canLive() && okDate ? html`<button class="small" disabled=${busy} onClick=${fromLive}
+            style="margin:2px 0 6px">Get last week from the Live board</button><br />` : ''}
           ${!prior.source ? html`<button class="link" onClick=${() => setWizard({ priorWeek: { bytes: null, source: 'none' } })}>
             No file — this is the very first week</button>` : ''}
         <//>

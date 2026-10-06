@@ -75,13 +75,14 @@ export function build(files, onProgress) {
   });
 }
 
-// Manual-edit round-trip. op: 'candidates' | 'apply'.
+// Manual-edit round-trip. op: 'candidates' | 'apply' | … (see the worker).
+// slot: 'build' (the wizard, default) or 'live' (the Live board's week).
 // Resolves {ok, data?} for candidates, {ok, report?, xlsx?} for apply,
 // or {ok:false, error:{kind, message}} on any failure (incl. timeout).
 let editSeq = 0;
 const EDIT_TIMEOUT_MS = 30000;
 
-export function editRequest(op, payload) {
+export function editRequest(op, payload, slot = 'build') {
   const w = ensureWorker();
   const id = ++editSeq;
   return new Promise((resolve) => {
@@ -98,8 +99,13 @@ export function editRequest(op, payload) {
       if (e.data && e.data.type === 'edit-result' && e.data.id === id) finish(e.data);
     };
     w.addEventListener('message', handler);
+    // opening a week may first have to load the engine (slow on a cold start)
+    const wait = op === 'load_state' ? LOAD_TIMEOUT_MS : EDIT_TIMEOUT_MS;
     timer = setTimeout(() => finish({ ok: false, error: {
-      kind: 'timeout', message: 'The engine did not answer in time. Try again, or rebuild.' } }), EDIT_TIMEOUT_MS);
-    w.postMessage({ type: 'edit', id, op, payload });
+      kind: 'timeout', message: 'The engine did not answer in time. Try again, or reload the page.' } }), wait);
+    w.postMessage({ type: 'edit', id, op, payload, slot });
   });
 }
+
+// The Live board's engine calls, bound to its slot.
+export const liveRequest = (op, payload) => editRequest(op, payload, 'live');

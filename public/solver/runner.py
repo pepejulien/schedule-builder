@@ -27,6 +27,16 @@ refused outright, a submitted day off needs payload.confirm_unavailable, and
 tier-policy breaks are allowed but logged; _verify() reports the errors those
 approved overrides cause as chk["overridden"] instead of a FAILED build.
 
+LIVE BOARD (2026-10-06): the engine keeps one state per SLOT -- 'build' (the
+wizard) and 'live' (a published week on the Live board) -- so working on this
+week never clobbers next week's build. use_slot(name) picks one before a call.
+    runner.export_state(json)  -> the whole live Result as a JSON string (Firestore)
+    runner.load_state(json)    -> rehydrate a saved week into the current slot
+    runner.apply_mark(json)    -> call-out / no-show / day off: frees that day's shift
+    runner.clear_mark(json)    -> remove a mark (the shift is NOT put back)
+    runner.export_xlsx(json)   -> write the workbook on demand (the live slot
+                                  skips the per-edit rewrite)
+
 AUTO TRAINERS (2026-10): cfg["auto_training"] = [{trainee, pool}] is resolved
 to concrete training_pairs by rotation before the build (see
 _build_with_auto_trainers).
@@ -40,7 +50,7 @@ import re
 
 from build_weekly_schedule import (
     load_config, build_schedule, write_xlsx, check_invariants, print_summary,
-    ScheduleConfigError, FREE_name, norm, ALL as ALL_DAYS,
+    ScheduleConfigError, FREE_name, norm, ALL as ALL_DAYS, Result,
 )
 
 WEEKEND = {'Sat', 'Sun'}
@@ -48,8 +58,28 @@ ONE = datetime.timedelta(days=1)
 
 # The live build this session (res mutates in place as edits are applied).
 # 'undo' holds one snapshot of the mutable state per applied edit, newest last.
-_STATE = {'cfg': None, 'res': None, 'edits': [], 'undo': [],
-          'ovr_unav': set(), 'ovr_policy': set()}
+# 'marks' = {day: {norm_name: {name, kind, was, note}}} -- call-outs etc.
+# 'write' = rewrite the xlsx after every edit (the wizard needs it; the Live
+# board downloads on demand instead).
+def _new_state(write=True):
+    return {'cfg': None, 'res': None, 'edits': [], 'undo': [],
+            'ovr_unav': set(), 'ovr_policy': set(), 'marks': {}, 'write': write}
+
+
+_SLOTS = {'build': _new_state()}
+_STATE = _SLOTS['build']
+
+
+def use_slot(name):
+    """Point every call that follows at one engine state ('build' | 'live')."""
+    global _STATE
+    if name not in _SLOTS:
+        _SLOTS[name] = _new_state(write=(name == 'build'))
+    _STATE = _SLOTS[name]
+    return name
+
+
+MARK_LABEL = {'callout': 'Called out', 'noshow': 'No-show', 'off': 'Day off'}
 
 
 def _classify(dr, res):
@@ -78,8 +108,11 @@ def _driver_rows(res):
         # blank so every day has a value.
         cells = {}
         for d in ALL_DAYS:
+            mk = _STATE["marks"].get(d, {}).get(n)
             if d in res.cell and i in res.cell[d]:
                 cells[d] = res.cell[d][i]
+            elif mk:
+                cells[d] = MARK_LABEL.get(mk["kind"], mk["kind"])
             elif d in dr["unav"]:
                 cells[d] = "Unavailable"
             elif d in dr["extra"]:
@@ -100,9 +133,44 @@ def _driver_rows(res):
             unavailable=sorted(dr["unav"]),
             hours=hours,
             cells=cells,
+            worked_dates=sorted(x.isoformat() for x in _worked_dates(res, dr)),
+            streak=_streak(res, dr),
         ))
     rows.sort(key=lambda r: (-r["hours"], r["name"]))
     return rows
+
+
+def _worked_dates(res, dr):
+    """This week's worked dates (road, backup, training, dispatch, meeting)."""
+    s = set()
+    for k in ("prim", "bk", "helper", "extra", "meet"):
+        s |= {res.DATEALL[d] for d in dr[k] if d in res.DATEALL}
+    return s
+
+
+def _streak(res, dr):
+    """Longest run of consecutive worked days, prior-week tail included."""
+    s = set(dr["w_prev"]) | _worked_dates(res, dr)
+    best = 0
+    for x in s:
+        if x - ONE in s:
+            continue
+        n = 1
+        while x + n * ONE in s:
+            n += 1
+        best = max(best, n)
+    return best
+
+
+def _days_info(res, chk):
+    pd = chk.get("per_day", {}) if chk else {}
+    return [dict(day=d, date=res.DATEALL[d].isoformat(),
+                 open=d in res.DAYS,
+                 routes=res.routes.get(d, 0), backup=res.backup.get(d, 0),
+                 routes_filled=pd.get(d, {}).get("routes", 0),
+                 backup_filled=pd.get(d, {}).get("backup", 0),
+                 waves=dict(res.waves.get(d, {})))
+            for d in ALL_DAYS]
 
 
 def _report(cfg, res, chk):
@@ -123,6 +191,12 @@ def _report(cfg, res, chk):
         drivers=_driver_rows(res),
         edits=list(_STATE["edits"]),
         can_undo=bool(_STATE["undo"]),
+        days=_days_info(res, chk),
+        limits=dict(max_consecutive=res.MAXC, primary_hours=res.PH,
+                    backup_hours=res.BH, max_road_days=res.MAXPRIM,
+                    weekly_hours_cap=res.HCAP, max_worked_days=res.MAXTOT),
+        marks=[dict(day=d, **m) for d in ALL_DAYS
+               for m in _STATE["marks"].get(d, {}).values()],
     )
 
 
@@ -217,7 +291,7 @@ def run(config_path):
         res.notes = list(res.notes) + tnotes
         write_xlsx(res)                       # -> cfg['out']
         _STATE.update(cfg=cfg, res=res, edits=[], undo=[],
-                      ovr_unav=set(), ovr_policy=set())
+                      ovr_unav=set(), ovr_policy=set(), marks={})
         chk = _verify(res)
         # Shortfalls straight from the finished grid (routes AND backups), so
         # the on-screen warnings match the workbook's totals row.
@@ -301,6 +375,9 @@ def _assess(res, dr, day, role):
         blocks.append("has a meeting that day (do-not-touch)")
     elif day in dr["extra"]:
         blocks.append("on dispatch duty that day")
+    elif n in _STATE["marks"].get(day, {}):
+        mk = _STATE["marks"][day][n]
+        unav.append(f"{MARK_LABEL.get(mk['kind'], mk['kind']).lower()} that day")
     elif day in dr["unav"]:
         if day in dr.get("std_added", set()):
             unav.append("standing day off (from preferences)")
@@ -409,12 +486,20 @@ _OVR_RES = (
 )
 
 
+_WAVE_SHORT = re.compile(r"^WAVE \w+ .+: (\d+) != (\d+)$")
+
+
 def _verify(res):
     """check_invariants(), with errors caused by an approved manual override
     moved to chk['overridden'] (shown, but not a FAILED build)."""
     chk = check_invariants(res)
     keep, ovr = [], []
     for e in chk["errors"]:
+        # a wave SHORT of its count is an open slot (call-out, removed shift),
+        # already reported by _recount_short -- not a broken rule
+        m = _WAVE_SHORT.match(e)
+        if m and int(m.group(1)) < int(m.group(2)):
+            continue
         hit = False
         for rx, kind in _OVR_RES:
             m = rx.match(e)
@@ -508,6 +593,7 @@ def _snapshot(res):
         edits=list(_STATE["edits"]),
         ovr_unav=set(_STATE["ovr_unav"]),
         ovr_policy=set(_STATE["ovr_policy"]),
+        marks=copy.deepcopy(_STATE["marks"]),
     )
 
 
@@ -523,6 +609,7 @@ def _restore(res, snap):
     _STATE["edits"] = snap["edits"]
     _STATE["ovr_unav"] = snap["ovr_unav"]
     _STATE["ovr_policy"] = snap["ovr_policy"]
+    _STATE["marks"] = snap.get("marks", {})
 
 
 def _routes_filled(res, day):
@@ -615,7 +702,7 @@ def apply_edit(payload_json):
 
         chk = _verify(res)
         res.infeasible = _recount_short(res, chk)
-        write_xlsx(res)                       # -> cfg['out'], picked up by the worker
+        _save_out(res)                        # -> cfg['out'], picked up by the worker
         return json.dumps(_report(cfg, res, chk), default=str)
     except Exception:  # noqa: BLE001
         import traceback
@@ -795,7 +882,7 @@ def apply_add(payload_json):
         _STATE["edits"].append(desc)
         chk = _verify(res)
         res.infeasible = _recount_short(res, chk)
-        write_xlsx(res)
+        _save_out(res)
         return json.dumps(_report(cfg, res, chk), default=str)
     except Exception:  # noqa: BLE001
         import traceback
@@ -913,7 +1000,7 @@ def apply_wave(payload_json):
         _STATE["edits"].append(desc)
         chk = _verify(res)
         res.infeasible = _recount_short(res, chk)
-        write_xlsx(res)
+        _save_out(res)
         return json.dumps(_report(cfg, res, chk), default=str)
     except Exception:  # noqa: BLE001
         import traceback
@@ -934,9 +1021,209 @@ def undo_last(payload_json):  # noqa: ARG001 - uniform (json in, json out) signa
         _restore(res, _STATE["undo"].pop())
         chk = _verify(res)
         res.infeasible = _recount_short(res, chk)
-        write_xlsx(res)
+        _save_out(res)
         return json.dumps(_report(cfg, res, chk), default=str)
     except Exception:  # noqa: BLE001
         import traceback
         return json.dumps(dict(ok=False, kind="crash",
                                message=traceback.format_exc()))
+
+
+# ------------------------------------------------------------- live board ----
+def _save_out(res):
+    """Rewrite the workbook after an edit -- the wizard slot only; the Live
+    board asks for it on demand (export_xlsx) so edits stay quick."""
+    if _STATE.get("write", True):
+        write_xlsx(res)
+
+
+def _enc(o):
+    """Python value -> JSON-safe value that _dec() turns back into the same
+    thing (sets, tuples, dates, int-keyed dicts survive the round trip)."""
+    if o is None or isinstance(o, (bool, int, float, str)):
+        return o
+    if isinstance(o, datetime.datetime):
+        return {"$dt": o.isoformat()}
+    if isinstance(o, datetime.date):
+        return {"$d": o.isoformat()}
+    if isinstance(o, (set, frozenset)):
+        return {"$s": [_enc(x) for x in o]}
+    if isinstance(o, tuple):
+        return {"$t": [_enc(x) for x in o]}
+    if isinstance(o, list):
+        return [_enc(x) for x in o]
+    if isinstance(o, dict):
+        if all(isinstance(k, str) and not k.startswith("$") for k in o):
+            return {k: _enc(v) for k, v in o.items()}
+        return {"$m": [[_enc(k), _enc(v)] for k, v in o.items()]}
+    raise TypeError(f"can't save a {type(o).__name__} in the live schedule")
+
+
+def _dec(o):
+    if isinstance(o, list):
+        return [_dec(x) for x in o]
+    if isinstance(o, dict):
+        if len(o) == 1:
+            (k, v), = o.items()
+            if k == "$d":
+                return datetime.date.fromisoformat(v)
+            if k == "$dt":
+                return datetime.datetime.fromisoformat(v)
+            if k == "$s":
+                return {_dec(x) for x in v}
+            if k == "$t":
+                return tuple(_dec(x) for x in v)
+            if k == "$m":
+                return {_dec(a): _dec(b) for a, b in v}
+        return {k: _dec(v) for k, v in o.items()}
+    return o
+
+
+def _crash():
+    import traceback
+    return json.dumps(dict(ok=False, kind="crash", message=traceback.format_exc()))
+
+
+def export_state(payload_json):  # noqa: ARG001
+    """The current slot's whole schedule as one JSON string -- what the Live
+    board saves to Firestore and load_state() reads back."""
+    try:
+        res = _STATE.get("res")
+        if res is None:
+            return _no_state()
+        st = dict(v=1, res=_enc(res.__dict__), edits=list(_STATE["edits"]),
+                  ovr_unav=[list(x) for x in sorted(_STATE["ovr_unav"])],
+                  ovr_policy=sorted(_STATE["ovr_policy"]),
+                  marks=_STATE["marks"])
+        return json.dumps(dict(ok=True, state=json.dumps(st, separators=(",", ":"))))
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def load_state(payload_json):
+    """payload: {state, out?, prev_worked?: {name: [ISO dates]}}. Rehydrate a
+    saved week into the current slot. prev_worked (last week's REAL worked
+    days, from its own Live board) replaces the tail read from the uploaded
+    file, so a midweek extra shift last Saturday still counts toward this
+    week's days-in-a-row."""
+    try:
+        p = json.loads(payload_json)
+        st = json.loads(p["state"])
+        if st.get("v") != 1:
+            return json.dumps(dict(ok=False, kind="edit",
+                message="This saved week was made by a newer version of the app - reload the page."))
+        res = Result(**_dec(st["res"]))
+        res.cfg["out"] = p.get("out") or res.cfg.get("out") or "/work/live.xlsx"
+        pw = p.get("prev_worked")
+        if pw:
+            start = res.DATEALL["Sun"]
+            lo = start - 7 * ONE
+            byn = {norm(k): {datetime.date.fromisoformat(x) for x in v} for k, v in pw.items()}
+            for dr in res.roster:
+                got = byn.get(norm(dr["name"]))
+                if got is not None:
+                    dr["w_prev"] = {x for x in got if lo <= x < start}
+        _STATE.update(cfg=res.cfg, res=res, edits=list(st.get("edits", [])), undo=[],
+                      ovr_unav={tuple(x) for x in st.get("ovr_unav", [])},
+                      ovr_policy=set(st.get("ovr_policy", [])),
+                      marks=st.get("marks") or {})
+        chk = _verify(res)
+        res.infeasible = ([ln for ln in res.infeasible if not ln.startswith(("P1 ", "P2 "))]
+                          + _recount_short(res, chk))
+        return json.dumps(_report(res.cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def export_xlsx(payload_json):  # noqa: ARG001
+    """Write the current slot's workbook to cfg['out'] now."""
+    try:
+        res = _STATE.get("res")
+        if res is None:
+            return _no_state()
+        with contextlib.redirect_stdout(io.StringIO()):
+            write_xlsx(res)
+        return json.dumps(dict(ok=True, out=res.cfg["out"]))
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def apply_mark(payload_json):
+    """payload: {name, day, kind: 'callout'|'noshow'|'off', note?}. Record
+    that a driver won't work `day`. Their route/backup that day comes off and
+    the slot is left OPEN (the board shows the gap to fill); for the rules the
+    day then counts as a day off (overridable with the typed confirm)."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        day, kind = p.get("day"), p.get("kind")
+        if day not in res.DAYS or kind not in MARK_LABEL:
+            return json.dumps(dict(ok=False, kind="edit", message=f"Bad mark: {day} / {kind}"))
+        i, dr = _find(res, p.get("name") or "")
+        if dr is None:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"Driver not found: {p.get('name')}"))
+        n = norm(dr["name"])
+        if n in _STATE["marks"].get(day, {}):
+            return json.dumps(dict(ok=False, kind="edit",
+                message=f"{dr['name']} is already marked on {day}."))
+        label = res.cell[day].get(i, "")
+        if "TRAIN" in label:
+            return json.dumps(dict(ok=False, kind="edit",
+                message="That is a training-pair day - training days can only "
+                        "be changed by a rebuild."))
+        _STATE["undo"].append(_snapshot(res))
+        was = ""
+        if day in dr["prim"]:
+            dr["prim"].remove(day)
+            was = f"{label} route" if label else "route"
+            res.cell[day].pop(i, None)
+        elif day in dr["bk"]:
+            dr["bk"].remove(day)
+            was = label or "Backup"
+            res.cell[day].pop(i, None)
+        note = str(p.get("note") or "").strip()[:200]
+        _STATE["marks"].setdefault(day, {})[n] = dict(
+            name=dr["name"], kind=kind, was=was, note=note)
+        desc = f"{dr['name']}: {MARK_LABEL[kind].lower()} {day}"
+        if was:
+            desc += f" (was {was} - slot left open)"
+        if note:
+            desc += f" - {note}"
+        _STATE["edits"].append(desc)
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def clear_mark(payload_json):
+    """payload: {name, day}. Remove a call-out / no-show / day-off mark. The
+    shift it freed is NOT put back - assign it again if they're working."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        day = p.get("day")
+        n = norm(p.get("name") or "")
+        mk = _STATE["marks"].get(day, {}).get(n)
+        if not mk:
+            return json.dumps(dict(ok=False, kind="edit",
+                message=f"No mark for {p.get('name')} on {day}."))
+        _STATE["undo"].append(_snapshot(res))
+        del _STATE["marks"][day][n]
+        if not _STATE["marks"][day]:
+            del _STATE["marks"][day]
+        _STATE["edits"].append(f"Cleared {mk['name']}'s "
+                               f"{MARK_LABEL.get(mk['kind'], mk['kind']).lower()} mark on {day}")
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()

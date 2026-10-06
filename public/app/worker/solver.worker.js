@@ -6,8 +6,14 @@
  *   worker      -> {type:'ready'}
  *   main thread -> {type:'build', files:{...}}
  *   worker      -> {type:'result', ok, xlsx?, report?, error?}
- *   main thread -> {type:'edit', id, op:'candidates'|'apply', payload:{...}}
+ *   main thread -> {type:'edit', id, op:'candidates'|'apply', payload:{...}, slot?}
  *   worker      -> {type:'edit-result', id, ok, data?|report?+xlsx?, error?}
+ *
+ * Slots (2026-10-06): the engine keeps one schedule per slot — 'build' (the
+ * wizard, the default), 'live' (the week open on the Live board) and 'hist'
+ * (last week, read back for Step 1). Live ops
+ * load Pyodide on demand (load_state), and the live slot never rewrites the
+ * workbook per edit: op 'export_xlsx' writes it when someone downloads.
  *
  * If Pyodide ever fails to load, bump PYODIDE_VERSION to the current stable
  * release (https://github.com/pyodide/pyodide/releases) — this is the one knob.
@@ -107,6 +113,7 @@ async function build(files) {
     if (files.prefsText != null) FS.writeFile('/work/prefs.csv', files.prefsText);
     FS.writeFile('/work/config.json', files.configJson);
 
+    pyodide.runPython('runner.use_slot("build")');
     const jsonStr = pyodide.runPython('runner.run("/work/config.json")');
     const report = JSON.parse(jsonStr);
 
@@ -136,6 +143,12 @@ async function build(files) {
 // build, so answer instantly instead of cold-loading Pyodide just to say no.
 async function edit(msg) {
   const fail = (error) => self.postMessage({ type: 'edit-result', id: msg.id, ok: false, error });
+  const slot = ['live', 'hist'].includes(msg.slot) ? msg.slot : 'build';
+  // Opening a saved week is the one edit call that may need the engine loaded.
+  if (!ready && msg.op === 'load_state') {
+    await warmup();
+    if (!ready) { fail({ kind: 'runtime', message: 'The in-browser engine failed to load. Reload the page and try again.' }); return; }
+  }
   if (!ready) {
     fail({ kind: 'no_state',
       message: 'The engine has no schedule in memory (the page was reloaded). Rebuild first, then edit.' });
@@ -147,14 +160,19 @@ async function edit(msg) {
     candidates: 'candidates', add_options: 'add_options', swap_candidates: 'swap_candidates',
     wave_options: 'wave_options',
     apply: 'apply_edit', apply_add: 'apply_add', apply_wave: 'apply_wave', undo: 'undo_last',
+    apply_mark: 'apply_mark', clear_mark: 'clear_mark',
+    load_state: 'load_state', export_state: 'export_state', export_xlsx: 'export_xlsx',
   };
-  const MUTATING = new Set(['apply', 'apply_add', 'apply_wave', 'undo']);
+  const MUTATING = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'load_state']);
+  // Ops whose answer comes with the slot's workbook bytes.
+  const WITH_XLSX = slot === 'build' ? MUTATING : new Set(['export_xlsx']);
   try {
     if (!OPS[msg.op]) {
       fail({ kind: 'edit', message: 'Unknown edit op: ' + msg.op });
       return;
     }
     const runner = pyodide.pyimport('runner');
+    runner.use_slot(slot);
     const fn = runner[OPS[msg.op]];
     const out = JSON.parse(fn(JSON.stringify(msg.payload || {})));
     runner.destroy();
@@ -162,10 +180,11 @@ async function edit(msg) {
       fail({ kind: out.kind || 'edit', message: out.message || 'The edit failed.', full: out.full });
       return;
     }
-    if (MUTATING.has(msg.op)) {
+    if (MUTATING.has(msg.op) || WITH_XLSX.has(msg.op)) {
       let xlsx = null;
       try {
-        const bytes = pyodide.FS.readFile('/work/output.xlsx');
+        if (!WITH_XLSX.has(msg.op)) throw new Error('no workbook for this op');
+        const bytes = pyodide.FS.readFile(out.out || '/work/output.xlsx');
         xlsx = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
       } catch { /* no output written */ }
       self.postMessage({ type: 'edit-result', id: msg.id, ok: true, report: out, xlsx }, xlsx ? [xlsx] : []);

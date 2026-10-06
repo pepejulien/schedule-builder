@@ -194,3 +194,13 @@ export async function parseScreenshot(base64, mediaType) {
   }
   return res.json();
 }
+
+// ------------------------------------------------------------- live board --
+// Published weeks the team works on midweek (Firebase only — Netlify has no
+// shared database). Firestore schedule_weeks/{weekStart}: see jajb.js.
+export const canLive = () => onFirebase() && typeof window.JAJB.saveScheduleWeek === 'function';
+export const liveWeeks = (n) => window.JAJB.scheduleWeeks(n);
+export const liveWeek = (weekISO) => window.JAJB.scheduleWeekData(weekISO);
+export const watchLiveWeek = (weekISO, cb) => window.JAJB.watchScheduleWeek(weekISO, cb);
+export const watchLiveLog = (weekISO, cb) => window.JAJB.watchScheduleLog(weekISO, cb);
+export const saveLiveWeek = (weekISO, w) => window.JAJB.saveScheduleWeek(weekISO, w);
