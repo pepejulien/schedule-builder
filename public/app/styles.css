@@ -415,3 +415,12 @@ table.lv-grid { font-size: 12.5px; }
 .slot-btn.confirm { border-color: #f1c3a0; background: #fde6d4; color: #8a3f12; }
 .limit-modal { border-top-color: #df7332; }
 .limit-modal h3 { color: #c0603a; }
+
+/* Live board: search + sort (2026-10-06) */
+.lv-tools { margin-top: 12px; }
+.lv-tools input[type=search] { width: 240px; max-width: 100%; }
+.seg { display: inline-flex; border: 1px solid #dcdce1; border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; box-shadow: none; padding: 7px 13px; font-size: 12.5px; background: #fff; }
+.seg button + button { border-left: 1px solid #dcdce1; }
+.seg button.on { background: var(--navy); color: #fff; }
+.chip.tier-mini { padding: 1px 7px; font-size: 10.5px; }

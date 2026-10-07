@@ -35,6 +35,13 @@ const MARKS = [
   ['off', 'Day off', 'They asked for the day off during the week.'],
 ];
 
+// Name search ignores case and accents ("jose" finds "José").
+const fold = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+// The sort choice is a per-device convenience (Jose 2026-10-06).
+const SORT_KEY = 'lv_sort';
+const readSort = () => { try { return localStorage.getItem(SORT_KEY) === 'name' ? 'name' : 'tier'; } catch { return 'tier'; } };
+const saveSort = (v) => { try { localStorage.setItem(SORT_KEY, v); } catch { /* private window */ } };
+
 // Sum of on-the-clock hours over the 7 days ending `endISO`.
 function last7(dayHours, endISO) {
   let t = 0;
@@ -224,6 +231,8 @@ function Board() {
   const [limit, setLimit] = useState(null);     // the 6-day / overtime pop-up
   const [finder, setFinder] = useState({ day: null, role: 'road' });
   const [showLog, setShowLog] = useState(false);
+  const [sortBy, setSortBy] = useState(readSort);   // 'tier' | 'name'
+  const [q, setQ] = useState('');                   // name search
 
   // async work reads the newest values through refs
   const R = useRef({});
@@ -438,8 +447,12 @@ function Board() {
   const openBk = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.backup - x.backup_filled), 0);
   const byName = Object.fromEntries(view.drivers.map((x) => [x.name, x]));
   const markOf = (name, day) => (view.marks || []).find((x) => x.name === name && x.day === day);
-  const byTier = {};
-  for (const x of view.drivers) (byTier[x.cls] = byTier[x.cls] || []).push(x);
+  // search + sort: by tier (Top/Solid first, as the builder groups them) or A-Z
+  const shown = view.drivers.filter((x) => !q.trim() || fold(x.name).includes(fold(q.trim())));
+  const groups = sortBy === 'name'
+    ? [{ key: 'all', rows: shown.slice().sort((a, b) => a.name.localeCompare(b.name)) }]
+    : TIER_ORDER.map((t) => ({ key: t, meta: TIER_META[t], rows: shown.filter((x) => x.cls === t) }))
+      .filter((g) => g.rows.length);
   const todayCount = tday ? view.drivers.reduce((a, x) => {
     const k = cellInfo((x.cells || {})[tday.day]).kind;
     return a + (k === 'road' || k === 'trainee' ? 1 : 0);
@@ -500,6 +513,16 @@ function Board() {
         </div>
       </div>
 
+      <div class="row lv-tools">
+        <input type="search" placeholder="Search a driver…" value=${q} onInput=${(e) => setQ(e.target.value)}
+          aria-label="Search a driver by name" />
+        <div class="seg" role="group" aria-label="Sort drivers">
+          <button class=${sortBy === 'tier' ? 'on' : ''} onClick=${() => { setSortBy('tier'); saveSort('tier'); }}>By tier</button>
+          <button class=${sortBy === 'name' ? 'on' : ''} onClick=${() => { setSortBy('name'); saveSort('name'); }}>A–Z</button>
+        </div>
+        ${q.trim() ? html`<span class="muted">${shown.length} of ${view.drivers.length} drivers</span>` : ''}
+      </div>
+
       <div class="scroll-x lv-wrap"><table class="lv-grid">
         <thead><tr>
           <th class="lv-namecol">Driver</th>
@@ -514,16 +537,18 @@ function Board() {
           <th title=${`Days worked this week (usual max ${lim.max_worked_days || 5}; a 6th needs the pop-up)`}>Days</th>
           <th title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
         </tr></thead>
-        <tbody>${TIER_ORDER.filter((t) => byTier[t]).map((t) => {
-          const meta = TIER_META[t];
-          return html`
-            <tr class="tier-sep"><td colspan=${view.days.length + 5}><span class="chip ${meta.chip}">${meta.label}</span>
-              <span class="muted"> · ${byTier[t].length}</span></td></tr>
-            ${byTier[t].map((x) => {
+        <tbody>${!shown.length ? html`<tr><td colspan=${view.days.length + 5} class="muted" style="text-align:left">
+            No driver matches “${q}”.</td></tr>` : ''}
+          ${groups.map((g) => html`
+            ${g.meta ? html`<tr class="tier-sep"><td colspan=${view.days.length + 5}><span class="chip ${g.meta.chip}">${g.meta.label}</span>
+              <span class="muted"> · ${g.rows.length}</span></td></tr>` : ''}
+            ${g.rows.map((x) => {
               const nWorked = (x.worked_dates || []).length;
+              const tm = TIER_META[x.cls] || TIER_META.free;
               return html`<tr>
                 <td class="lv-namecol"><button class="link lv-name" title=${'Give ' + x.name + ' a shift'}
                   onClick=${() => setAdder({ name: x.name })}>${x.name}</button>
+                  ${sortBy === 'name' ? html` <span class="chip ${tm.chip} tier-mini">${tm.short}</span>` : ''}
                   ${(x.helper_days || []).length ? html` <span class="chip trainer-chip" title="Trains a new hire this week">Trainer</span>` : ''}
                   <div class="lv-sub">Week: ${x.clock_hours ?? x.hours}h${endISO && x.day_hours
                     ? html` · <span class=${max7Cls(last7(x.day_hours, endISO))}>Last 7d: ${last7(x.day_hours, endISO)}h</span>` : ''}</div></td>
@@ -539,8 +564,7 @@ function Board() {
                 <td class=${daysCls(nWorked)}>${nWorked}</td>
                 <td class=${streakCls(x.streak)}>${x.streak}</td>
               </tr>`;
-            })}`;
-        })}</tbody>
+            })}`)}</tbody>
       </table></div>
       <div class="lv-legend">
         ${Object.entries(WAVE_COLORS).map(([w, bg]) => html`<span class="lv-sw" style=${`background:${bg}`}>${w}</span>`)}
