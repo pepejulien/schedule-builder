@@ -384,7 +384,27 @@ table.lv-grid { font-size: 12.5px; }
 .k-disp, .k-meet { background: rgba(111,90,168,.12); color: #6f5aa8; }
 .lv-bad { color: var(--err) !important; font-weight: 700; }
 .lv-warn { color: #c0603a; font-weight: 700; }
-.lv-room { white-space: nowrap; font-size: 12.5px; text-align: left; line-height: 1.35; }
+/* over the 7-day max: the days that cause it shake every few seconds; hover for the card */
+.lv-grid td.lv-over { box-shadow: inset 0 0 0 2px var(--err); background: #fdf0ef; }
+.lv-over > * { animation: lv-shake 2.6s ease-in-out infinite; }
+@keyframes lv-shake { 0%, 14%, 100% { transform: none; } 2%, 6%, 10% { transform: translateX(-2px) rotate(-1deg); } 4%, 8%, 12% { transform: translateX(2px) rotate(1deg); } }
+@media (prefers-reduced-motion: reduce) { .lv-over > * { animation: none; } }
+.lv-pop { position: fixed; z-index: 60; width: 380px; max-width: calc(100vw - 16px); pointer-events: none;
+  background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--err); border-radius: 12px;
+  box-shadow: 0 10px 34px rgba(36,55,98,.18); padding: 12px 14px; font-size: 13.5px; line-height: 1.45; color: var(--ink); }
+.ov-title { font-weight: 700; color: #7a2018; margin-bottom: 4px; }
+.ov-win b { color: var(--err); }
+.ov-by { color: var(--err); font-size: 12px; margin-left: 4px; }
+.ov-sub { margin-top: 8px; font-weight: 600; color: var(--ink2); }
+.ov-days { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.ov-day { padding: 1px 7px; border-radius: 999px; background: var(--bg); font-size: 12.5px; white-space: nowrap; }
+.ov-day.done { color: var(--muted); }
+.ov-day.hot { background: #fdf0ef; color: #7a2018; font-weight: 600; }
+.ov-fix { margin: 4px 0 0; padding-left: 18px; }
+.ov-fix li { margin: 2px 0; }
+.ov-note { margin-top: 6px; color: #7a2018; }
+.ov-foot { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.dm-over .ov-card { color: var(--ink); }
 .lv-warnc { color: var(--warn) !important; }
 .lv-open { color: var(--err); font-weight: 600; }
 .lv-legend { margin-top: 10px; }

@@ -220,3 +220,63 @@ export function cellKind(v) {
   if (s === 'Dispatch') return 'disp';
   return 'meet';
 }
+
+// Over the 7-day max (2026-10-07): the 7-day stretches touching this week that go over, the
+// upcoming days that cause it (they shake on the Live board), and every one-change fix,
+// each checked by recounting the hours. Days already worked (past, or a Route Tracker
+// clock-out) can't be changed, so they never shake and are never offered as a fix.
+// d = a summary driver {name, cells, day_hours, act_dates}; days = summary.days; null = fine.
+export function overRisk(d, days, today, lim) {
+  const max = lim.max_7day_hours || 60, bkH = lim.backup_hours || 2;
+  const dh = d.day_hours || {};
+  const sh = (iso, n) => toISODate(addDays(parseISODate(iso), n));
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const first = days[0].date, last = days[days.length - 1].date;
+  // only stretches that still reach today or later: one that ended yesterday can't be changed
+  const starts = [];
+  for (let i = -6; sh(first, i) <= last; i++) if (sh(first, i + 6) >= today) starts.push(sh(first, i));
+  if (!starts.length) return null;
+  const windows = (h) => starts.map((s) => {
+    let t = 0;
+    for (let k = 0; k < 7; k++) t += Number(h[sh(s, k)] || 0);
+    return { start: s, end: sh(s, 6), total: r2(t) };
+  });
+  const worst = (h) => Math.max(...windows(h).map((w) => w.total));
+  const over = windows(dh).filter((w) => w.total > max + 0.005);
+  if (!over.length) return null;
+  const act = new Set(d.act_dates || []);
+  const dayOf = (iso) => (days.find((x) => x.date === iso) || {}).day;
+  const hot = days.map((x) => x.date).filter((iso) => iso >= today && !act.has(iso) && Number(dh[iso] || 0) > 0
+    && over.some((w) => iso >= w.start && iso <= w.end));
+  const fixes = [];
+  for (const iso of hot) {
+    const off = { ...dh, [iso]: 0 };
+    const w0 = worst(off);
+    if (w0 > max + 0.005) continue;            // even a day off there isn't enough
+    fixes.push({ kind: 'off', dates: [iso], worst: w0 });
+    const k = cellInfo((d.cells || {})[dayOf(iso)]).kind;
+    if ((k === 'road' || k === 'trainee' || k === 'trainer') && dh[iso] > bkH) {
+      const w1 = worst({ ...dh, [iso]: bkH });
+      if (w1 <= max + 0.005) fixes.push({ kind: 'backup', dates: [iso], worst: w1 });
+    }
+    // the longest that day can be: the max minus the rest of each stretch holding it
+    const cap = Math.floor(Math.min(...windows(off).filter((w) => iso >= w.start && iso <= w.end)
+      .map((w) => max - w.total)) * 10) / 10;
+    if (cap >= 1 && cap < dh[iso]) fixes.push({ kind: 'short', dates: [iso], hours: cap, worst: worst({ ...dh, [iso]: cap }) });
+  }
+  if (!fixes.length) {                          // no single change works: two days off
+    for (let i = 0; i < hot.length; i++) {
+      for (let j = i + 1; j < hot.length; j++) {
+        const w = worst({ ...dh, [hot[i]]: 0, [hot[j]]: 0 });
+        if (w <= max + 0.005) fixes.push({ kind: 'off2', dates: [hot[i], hot[j]], worst: w });
+      }
+    }
+  }
+  const top = over.reduce((a, w) => (w.total > a.total ? w : a));
+  const breakdown = [];
+  for (let k = 0; k < 7; k++) {
+    const iso = sh(top.start, k);
+    if (Number(dh[iso] || 0) > 0) breakdown.push({ date: iso, h: r2(Number(dh[iso])), done: iso < today || act.has(iso), hot: hot.includes(iso) });
+  }
+  return { max, over, hot, fixes, breakdown };
+}

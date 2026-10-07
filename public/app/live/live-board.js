@@ -22,7 +22,7 @@ import {
 } from '../steps/step9-build.js';
 import {
   loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
-  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO,
+  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk,
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
@@ -49,23 +49,35 @@ function last7(dayHours, endISO) {
   for (let k = 0; k < 7; k++) t += Number((dayHours || {})[toISODate(addDays(pd(endISO), -k))] || 0);
   return Math.round(t * 100) / 100;
 }
-// Hours a driver can be on the clock on `iso` and keep every 7-day window that holds
-// that day within the max (2026-10-07): the max minus the busiest other 6 days.
-function roomOn(dayHours, iso, max) {
-  let worst = 0;
-  for (let s = -6; s <= 0; s++) {
-    let t = 0;
-    for (let k = 0; k < 7; k++) {
-      const d = toISODate(addDays(pd(iso), s + k));
-      if (d !== iso) t += Number((dayHours || {})[d] || 0);
-    }
-    worst = Math.max(worst, t);
-  }
-  return Math.max(0, Math.round((max - worst) * 10) / 10);
+// The over-60 card (2026-10-07): what goes over, the hours behind it, and every fix.
+const mdy = (iso) => pd(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+const wkd = (iso) => pd(iso).toLocaleDateString('en-US', { weekday: 'long' });
+function OverInfo({ d, risk, iso }) {
+  const first = d.name.split(/\s+/)[0];
+  const fixText = (f) => {
+    const [a, b] = f.dates;
+    if (f.kind === 'off') return html`Take <b>${wkd(a)}</b> off — give that shift to someone else`;
+    if (f.kind === 'backup') return html`Make <b>${wkd(a)}</b> a backup (${risk.backupH}h) instead of a route`;
+    if (f.kind === 'short') return html`Send ${first} home after <b>${f.hours}h</b> on <b>${wkd(a)}</b>`;
+    return html`Take <b>${wkd(a)}</b> and <b>${wkd(b)}</b> off`;
+  };
+  const here = iso && risk.fixes.length && !risk.fixes.some((f) => f.dates.includes(iso));
+  return html`<div class="ov-card">
+    <div class="ov-title">${d.name} goes over ${risk.max}h in 7 days</div>
+    ${risk.over.slice(0, 3).map((w) => html`<div class="ov-win">${mdy(w.start)} → ${mdy(w.end)}: <b>${w.total}h</b>
+      <span class="ov-by">${Math.round((w.total - risk.max) * 100) / 100}h over</span></div>`)}
+    <div class="ov-sub">The worst 7 days, day by day:</div>
+    <div class="ov-days">${risk.breakdown.map((x) => html`<span class=${'ov-day' + (x.hot ? ' hot' : '') + (x.done ? ' done' : '')}
+      >${mdy(x.date).replace(/,.*/, '')} ${x.h}h${x.done ? ' ✓' : ''}</span>`)}</div>
+    ${risk.fixes.length ? html`<div class="ov-sub">Ways to fix it — any one of these works:</div>
+      <ul class="ov-fix">${risk.fixes.map((f) => html`<li>${fixText(f)} <span class="muted">→ most in 7 days ${f.worst}h</span></li>`)}</ul>
+      ${here ? html`<div class="ov-note">Changing ${wkd(iso)} alone is not enough — use one of the days above.</div>` : ''}`
+      : risk.hot.length ? html`<div class="ov-note">No one or two changes fix it — this week needs a bigger rework.</div>`
+      : html`<div class="ov-note">These days are already worked — nothing left to change this week.</div>`}
+    <div class="ov-foot">✓ = already worked. Click a day to change it.</div>
+  </div>`;
 }
 
-// A grid cell drawn the way Amazon's scheduling page does: a colored block,
-// the time on top, the role (Backup / Trainer / Trainee) under it.
 function Block({ v }) {
   const c = cellInfo(v);
   if (c.kind === 'empty') return '';
@@ -158,7 +170,7 @@ const ampm = (t) => { const [h, m] = String(t || '13:00').split(':').map(Number)
   return `${((h + 11) % 12) + 1}:${String(m || 0).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`; };
 
 // What one driver is doing on one day, and everything that can be done about it.
-function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view }) {
+function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk }) {
   const v = (d.cells || {})[day] || '';
   const c = cellInfo(v);
   const kind = c.kind;
@@ -193,6 +205,7 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view }) 
         <div class=${d.streak >= (lim.max_consecutive || 5) ? 'hot' : ''}><b>${d.streak}</b><span>days in a row (usual max ${lim.max_consecutive || 5})</span></div>
       </div>
 
+      ${risk && risk.hot.includes(info.date) ? html`<div class="dm-info warn dm-over"><${OverInfo} d=${d} risk=${risk} iso=${info.date} /></div>` : ''}
       ${kind === 'trainer' || kind === 'trainee' ? html`<div class="dm-info">${kind === 'trainer'
         ? html`<b>Trainer</b> — rides along with <b>${c.partner}</b> on the ${c.top} route.`
         : html`<b>Trainee</b> — drives the ${c.top} route with trainer <b>${c.partner}</b>.`}</div>` : ''}
@@ -417,6 +430,7 @@ function Board() {
   const [showLog, setShowLog] = useState(false);
   const [sortBy, setSortBy] = useState(readSort);   // 'tier' | 'name'
   const [q, setQ] = useState('');                   // name search
+  const [pop, setPop] = useState(null);             // the over-60 card: {name, iso, left, top, up}
 
   // async work reads the newest values through refs
   const R = useRef({});
@@ -709,20 +723,15 @@ function Board() {
   const endISO = today < view.days[0].date ? null : today > lastDay ? lastDay : today;
   const streakCls = (n) => (n > (lim.max_consecutive || 5) ? 'lv-bad' : n === (lim.max_consecutive || 5) ? 'lv-warn' : '');
   const daysCls = (n) => (n > (lim.max_worked_days || 5) ? 'lv-bad' : n === (lim.max_worked_days || 5) ? 'lv-warn' : '');
-  // "Room left": today and tomorrow (when in this week), how long each driver can still be on
-  // the clock that day without going over the 7-day max. Red = the shift already on that day
-  // is longer than the room; orange = not enough room for a full route.
-  const tmrw = toISODate(addDays(pd(today), 1));
-  const roomDays = [[today, 'Today'], [tmrw, 'Tmrw']].filter(([iso]) => view.days.some((x) => x.date === iso));
-  const nCols = view.days.length + 5 + (roomDays.length ? 1 : 0);
-  const roomCell = (x) => roomDays.map(([iso, lbl]) => {
-    const room = Math.min(roomOn(x.day_hours, iso, max7Lim), lim.max_day_hours || 12);   // 12h a day caps it anyway
-    const on = Number((x.day_hours || {})[iso] || 0);
-    const cls = on > room ? 'lv-bad' : room < (lim.primary_hours || 10) ? 'lv-warn' : '';
-    const tip = `${lbl === 'Today' ? 'Today' : 'Tomorrow'}: can be on the clock up to ${room}h and stay within ${max7Lim}h in 7 days`
-      + (on ? ` — scheduled ${on}h${on > room ? ', which goes OVER' : ''}` : '');
-    return html`<div class=${cls} title=${tip}>${lbl} ${room}h</div>`;
-  });
+  const nCols = view.days.length + 5;
+  // over the 7-day max: the upcoming days that cause it shake; hover one for what and how to fix
+  const risks = Object.fromEntries(view.drivers.map((x) => [x.name, overRisk(x, view.days, today, lim)]));
+  Object.values(risks).forEach((r) => { if (r) r.backupH = lim.backup_hours || 2; });
+  const showPop = (e, name, iso) => {
+    const b = e.currentTarget.getBoundingClientRect();
+    setPop({ name, iso, left: Math.max(8, Math.min(b.left, window.innerWidth - 392)), top: b.bottom + 6,
+      up: b.bottom + 340 > window.innerHeight ? b.top - 6 : null });
+  };
   const goFind = (day, role) => {
     setFinder({ day, role });
     setTimeout(() => { const el = document.getElementById('lv-finder'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }, 30);
@@ -792,7 +801,6 @@ function Board() {
           <th title=${`Most hours on the clock in any 7 days in a row, last week included (max ${max7Lim}h)`}>Max 7d</th>
           <th title=${`Days worked this week (usual max ${lim.max_worked_days || 5}; a 6th needs the pop-up)`}>Days</th>
           <th title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
-          ${roomDays.length ? html`<th title=${`Hours each driver can still work today / tomorrow and stay within ${max7Lim}h in any 7 days. Red = the shift already scheduled goes over; orange = not enough for a full route.`}>Room left</th>` : ''}
         </tr></thead>
         <tbody>${!shown.length ? html`<tr><td colspan=${nCols} class="muted" style="text-align:left">
             No driver matches “${q}”.</td></tr>` : ''}
@@ -812,15 +820,17 @@ function Board() {
                 ${view.days.map((dd) => {
                   const v = (x.cells || {})[dd.day] || '';
                   const c = cellInfo(v);
-                  return html`<td class=${'lv-cell k-' + c.kind + (dd.date === today ? ' today' : '') + (dd.open ? '' : ' closed')}
-                    title=${c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed')}
-                    onClick=${dd.open ? () => setCell({ name: x.name, day: dd.day }) : undefined}><${Block} v=${v} /></td>`;
+                  const hot = risks[x.name] && risks[x.name].hot.includes(dd.date);
+                  return html`<td class=${'lv-cell k-' + c.kind + (dd.date === today ? ' today' : '') + (dd.open ? '' : ' closed') + (hot ? ' lv-over' : '')}
+                    title=${hot ? undefined : c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed')}
+                    onMouseEnter=${hot ? (e) => showPop(e, x.name, dd.date) : undefined}
+                    onMouseLeave=${hot ? () => setPop(null) : undefined}
+                    onClick=${dd.open ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} /></td>`;
                 })}
                 <td class=${hoursCls(x.clock_hours ?? x.hours)}>${x.clock_hours ?? x.hours}h</td>
                 <td class=${max7Cls(x.max7 ?? 0)}>${x.max7 ?? '—'}${x.max7 != null ? 'h' : ''}</td>
                 <td class=${daysCls(nWorked)}>${nWorked}</td>
                 <td class=${streakCls(x.streak)}>${x.streak}</td>
-                ${roomDays.length ? html`<td class="lv-room">${roomCell(x)}</td>` : ''}
               </tr>`;
             })}`)}</tbody>
       </table></div>
@@ -833,7 +843,10 @@ function Board() {
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.off}`}>Unavailable</span>
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.mark}`}>Called out / No-show</span>
       </div>
-      <p class="hint">Hours are scheduled on-the-clock hours. Orange = at or near a limit, red = over it.
+      ${pop && risks[pop.name] && byName[pop.name] ? html`<div class="lv-pop" style=${`left:${pop.left}px;` + (pop.up != null
+        ? `top:${pop.up}px;transform:translateY(-100%)` : `top:${pop.top}px`)}><${OverInfo} d=${byName[pop.name]} risk=${risks[pop.name]} iso=${pop.iso} /></div>` : ''}
+      <p class="hint">A shaking day would put that driver over ${max7Lim}h in 7 days — hover it to see why and how to fix it.
+        Hours are scheduled on-the-clock hours. Orange = at or near a limit, red = over it.
         Locked: 12h in a day, ${max7Lim}h in any 7 days (last week counts), 7 days in a row. A 6-day or overtime
         goes through after a pop-up.</p>
     </div>
@@ -854,7 +867,7 @@ function Board() {
     ${cell && byName[cell.name] ? html`<${CellMenu} d=${byName[cell.name]} day=${cell.day}
       info=${view.days.find((x) => x.day === cell.day)} mark=${markOf(cell.name, cell.day)} busy=${busy}
       opt=${opts && opts.data && opts.data.name === cell.name ? (opts.data.days.find((x) => x.day === cell.day) || null) : null}
-      fills=${waveFills(view, cell.day)} view=${view}
+      fills=${waveFills(view, cell.day)} view=${view} risk=${risks[cell.name]}
       onClose=${() => setCell(null)} act=${cellAct} />` : ''}
     ${marker ? html`<${MarkDialog} req=${marker} busy=${busy} onClose=${() => setMarker(null)}
       onSave=${async (kind, note) => { const m = await run('apply_mark', { ...marker, kind, note }); if (m.ok) setMarker(null); else toast(m.error.message, 'err'); }} />` : ''}

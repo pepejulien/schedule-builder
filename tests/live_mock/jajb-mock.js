@@ -85,6 +85,12 @@
       fire();
       return next;
     },
+    // Route Tracker's clock-outs: actual_hours/{week} from localStorage 'jajbmock:actual/{week}'
+    watch: (path, cb) => {
+      const f = () => cb(get(path.replace(/^actual_hours\//, 'actual/')));
+      listeners.add(f); setTimeout(f, 0);
+      return () => listeners.delete(f);
+    },
     deleteScheduleWeek: async (week) => {
       const all = weeks(); delete all[week]; put('weeks', all);
       localStorage.removeItem(K + 'log/' + week);
