@@ -47,7 +47,7 @@ const saveSort = (v) => { try { localStorage.setItem(SORT_KEY, v); } catch { /* 
 function last7(dayHours, endISO) {
   let t = 0;
   for (let k = 0; k < 7; k++) t += Number((dayHours || {})[toISODate(addDays(pd(endISO), -k))] || 0);
-  return t;
+  return Math.round(t * 100) / 100;
 }
 
 // A grid cell drawn the way Amazon's scheduling page does: a colored block,

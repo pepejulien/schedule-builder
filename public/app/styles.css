@@ -77,6 +77,8 @@ a:hover { color: var(--orange); }
 }
 .rbtn:hover { background: var(--navy-h); color: #fff; }
 main { padding: 30px 40px 44px; max-width: 1180px; width: 100%; }
+/* the Live board's week grid uses the whole screen on a wide monitor (no sideways scroll) */
+main:has(.lv-grid) { max-width: none; }
 .msteps { display: none; }
 
 /* cards */

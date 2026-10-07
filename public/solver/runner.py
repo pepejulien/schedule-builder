@@ -146,9 +146,10 @@ def _driver_rows(res):
             worked_dates=sorted(x.isoformat() for x in _worked_dates(res, dr)),
             streak=_streak(res, dr),
             day_hours={k.isoformat(): v for k, v in sorted(_day_hours(res, dr).items())},
-            clock_hours=sum(v for k, v in _day_hours(res, dr).items()
-                            if k >= res.DATEALL["Sun"]),
-            max7=_max7(_day_hours(res, dr), [res.DATEALL[d] for d in ALL_DAYS])[0],
+            # rounded: real hours (11.37 + 9.65 …) would otherwise show as 51.0199999
+            clock_hours=_num(sum(v for k, v in _day_hours(res, dr).items()
+                                 if k >= res.DATEALL["Sun"])),
+            max7=_num(_max7(_day_hours(res, dr), [res.DATEALL[d] for d in ALL_DAYS])[0]),
             # days this week whose hours are ACTUAL (Route Tracker clock-outs), not planned
             act_dates=sorted(k.isoformat() for k in (dr.get("h_act") or {})),
         ))
@@ -497,7 +498,7 @@ def _max7(hours, dates=None):
             tot = sum(hours.get(s0 + j * ONE, 0) for j in range(7))
             if tot > best:
                 best, at = tot, s0
-    return best, at
+    return _num(best), at
 
 
 def _hour_limits(res, dr, day, role):

@@ -21,7 +21,7 @@ const waveBg = (w) => WAVE_COLORS[String(w).replace(/ [AP]M$/, '')] || SHIFT_COL
 function last7(dayHours, endISO) {
   let t = 0;
   for (let k = 0; k < 7; k++) t += Number((dayHours || {})[toISODate(addDays(parseISODate(endISO), -k))] || 0);
-  return t;
+  return Math.round(t * 100) / 100;
 }
 
 // Who to keep an eye on: close to (or past) a limit.
