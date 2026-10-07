@@ -38,11 +38,18 @@ export function mergeActual(summary, list) {
   }
   const dates = (summary.days || []).map((d) => d.date);
   const start = dates[0];
+  // a day that's over and that Route Tracker tracked (anyone has a clock-out): a driver it
+  // knows with no clock-out that day didn't work it — 0 hours, not a worked day (2026-10-07)
+  const today = toISODate(new Date());
+  const tracked = new Set();
+  for (const a of list) for (const [iso, h] of Object.entries(a.days || {})) if (iso < today && Number(h)) tracked.add(iso);
   const drivers = (summary.drivers || []).map((d) => {
     const k = flKey(d.name);
     const a = dup.has(k) ? null : byKey.get(k);
     if (!a) return d;
-    const day_hours = { ...(d.day_hours || {}), ...a.days };
+    const missed = {};
+    for (const iso of tracked) if (!Number((a.days || {})[iso])) missed[iso] = 0;
+    const day_hours = { ...(d.day_hours || {}), ...missed, ...a.days };
     const clock_hours = Object.entries(day_hours).filter(([k2]) => k2 >= start).reduce((t, [, h]) => t + Number(h || 0), 0);
     let max7 = 0;
     for (const end of dates) {
@@ -50,9 +57,12 @@ export function mergeActual(summary, list) {
       for (let i = 0; i < 7; i++) t += Number(day_hours[toISODate(addDays(parseISODate(end), -i))] || 0);
       max7 = Math.max(max7, t);
     }
-    const act_dates = Object.keys(a.days).filter((x) => dates.includes(x) && Number(a.days[x])).sort();
-    // a real shift on an unscheduled day counts as worked (days in a row, days this week)
-    const worked = [...new Set([...(d.worked_dates || []), ...act_dates])].sort();
+    const act_dates = [...new Set([...Object.keys(a.days).filter((x) => dates.includes(x) && Number(a.days[x])),
+      ...Object.keys(missed).filter((x) => dates.includes(x))])].sort();
+    // a real shift on an unscheduled day counts as worked (days in a row, days this week);
+    // a scheduled day they didn't work doesn't
+    const worked = [...new Set([...(d.worked_dates || []), ...Object.keys(a.days).filter((x) => dates.includes(x) && Number(a.days[x]))])]
+      .filter((x) => !(x in missed)).sort();
     let run = 0, best = 0;
     for (const x of dates) { run = worked.includes(x) ? run + 1 : 0; best = Math.max(best, run); }
     return { ...d, day_hours, clock_hours: Math.round(clock_hours * 100) / 100, max7: Math.round(max7 * 100) / 100,

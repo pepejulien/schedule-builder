@@ -171,10 +171,17 @@ def _act_dates(dr):
     return {d for d, h in (dr.get("h_act") or {}).items() if h}
 
 
+def _missed_dates(dr):
+    """Days already over that Route Tracker tracked without this driver (0 hours in
+    h_act): scheduled, but they didn't work - a call-off nobody marked."""
+    return {d for d, h in (dr.get("h_act") or {}).items() if not h}
+
+
 def _worked_dates(res, dr):
     """This week's worked dates: scheduled ones plus any day with a real clock-out
-    (an extra shift nobody put on the schedule still counts toward days in a row)."""
-    return _sched_dates(res, dr) | _act_dates(dr)
+    (an extra shift nobody put on the schedule still counts toward days in a row),
+    minus scheduled days Route Tracker shows they didn't work."""
+    return (_sched_dates(res, dr) - _missed_dates(dr)) | _act_dates(dr)
 
 
 def _streak(res, dr):
@@ -376,6 +383,7 @@ def _run_len(res, dr, day):
     s |= {res.DATEALL[d] for d in dr["extra"] if d in res.DATEALL}
     s |= {res.DATEALL[d] for d in dr["meet"] if d in res.DATEALL}
     s |= _act_dates(dr)                      # real clock-outs on unscheduled days
+    s -= _missed_dates(dr)                   # scheduled days they didn't work
     s.add(dt)
     n = 0
     c = dt
@@ -427,6 +435,10 @@ def _day_hours(res, dr):
 # worked they replace the planned 10h / 2h: this week -> dr["h_act"], last week
 # -> dr["h_prev"] (and w_prev). Drivers match by Amazon Transporter Id, else by
 # first + last name; a name two people share is skipped (never guessed).
+# A day that's over and that Route Tracker tracked (anyone has a clock-out that day)
+# counts 0 hours for a matched driver with no clock-out that day (Jose 2026-10-07:
+# Clint was scheduled, didn't work, and still showed as over 60h). Drivers Route
+# Tracker doesn't know at all keep their schedule - a name mismatch never hides risk.
 _SUFFIX = {"jr", "sr", "ii", "iii", "iv"}
 
 
@@ -458,6 +470,16 @@ def _apply_actual(res, actual):
             by_key[k] = a
     start = res.DATEALL["Sun"]
     lo, hi = start - 7 * ONE, start + 7 * ONE
+    today = datetime.date.today()
+    tracked = set()
+    for a in actual:
+        for iso, h in ((a.get("days") or {}) if isinstance(a, dict) else {}).items():
+            try:
+                d = datetime.date.fromisoformat(iso)
+            except Exception:  # noqa: BLE001
+                continue
+            if lo <= d < hi and d < today and _num(h):
+                tracked.add(d)
     n = 0
     for dr in res.roster:
         a = by_tid.get(str(dr.get("tid")).strip()) if dr.get("tid") else None
@@ -476,12 +498,17 @@ def _apply_actual(res, actual):
                 act[d] = h
             elif lo <= d < start:
                 prev[d] = h
+        for d in tracked:                    # tracked days without them: they didn't work
+            if start <= d:
+                act.setdefault(d, 0)
+            else:
+                prev.setdefault(d, 0)
         dr["h_act"] = act
         if prev:
             hp = dict(dr.get("h_prev") or {x: res.PH for x in dr["w_prev"]})
             hp.update(prev)
             dr["h_prev"] = {k: v for k, v in hp.items() if v}
-            dr["w_prev"] = set(dr["w_prev"]) | {d for d, h in prev.items() if h}
+            dr["w_prev"] = (set(dr["w_prev"]) | {d for d, h in prev.items() if h}) - {d for d, h in prev.items() if not h}
         n += 1
     return n
 

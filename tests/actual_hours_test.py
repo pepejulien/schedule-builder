@@ -102,5 +102,27 @@ b2 = json.loads(runner.run(cpath))
 r3 = next(x for x in b2['drivers'] if x['name'] == name)
 ok(r3['day_hours'].get(prev_sat) == 4, "next week's build uses last Saturday's actual 4h")
 
+print("live slot: a tracked day without the driver's clock-out = they didn't work (Clint, 2026-10-07)")
+runner.use_slot('live')
+tue = days['Tue']
+other = next((x for x in built['drivers'] if 'Tue' in x['road_days'] and x['name'] != name), None)
+if other:
+    of, ol = other['name'].lower().split()[0], other['name'].lower().split()[-1]
+    # Route Tracker tracked Tuesday (the first driver has a clock-out); `other` is known to it
+    # (a clock-out last Saturday) but has none on Tuesday
+    act3 = [{'name': name, 'keys': [f'{first}|{last}'], 'days': {mon: 10, tue: 9}},
+            {'name': other['name'], 'keys': [f'{of}|{ol}'], 'days': {prev_sat: 8}}]
+    l3 = J(runner.load_state, {'state': st['state'], 'out': os.path.join(tmp, 'live3.xlsx'), 'actual': act3})
+    r5 = next(x for x in l3['drivers'] if x['name'] == other['name'])
+    ok(r5['day_hours'].get(tue) == 0, f"{other['name']} scheduled Tuesday, no clock-out: 0h")
+    ok(tue not in r5['worked_dates'], 'and Tuesday is not a worked day')
+    gone = other['day_hours'].get(mon, 0) + other['day_hours'].get(tue, 0)   # Monday is tracked too
+    ok(abs(r5['clock_hours'] - (other['clock_hours'] - gone)) < 0.01, 'the week total drops by the days not worked')
+    # someone Route Tracker doesn't know at all keeps the schedule (a name mismatch never hides risk)
+    stranger = next(x for x in l3['drivers'] if x['name'] not in (name, other['name']) and 'Tue' in x['road_days'])
+    ok(stranger['day_hours'].get(tue) == 10, 'a driver with no clock-outs at all keeps the planned 10h')
+else:
+    ok(True, '(no second Tuesday driver - skipped)')
+
 print('\nFAIL: ' + '; '.join(fails) if fails else '\nPASS')
 sys.exit(1 if fails else 0)
