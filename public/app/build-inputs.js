@@ -5,6 +5,7 @@ export function assembleFromWizard(w) {
   const state = {
     week: { num: w.week.num, startISO: w.week.startISO, label: w.week.label },
     availabilityRosterNames: w.availability?.rosterNames || [],
+    availabilityDrivers: w.availability?.drivers || [],
     tierByDriver: w.tierByDriver || {},
     demand: w.demand || {},
     backups: w.backups || { mode: 'pct', pct: 0.15 },

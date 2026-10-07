@@ -60,6 +60,7 @@ import re
 from build_weekly_schedule import (
     load_config, build_schedule, write_xlsx, check_invariants, print_summary,
     ScheduleConfigError, FREE_name, norm, ALL as ALL_DAYS, Result,
+    _open_shifts_sheet, _layout, _is_data_name, fmt_wave_time,
 )
 
 WEEKEND = {'Sat', 'Sun'}
@@ -317,7 +318,12 @@ def run(config_path):
     {ok:false, kind:'crash', message} (with a traceback)."""
     try:
         cfg = load_config(config_path)
+        if cfg.get("exact_copy"):                 # Amazon's sheet as is (see _force_exact)
+            cfg = _exact_plan(cfg)
         cfg, res, tnotes = _build_with_auto_trainers(cfg)
+        if cfg.get("exact_copy"):
+            _force_exact(res)
+            tnotes = []
         res.notes = list(res.notes) + tnotes
         if _apply_actual(res, cfg.get("actual")):   # last week's REAL hours (Route Tracker)
             res.notes = list(res.notes) + ["Last week's hours: actual clock-outs from Route Tracker"]
@@ -478,6 +484,91 @@ def _apply_actual(res, actual):
             dr["w_prev"] = set(dr["w_prev"]) | {d for d, h in prev.items() if h}
         n += 1
     return n
+
+
+# ---- exact copy of Amazon's schedule (2026-10-07) -------------------------------
+# Jose: "put week 41 in the app, by the Excel sheet". With config exact_copy, the
+# uploaded Shifts & Availability sheet is taken AS IS - every route, backup and
+# helper day with its time - instead of being re-planned. The usual build runs
+# first (so every other field of the week is set up the normal way); then who
+# works when is replaced by Amazon's sheet. The rules are still CHECKED (and
+# shown), just not used to move anyone.
+_AMZ_TIME = re.compile(r'(\d{1,2}):(\d{2})\s*([AP]M)', re.I)
+
+
+def _amazon_cells(avail_file):
+    """{norm(name): {day: (role, 'h:MM AM')}} - role 'road' | 'bk' | 'helper'."""
+    ws = _open_shifts_sheet(avail_file)
+    namec, _tidc, daycols, r0 = _layout(ws)
+    out = {}
+    for r in range(r0, ws.max_row + 1):
+        nm = ws.cell(r, namec).value
+        if not _is_data_name(nm):
+            continue
+        got = {}
+        for d, col in daycols.items():
+            v = str(ws.cell(r, col).value or '').strip()
+            lv = v.lower()
+            if not v or any(t in lv for t in ('unavail', 'meeting', 'dispatch', 'closed')):
+                continue
+            m = _AMZ_TIME.search(v)
+            if not m:
+                continue
+            mins = (int(m.group(1)) % 12 + (12 if m.group(3).upper() == 'PM' else 0)) * 60 + int(m.group(2))
+            role = 'bk' if 'backup' in lv else 'helper' if lv.startswith('helper') else 'road'
+            got[d] = (role, fmt_wave_time(mins))
+        out[norm(re.sub(r'\s+', ' ', str(nm)))] = got
+    return out
+
+
+def _exact_plan(cfg):
+    """Waves / backups / closed days for the config, counted from Amazon's sheet."""
+    waves, bk = {d: {} for d in ALL_DAYS}, {d: 0 for d in ALL_DAYS}
+    for got in _amazon_cells(cfg['avail_file']).values():
+        for d, (role, t) in got.items():
+            if role == 'road':
+                waves[d][t] = waves[d].get(t, 0) + 1
+            elif role == 'bk':
+                bk[d] += 1
+    days = [d for d in ALL_DAYS if waves[d]]
+    cfg['waves'] = {d: waves[d] for d in days}
+    cfg['backup_per_day'] = {d: bk[d] for d in days}
+    cfg['closed_days'] = [d for d in ALL_DAYS if d not in days]
+    cfg['training_pairs'] = []
+    cfg['auto_training'] = False
+    return cfg
+
+
+def _force_exact(res):
+    """Replace every assignment with exactly what Amazon's sheet says."""
+    cells = _amazon_cells(res.cfg['avail_file'])
+    idx = {norm(dr['name']): i for i, dr in enumerate(res.roster)}
+    for dr in res.roster:
+        dr['prim'], dr['bk'], dr['helper'] = [], [], []
+    res.cell = {d: {} for d in res.DAYS}
+    waves, bk = {d: {} for d in res.DAYS}, {d: 0 for d in res.DAYS}
+    for nm, got in cells.items():
+        i = idx.get(nm)
+        if i is None:
+            continue
+        dr = res.roster[i]
+        for d in ALL_DAYS:
+            if d not in got or d not in res.DAYS:
+                continue
+            role, t = got[d]
+            if role == 'road':
+                dr['prim'].append(d); res.cell[d][i] = t
+                waves[d][t] = waves[d].get(t, 0) + 1
+            elif role == 'bk':
+                dr['bk'].append(d); res.cell[d][i] = t + ' Backup'; bk[d] += 1
+            else:
+                dr['helper'].append(d); res.cell[d][i] = t + ' (TRAIN helper w/ ride-along)'
+    res.waves = waves
+    res.routes = {d: sum(waves[d].values()) for d in res.DAYS}
+    res.backup = bk
+    res.PAIRLOG, res.infeasible, res.exchanges = [], [], []
+    res.notes = ["Copied exactly from Amazon's schedule - nobody was moved; the rules are checked, not applied."]
+    return res
 
 
 def _num(h):

@@ -6,7 +6,7 @@
 import { html } from '../preact-setup.js';
 import { useState } from 'preact/hooks';
 import { useStore, setWizard, toast } from '../store.js';
-import { StepNav } from '../app.js';
+import { StepNav, goStep, STEPS } from '../app.js';
 import { Banner, Spinner, Icon, readFileBytes } from '../ui.js';
 import { warmup, editRequest } from '../solver-client.js';
 import { canLive, liveWeek } from '../api.js';
@@ -54,6 +54,7 @@ export function StepFiles() {
   const avail = useStore((s) => s.wizard.availability);
   const prior = useStore((s) => s.wizard.priorWeek);
   const demand = useStore((s) => s.wizard.demand);
+  const exact = useStore((s) => !!(s.wizard.advanced && s.wizard.advanced.exact_copy));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [drag, setDrag] = useState(false);
@@ -181,6 +182,19 @@ export function StepFiles() {
             No file — this is the very first week</button>` : ''}
         <//>
       </div>
+      ${avail && avail.counts.seed > 0 ? html`<div class="card" style="margin-top:12px;border-left:4px solid var(--accent)">
+        <b>Already scheduled in Amazon?</b>
+        <p class="hint" style="margin:4px 0 8px">This file has ${avail.counts.seed} shifts filled in. Copy them onto the
+          Live board exactly as they are — same people, same days, same times — instead of building a new schedule.
+          The rules are still checked and shown, nobody is moved.</p>
+        ${exact ? html`<${Banner} kind="ok">Exact copy is <b>on</b> for this week.${' '}
+            <button class="link" onClick=${() => setWizard((w) => ({ advanced: { ...w.advanced, exact_copy: false } }))}>Turn it off</button><//>`
+          : ''}
+        <button class="accent" disabled=${!okDate || !week.num}
+          onClick=${() => { setWizard((w) => ({ advanced: { ...w.advanced, exact_copy: true } })); goStep(STEPS.length - 1); }}>
+          Copy this schedule exactly → Build</button>
+        ${!okDate || !week.num ? html`<span class="muted small" style="margin-left:8px">Fill in the week number and its Sunday below first.</span>` : ''}
+      </div>` : ''}
       ${avail && prior.bytes ? html`<p class="muted" style="margin:6px 2px 0">Wrong way round?${' '}<button class="link" onClick=${swap}>Swap the two files</button></p>` : ''}
 
       <h3>Week</h3>

@@ -105,9 +105,25 @@ export function assembleConfig(state) {
 
   // --- waves + closed days ---
   const waves = {};
-  for (const d of DAYS) {
-    const w = dayWaves(state.demand?.[d]);
-    if (Object.keys(w).length) waves[d] = w;
+  const exactCopy = !!adv.exact_copy;
+  const exactBk = {};
+  if (exactCopy) {
+    // "Copy Amazon's schedule exactly" (2026-10-07): the week's waves and backups are the ones
+    // already in the uploaded sheet; the solver takes every shift as is (runner._force_exact).
+    for (const dv of state.availabilityDrivers || []) for (const d of DAYS) {
+      const t = String(dv.days?.[d]?.text || '');
+      const m = t.match(/(\d{1,2}:\d{2}\s*[AP]M)/i);
+      if (!m || /unavail|meeting|dispatch|closed/i.test(t)) continue;
+      if (/backup/i.test(t)) { exactBk[d] = (exactBk[d] || 0) + 1; continue; }
+      if (/^helper/i.test(t.trim())) continue;
+      const key = m[1].toUpperCase().replace(/\s+/, ' ').replace(/^0/, '');
+      (waves[d] = waves[d] || {})[key] = (waves[d][key] || 0) + 1;
+    }
+  } else {
+    for (const d of DAYS) {
+      const w = dayWaves(state.demand?.[d]);
+      if (Object.keys(w).length) waves[d] = w;
+    }
   }
   const closed = DAYS.filter((d) => !(d in waves));
 
@@ -232,6 +248,7 @@ export function assembleConfig(state) {
     driver_rates,
     driver_tiers,
     use_premade_shifts: adv.use_premade_shifts ?? true,
+    ...(exactCopy ? { exact_copy: true, backup_per_day: exactBk, training_pairs: [], auto_training: false } : {}),
     weekend_spread: adv.weekend_spread ?? true,
     training_pairs: trainingPairs,
     auto_training,

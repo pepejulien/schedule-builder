@@ -13,6 +13,7 @@ const NUM_FIELDS = [
 ];
 
 const TOGGLES = [
+  { key: 'exact_copy', label: "Copy Amazon's schedule exactly (no re-planning)", def: false },
   { key: 'use_premade_shifts', label: 'Honor pre-made shifts as seeds', def: true },
   { key: 'weekend_spread', label: 'Spread weekend days (~1 per driver)', def: true },
   { key: 'merge_standing_unavailable', label: 'Merge standing days-off from preferences', def: false },
