@@ -11,6 +11,8 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 PUBLIC = os.path.join(HERE, '..', '..', 'public')
 FIX = os.path.join(HERE, '..', 'fixtures')
+# the Driver Board's last local build, served as the fake Driver Dashboard data
+BOARD = r'C:\Claude Code\JAJB-Driver-Board\data\driver_standing.json'
 PORT = int(os.environ.get('PORT', '8777'))
 
 
@@ -37,6 +39,8 @@ class H(http.server.SimpleHTTPRequestHandler):
             return self._send(html.encode('utf-8'), 'text/html; charset=utf-8')
         if path == '/__mock/jajb-mock.js':
             return self._send(open(os.path.join(HERE, 'jajb-mock.js'), 'rb').read(), 'text/javascript')
+        if path == '/__board.json' and os.path.isfile(BOARD):
+            return self._send(open(BOARD, 'rb').read(), 'application/json')
         if path.startswith('/__fixtures/'):
             f = os.path.join(FIX, os.path.basename(path))
             if os.path.isfile(f):

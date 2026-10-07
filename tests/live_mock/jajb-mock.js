@@ -23,7 +23,7 @@
     user: () => ({ email: 'test@example.com' }),
     me: () => ({ name, active: true, apps: { schedule: true } }),
     waitMe: () => Promise.resolve(),
-    has: () => true,
+    has: (a) => !(a === 'drivers' && params.get('nodrivers') === '1'),
     signOut: async () => {},
     scheduleGet: async (n) => get('schedule/' + n),
     schedulePut: async (n, f) => put('schedule/' + n, { ...f, by: name, at: now() }),
@@ -32,6 +32,16 @@
       const t = get('training') || {}; t[week] = { label, pairs }; put('training', t);
     },
 
+    // the Driver Dashboard's data (boards/drivers); ?nodrivers=1 = a login without that app.
+    // The last two drivers are moved to `leaving`, like the cloud does for roster leavers.
+    driverBoardData: async () => {
+      if (params.get('nodrivers') === '1') throw Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+      const r = await fetch('/__board.json');
+      if (!r.ok) return null;
+      const db = await r.json();
+      db.leaving = db.drivers.splice(-2);
+      return { db, updated: now(), asof: db.asof };
+    },
     scheduleWeeks: async (n) => Object.values(weeks()).map((w) => w.meta)
       .sort((a, b) => (a.week < b.week ? 1 : -1)).slice(0, n || 60),
     scheduleWeekData: async (week) => {

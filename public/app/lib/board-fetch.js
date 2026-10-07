@@ -1,3 +1,7 @@
+// On the JAJB site (2026-10-06) the tiers come from the Firebase Driver
+// Dashboard instead — fetchBoardFromDashboard() below, no password. The
+// Sheet path stays for Netlify and for logins without the Driver Dashboard.
+//
 // Fetch + decrypt the JAJB driver board's data, entirely in the browser.
 // The board publishes an encrypted blob down column A of a public Google Sheet;
 // we fetch the same CSV endpoint (CORS-open) and decrypt with the board
@@ -140,4 +144,45 @@ export async function fetchBoardDb(pw) {
     e.cause = err;
     throw e;
   }
+}
+
+// ------------------------------------------------- Firebase Driver Dashboard --
+// The login can read the Driver Dashboard (apps.drivers) on the JAJB site.
+export function canFetchFromDashboard() {
+  const J = typeof window !== 'undefined' ? window.JAJB : null;
+  return !!(J && typeof J.driverBoardData === 'function' && J.has('drivers'));
+}
+
+// The dashboard's own standings (Firestore boards/drivers). Same shape as the
+// Sheet payload, except drivers leaving the roster sit in db.leaving — they
+// are still on this week's roster, so they're tiered like everyone else (the
+// cloud's Sheet feed folds them in the same way). Former drivers are dropped.
+export async function fetchBoardFromDashboard() {
+  let got;
+  try {
+    got = await window.JAJB.driverBoardData();
+  } catch (err) {
+    const denied = /permission|insufficient/i.test(String(err && (err.code || err.message)));
+    const e = new Error(denied
+      ? "Your login can't open the Driver Dashboard — ask Jose to add it, or use the board password instead."
+      : 'Could not reach the Driver Dashboard. Check your connection.');
+    e.code = denied ? 'access' : 'network';
+    e.cause = err;
+    throw e;
+  }
+  if (!got || !got.db) {
+    const e = new Error("The Driver Dashboard hasn't published its numbers yet.");
+    e.code = 'format';
+    throw e;
+  }
+  const db = { ...got.db };
+  if (Array.isArray(db.leaving) && db.leaving.length) db.drivers = [...(db.drivers || []), ...db.leaving];
+  delete db.leaving;
+  delete db.former;
+  if (!Array.isArray(db.drivers)) {
+    const e = new Error('The Driver Dashboard data is not in the expected format.');
+    e.code = 'format';
+    throw e;
+  }
+  return db;
 }

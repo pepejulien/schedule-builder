@@ -3,11 +3,13 @@ import { useState, useEffect } from 'preact/hooks';
 import { useStore, setWizard, toast } from '../store.js';
 import { StepNav } from '../app.js';
 import { Banner, Spinner, TierBadge } from '../ui.js';
-import { fetchBoardDb, getStoredBoardPw, setStoredBoardPw } from '../lib/board-fetch.js';
+import {
+  fetchBoardDb, getStoredBoardPw, setStoredBoardPw, canFetchFromDashboard, fetchBoardFromDashboard,
+} from '../lib/board-fetch.js';
 import { computeTiers, validateDb, sanityWarnings, TIER_ORDER } from '../lib/board-metrics.js';
 import { matchName } from '../lib/names.js';
 import { deriveGroup, groupToValue, hasTierOverlap, GROUP_OPTIONS } from '../lib/config-assemble.js';
-import { storeGet, storePutJSON } from '../api.js';
+import { storeGet, storePutJSON, onFirebase } from '../api.js';
 
 export function Step3Tiers() {
   const avail = useStore((s) => s.wizard.availability);
@@ -19,6 +21,10 @@ export function Step3Tiers() {
   const [err, setErr] = useState('');
   const [aliases, setAliases] = useState({});
   const [unmatched, setUnmatched] = useState([]); // board names with no confident roster match
+  // JAJB site: tiers come from the Driver Dashboard (no password); the old
+  // Sheet feed + password stays as the fallback.
+  const dash = canFetchFromDashboard();
+  const [useSheet, setUseSheet] = useState(!dash);
 
   const roster = avail?.rosterNames || [];
 
@@ -35,13 +41,13 @@ export function Step3Tiers() {
     return rows;
   }
 
-  async function doFetch() {
+  async function doFetch(fromDash) {
     setBusy(true); setErr('');
     try {
-      const db = await fetchBoardDb(pw);
+      const db = fromDash ? await fetchBoardFromDashboard() : await fetchBoardDb(pw);
       const probs = validateDb(db);
       if (probs.length) throw Object.assign(new Error('Board data format changed: ' + probs.join('; ')), { code: 'format' });
-      setStoredBoardPw(pw);
+      if (!fromDash) setStoredBoardPw(pw);
       const tiers = computeTiers(db, 30);
       const rows = seedRows();
       const newUnmatched = [];
@@ -63,8 +69,9 @@ export function Step3Tiers() {
       }
       setUnmatched(newUnmatched);
       const warnings = sanityWarnings(tiers, db.asof);
-      setWizard({ tierByDriver: rows, tierMeta: { asof: db.asof, fetched: true, warnings } });
-      toast(`Board loaded — ${tiers.length} drivers (as of ${db.asof})`);
+      setWizard({ tierByDriver: rows, tierMeta: { asof: db.asof, fetched: true, warnings,
+        source: fromDash ? 'dashboard' : 'sheet' } });
+      toast(`${fromDash ? 'Driver Dashboard' : 'Board'} loaded — ${tiers.length} drivers (as of ${db.asof})`);
     } catch (e) {
       if (e.code === 'password') setStoredBoardPw('');
       setErr(e.message || 'Could not load the board.');
@@ -115,21 +122,34 @@ export function Step3Tiers() {
   return html`
     <div class="card">
       <h2>Driver tiers & day targets</h2>
-      <p class="hint">Pull each driver's tier, 30-day routes and rate straight from the JAJB driver board.
-        The board password stays on this device and is never sent anywhere.</p>
+      <p class="hint">${!useSheet
+        ? 'Pull each driver\'s tier, 30-day routes and rate straight from the Driver Dashboard — the same numbers it shows.'
+        : 'Pull each driver\'s tier, 30-day routes and rate from the driver board feed. The board password stays on this device and is never sent anywhere.'}</p>
+      ${onFirebase() && !dash ? html`<${Banner} kind="info">Your login doesn't include the Driver Dashboard, so this uses
+        the old board feed and its password. Ask Jose to add the Driver Dashboard to skip the password.<//>` : ''}
 
-      ${!tierMeta.fetched ? html`
+      ${!tierMeta.fetched ? (!useSheet ? html`
+        <div class="row">
+          <button class="primary" disabled=${busy} onClick=${() => doFetch(true)}>
+            ${busy ? html`<${Spinner}/> Loading the Driver Dashboard…` : 'Fetch tiers from the Driver Dashboard'}</button>
+          <button class="ghost" onClick=${useManual}>Enter tiers manually instead</button>
+        </div>
+        <p class="muted" style="margin-top:8px"><button class="link" onClick=${() => setUseSheet(true)}>
+          Use the old board feed (password) instead</button></p>
+      ` : html`
         <div class="row">
           <input type="password" placeholder="Board password" value=${pw}
             onInput=${(e) => setPw(e.target.value)} style="min-width:240px" />
-          <button class="primary" disabled=${busy || !pw} onClick=${doFetch}>
+          <button class="primary" disabled=${busy || !pw} onClick=${() => doFetch(false)}>
             ${busy ? html`<${Spinner}/> Loading board…` : 'Fetch tiers from board'}</button>
           <button class="ghost" onClick=${useManual}>Enter tiers manually instead</button>
         </div>
-      ` : html`
+        ${dash ? html`<p class="muted" style="margin-top:8px"><button class="link" onClick=${() => setUseSheet(false)}>
+          ← Back to the Driver Dashboard</button></p>` : ''}
+      `) : html`
         <div class="row">
-          <button class="small" onClick=${() => { setWizard({ tierMeta: { ...tierMeta, fetched: false } }); }}>Re-fetch board</button>
-          ${tierMeta.asof ? html`<span class="muted">Board as of ${tierMeta.asof}</span>` : ''}
+          <button class="small" onClick=${() => { setWizard({ tierMeta: { ...tierMeta, fetched: false } }); }}>Re-fetch tiers</button>
+          ${tierMeta.asof ? html`<span class="muted">${tierMeta.source === 'dashboard' ? 'Driver Dashboard' : 'Board'} as of ${tierMeta.asof}</span>` : ''}
         </div>`}
 
       ${err ? html`<${Banner} kind="err">${err}<//>` : ''}
