@@ -35,6 +35,15 @@ export function translateOverride(line) {
   if (m) return `${m[1]} has a backup with fewer than 2 road days.`;
   m = line.match(/^BACKUP-ONLY: (.+)$/);
   if (m) return `${m[1]} has backup days but no road days.`;
+  // the Live board's approved 6-days / overtime (2026-10-06)
+  m = line.match(/^TOTDAYS: (.+) over (\d+) worked days/);
+  if (m) return `${m[1]} works a 6-day (over the usual ${m[2]} days) — approved.`;
+  m = line.match(/^CONSEC>(\d+): (.+) run=(\d+)/);
+  if (m) return `${m[2]} works ${m[3]} days in a row — approved.`;
+  m = line.match(/^OT: (.+) road days over (\d+)h/);
+  if (m) return `${m[1]} goes over ${m[2]}h of road (overtime) — approved.`;
+  m = line.match(/^DAYCAP: (.+) over (\d+) primary days/);
+  if (m) return `${m[1]} has more than ${m[2]} road days — approved.`;
   return line;
 }
 
@@ -70,6 +79,38 @@ export function ConfirmOverride({ req, onCancel, onConfirm }) {
       </div>
     </div>
   </div>`;
+}
+
+// The Live board's pop-up (Jose 2026-10-06): a 6-day (6 in a row, or a 6th
+// worked day) and overtime are allowed there, but only after this. 12h in a
+// day, 60h in any 7 days and 7 in a row never get here — they're locked.
+export function LimitConfirm({ req, onCancel, onConfirm }) {
+  const first = req.name.trim().split(/\s+/)[0];
+  const six = req.limits.some((l) => /^6-day/.test(l));
+  const what = req.role === 'road' ? 'a route' : 'a backup';
+  return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+    <div class="edit-modal card override-modal limit-modal">
+      <h3>⚠ ${six ? `${req.name} will be scheduled for a 6-day` : `${req.name} goes over the usual limits`}</h3>
+      <p>Giving ${first} ${what} on <b>${req.day}</b> means:</p>
+      <ul>${req.limits.map((l) => html`<li><b>${l.replace(/^(6-day|overtime): /, '')}</b></li>`)}</ul>
+      <p class="hint">Still locked, no matter what: more than 12h on the clock in a day, more than 60h in any
+        7 days (last week counts), and 7 days in a row. This will be logged as approved.</p>
+      <div class="row" style="margin-top:14px">
+        <button onClick=${onCancel}>Cancel</button>
+        <button class="danger" onClick=${onConfirm}>${six ? `Yes — schedule ${first} for a 6-day` : `Yes — schedule ${first}`}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Run an edit after whatever pop-ups it needs: the typed day-off confirm
+// (unavReasons), then the 6-day/overtime pop-up (limits). run(flags).
+export function runConfirmed({ name, day, role, unavReasons, limits }, setUnav, setLimit, run) {
+  const step2 = (flags) => ((limits && limits.length)
+    ? setLimit({ name, day, role, limits, run: () => run({ ...flags, confirm_limits: true }) })
+    : run(flags));
+  if (unavReasons) setUnav({ name, day, role, reasons: unavReasons, run: () => step2({ confirm_unavailable: true }) });
+  else step2({});
 }
 
 // Who trains whom this week, shown above the downloads so it's checked
@@ -160,6 +201,7 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
   const GROUPS = [
     ['ok', 'Safe — no rule would break'],
     ['warn', 'Allowed, but will be flagged'],
+    ['confirm', '6-day / overtime — allowed after a pop-up'],
     ['unavail', 'Day off — needs a confirmed override'],
     ['blocked', 'Locked — compliance rule'],
   ];
@@ -228,6 +270,7 @@ export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
   const [swap, setSwap] = useState(null);   // {day, want, confirmed, loading, error, list} | null
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(null); // ConfirmOverride request | null
+  const [limit, setLimit] = useState(null);     // LimitConfirm request | null
 
   useEffect(() => {
     let alive = true;
@@ -241,24 +284,28 @@ export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
     return () => { alive = false; };
   }, [name]);
 
-  async function openSwap(day, want, confirmed = false) {
-    setSwap({ day, want, confirmed, loading: true, error: null, list: null });
+  // flags: the pop-ups already confirmed for this day ({confirm_unavailable,
+  // confirm_limits}), carried into the swap's apply
+  async function openSwap(day, want, flags = {}) {
+    setSwap({ day, want, flags, loading: true, error: null, list: null });
     const m = await req('swap_candidates', { day, for_name: name });
     setSwap((s) => (s && s.day === day)
-      ? (m.ok ? { day, want, confirmed, loading: false, error: null, list: m.data.candidates }
-        : { day, want, confirmed, loading: false, error: m.error, list: null })
+      ? (m.ok ? { day, want, flags, loading: false, error: null, list: m.data.candidates }
+        : { day, want, flags, loading: false, error: m.error, list: null })
       : s);
   }
 
-  // A day the driver asked off: confirm first, then add (or open the swap
-  // step if that day's routes are full).
+  // A day the driver asked off, or a 6-day / overtime (Live board): the
+  // pop-ups first, then add (or open the swap step if the routes are full).
   function overrideDay(dd, role) {
     const cell = role === 'road' ? dd.road : dd.backup;
-    setConfirm({ name, day: dd.day, role, reasons: cell.reasons,
-      run: () => (role === 'road' && dd.road.full
-        ? openSwap(dd.day, dd.road.want, true)
-        : apply({ day: dd.day, role, confirm_unavailable: true })) });
+    runConfirmed({ name, day: dd.day, role, unavReasons: cell.status === 'unavail' ? cell.reasons : null,
+      limits: cell.limits }, setConfirm, setLimit,
+    (flags) => (role === 'road' && dd.road.full
+      ? openSwap(dd.day, dd.road.want, flags)
+      : apply({ day: dd.day, role, ...flags })));
   }
+  const sixLabel = (cell) => ((cell.limits || []).some((l) => /^6-day/.test(l)) ? '6-day — confirm…' : 'Overtime — confirm…');
   const lockWhy = (cell) => html`<span class="cand-inline-why" title=${cell.reasons.join('; ')}>🔒 ${cell.reasons[0] || ''}</span>`;
 
   async function apply(payload) {
@@ -295,6 +342,9 @@ export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
             : dd.road.status === 'unavail'
             ? html`<button class="slot-btn unavail" disabled=${busy} title=${dd.road.reasons.join('; ')}
                 onClick=${() => overrideDay(dd, 'road')}>Day off — override…</button>`
+            : dd.road.status === 'confirm'
+            ? html`<button class="slot-btn confirm" disabled=${busy} title=${dd.road.reasons.join('; ')}
+                onClick=${() => overrideDay(dd, 'road')}>${sixLabel(dd.road)}</button>`
             : dd.road.status === 'full'
             ? html`<button class="slot-btn full" disabled=${busy}
                 title=${`All ${dd.road.want} route(s) on ${dd.day} are filled — someone must step down to backup`}
@@ -308,6 +358,9 @@ export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
             : dd.backup.status === 'unavail'
             ? html`<button class="slot-btn unavail" disabled=${busy} title=${dd.backup.reasons.join('; ')}
                 onClick=${() => overrideDay(dd, 'backup')}>Day off — override…</button>`
+            : dd.backup.status === 'confirm'
+            ? html`<button class="slot-btn confirm" disabled=${busy} title=${dd.backup.reasons.join('; ')}
+                onClick=${() => overrideDay(dd, 'backup')}>${sixLabel(dd.backup)}</button>`
             : html`<button class=${'slot-btn ' + (dd.backup.over_target ? 'warn' : dd.backup.status)} disabled=${busy}
                 title=${dd.backup.reasons.join('; ')}
                 onClick=${() => apply({ day: dd.day, role: 'backup' })}>
@@ -333,7 +386,7 @@ export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
           return html`<div class=${'cand ' + c.status}>
             <button class="cand-pick" disabled=${busy || !clickable}
               onClick=${() => clickable && apply({ day: swap.day, role: 'road', swap_name: c.name,
-                confirm_unavailable: swap.confirmed })}>${c.name}</button>
+                ...swap.flags })}>${c.name}</button>
             <span class="chip ${meta.chip}">${meta.short}</span>
             <span class="cand-hours">${c.hours}h → ${c.new_hours}h</span>
             <span class="muted">Road: ${c.road_days.join(' ')}${c.backup_days.length ? ' · Bk: ' + c.backup_days.join(' ') : ''}</span>
@@ -342,7 +395,7 @@ export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
         })}
         <div class="row" style="margin-top:10px">
           <button disabled=${busy} onClick=${() => apply({ day: swap.day, role: 'road', extra_route: true,
-            confirm_unavailable: swap.confirmed })}>
+            ...swap.flags })}>
             Add as an EXTRA route instead (${swap.day} becomes ${swap.want + 1} routes)</button>
           <button disabled=${busy} onClick=${() => setSwap(null)}>← Back to days</button>
         </div>
@@ -355,6 +408,8 @@ export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
     </div>
     ${confirm ? html`<${ConfirmOverride} req=${confirm} onCancel=${() => setConfirm(null)}
       onConfirm=${() => { const q = confirm; setConfirm(null); q.run(); }} />` : ''}
+    ${limit ? html`<${LimitConfirm} req=${limit} onCancel=${() => setLimit(null)}
+      onConfirm=${() => { const q = limit; setLimit(null); q.run(); }} />` : ''}
   </div>`;
 }
 

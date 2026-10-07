@@ -396,3 +396,22 @@ table.lv-grid { font-size: 12.5px; }
 .pubbox { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap;
   border: 1px solid rgba(36,55,98,.18); background: rgba(36,55,98,.04); border-radius: 14px; padding: 12px 14px; margin: 4px 0 12px; }
 .pubbox.done { border-color: rgba(47,143,86,.35); background: rgba(67,176,106,.06); }
+
+/* ---- Live board, Amazon look (2026-10-06): colored shift blocks ---- */
+.lv-grid td.lv-cell { padding: 3px; min-width: 92px; background: #fff; }
+.lv-cell.k-road, .lv-cell.k-bk, .lv-cell.k-train, .lv-cell.k-mark { background: #fff; color: inherit; }
+.lv-blk { border-radius: 4px; padding: 5px 7px; text-align: left; font-size: 12px; line-height: 1.25; color: #16191f; font-weight: 600; min-height: 32px; }
+.lv-blk small { display: block; font-weight: 500; font-size: 11px; }
+.lv-blk.b-off { font-weight: 500; color: #414750; }
+.lv-blk.b-mark { color: #5b0f0f; }
+.lv-grid th.past { background: repeating-linear-gradient(135deg, #fbfbfd 0 6px, #eef0f3 6px 12px); }
+.lv-sub { font-size: 11px; color: var(--muted2); font-weight: 500; }
+.chip.trainer-chip { background: #FFA28A; color: #5b2412; padding: 1px 7px; font-size: 10.5px; }
+.lv-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.lv-legend .lv-sw { padding: 2px 8px; border-radius: 4px; font-size: 11.5px; font-weight: 600; color: #16191f; }
+.cand-h.confirm { color: #c0603a; }
+.cand.confirm { background: #fff4ec; }
+.cand.confirm .cand-pick { border-color: #f1c3a0; background: #fde6d4; color: #8a3f12; }
+.slot-btn.confirm { border-color: #f1c3a0; background: #fde6d4; color: #8a3f12; }
+.limit-modal { border-top-color: #df7332; }
+.limit-modal h3 { color: #c0603a; }

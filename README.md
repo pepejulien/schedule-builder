@@ -20,6 +20,10 @@
 > (`export_state` / `load_state`). Test locally without Firestore: `python tests/live_mock/serve.py`
 > (mock `window.JAJB` in localStorage; `?as=Name` plays a second person) and
 > `python tests/live_state_test.py` for the engine.
+> **Hours (2026-10-06):** hard everywhere — never over 12h on the clock in a day or 60h in any
+> 7 days (last week's real hours from its Live board), never 7 days in a row. On the Live board
+> only, a 6-day and overtime go through after a pop-up (`confirm_limits`). Cells use Amazon's
+> own scheduling colors; trainers show as Trainer (Amazon's Helper color).
 
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's

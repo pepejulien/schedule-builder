@@ -4,7 +4,10 @@
 //
 // Rules are the builder's own (runner.py _assess): green = safe, yellow =
 // policy (allowed, flagged), red = they asked the day off (typed confirm),
-// grey = compliance (locked). Hours are SCHEDULED hours (route 10h, backup 2h).
+// grey = compliance (locked). Hours are SCHEDULED hours on the clock (route
+// 10h, backup 2h, meeting 2h, dispatch 12h). Here only, a 6-day and overtime
+// go through after a pop-up (orange); 12h a day / 60h in 7 days / 7 in a row
+// stay locked. Cells use Amazon's own shift colors (2026-10-06).
 import { html } from '../preact-setup.js';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, setWizard, toast } from '../store.js';
@@ -14,12 +17,14 @@ import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog } from '../ap
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
 import {
-  AddEditor, WaveEditor, SlotEditor, ConfirmOverride, TIER_META, TIER_ORDER,
+  AddEditor, WaveEditor, SlotEditor, ConfirmOverride, LimitConfirm, runConfirmed, TIER_META, TIER_ORDER,
   translateInfeasible, translateOverride,
 } from '../steps/step9-build.js';
 import {
-  loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellText, cellKind,
+  loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
+  WAVE_COLORS, SHIFT_COLORS,
 } from './live-model.js';
+import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const MUT = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark']);
@@ -29,7 +34,22 @@ const MARKS = [
   ['noshow', 'No-show', 'They didn\'t show up and didn\'t call.'],
   ['off', 'Day off', 'They asked for the day off during the week.'],
 ];
-const RANK = { ok: 0, warn: 1, unavail: 2, blocked: 3 };
+
+// Sum of on-the-clock hours over the 7 days ending `endISO`.
+function last7(dayHours, endISO) {
+  let t = 0;
+  for (let k = 0; k < 7; k++) t += Number((dayHours || {})[toISODate(addDays(pd(endISO), -k))] || 0);
+  return t;
+}
+
+// A grid cell drawn the way Amazon's scheduling page does: a colored block,
+// the time on top, the role (Backup / Trainer / Trainee) under it.
+function Block({ v }) {
+  const c = cellInfo(v);
+  if (c.kind === 'empty') return '';
+  return html`<div class=${'lv-blk b-' + c.kind} style=${c.bg ? `background:${c.bg}` : ''}>
+    <span>${c.top}</span>${c.sub ? html`<small>${c.sub}</small>` : ''}</div>`;
+}
 
 // "P1 INFEASIBLE Tue: filled 5/6" -> plain words for a week already running
 function openText(line) {
@@ -56,15 +76,18 @@ function NotHere() {
 // What one driver is doing on one day, and what can be done about it.
 function CellMenu({ d, day, info, mark, busy, onClose, act }) {
   const v = (d.cells || {})[day] || '';
-  const kind = cellKind(v);
+  const c = cellInfo(v);
+  const kind = c.kind;
   const role = kind === 'road' ? 'road' : kind === 'bk' ? 'backup' : null;
   const first = d.name.split(/\s+/)[0];
   const date = parseISODate(info.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="edit-modal card">
       <h3>${d.name} — ${date}</h3>
-      <p class="hint">Now: <b>${v || 'not scheduled'}</b> · ${d.hours}h this week · ${d.streak} day${d.streak === 1 ? '' : 's'} in a row (longest)</p>
-      ${mark ? html`<${Banner} kind="warn"><b>${cellText(v)}</b>${mark.was ? ` — was a ${mark.was}` : ''}${mark.note ? ` · “${mark.note}”` : ''}<//>` : ''}
+      <p class="hint">Now: <b>${kind === 'trainer' ? `Trainer — rides along with ${c.partner}, ${c.top}`
+        : kind === 'trainee' ? `Trainee — drives ${c.top} with trainer ${c.partner}` : (v || 'not scheduled')}</b>
+        · ${d.clock_hours ?? d.hours}h this week · most in any 7 days ${d.max7 ?? '—'}h · ${d.streak} day${d.streak === 1 ? '' : 's'} in a row (longest)</p>
+      ${mark ? html`<${Banner} kind="warn"><b>${c.top}</b>${mark.was ? ` — was a ${mark.was}` : ''}${mark.note ? ` · “${mark.note}”` : ''}<//>` : ''}
       ${!info.open ? html`<p class="muted">The station is closed this day.</p>` : ''}
       <div class="lv-actions">
         ${role ? html`
@@ -79,7 +102,7 @@ function CellMenu({ d, day, info, mark, busy, onClose, act }) {
           <button disabled=${busy} onClick=${() => act('mark', { name: d.name, day, kind: 'off' })}>${first} asked for ${day} off…</button>` : ''}
         ${info.open && kind === 'off' ? html`
           <button disabled=${busy} onClick=${() => act('add', { name: d.name })}>Give ${first} a shift anyway…</button>` : ''}
-        ${kind === 'train' ? html`<p class="muted">Training day — change it with a rebuild in the builder.</p>` : ''}
+        ${kind === 'trainer' || kind === 'trainee' ? html`<p class="muted">Training day — change it with a rebuild in the builder.</p>` : ''}
         ${kind === 'disp' || kind === 'meet' ? html`<p class="muted">Dispatch duty / meetings come from the builder's settings.</p>` : ''}
       </div>
       <div class="row" style="margin-top:12px">
@@ -132,7 +155,9 @@ function Finder({ view, finder, setFinder, ready, rev, busy, onPick }) {
   const open = info ? (finder.role === 'road' ? info.routes - info.routes_filled : info.backup - info.backup_filled) : 0;
   const list = (st && st.list) || [];
   const groups = [['ok', 'Can work — no rule breaks'], ['warn', 'Can work — breaks a company policy (flagged)'],
-    ['unavail', 'Asked for the day off — needs your confirmation'], ['blocked', 'Can\'t — compliance rule']];
+    ['confirm', '6-day / overtime — can work after a pop-up'],
+    ['unavail', 'Asked for the day off — needs your confirmation'],
+    ['blocked', 'Can\'t — compliance rule (12h a day, 60h in 7 days, 7 in a row, clashes)']];
   const [showBlocked, setShowBlocked] = useState(false);
   return html`<div class="card" id="lv-finder">
     <h2>Who can work extra?</h2>
@@ -196,6 +221,7 @@ function Board() {
   const [moverCands, setMoverCands] = useState(null);
   const [marker, setMarker] = useState(null);  // {name, day, kind}
   const [confirm, setConfirm] = useState(null);
+  const [limit, setLimit] = useState(null);     // the 6-day / overtime pop-up
   const [finder, setFinder] = useState({ day: null, role: 'road' });
   const [showLog, setShowLog] = useState(false);
 
@@ -323,35 +349,31 @@ function Board() {
     return () => { alive = false; };
   }, [mover]);
 
-  async function moveTo(toName, confirmed = false) {
+  function moveTo(toName) {
     const c = toName && moverCands && moverCands.list ? moverCands.list.find((x) => x.name === toName) : null;
-    if (c && c.status === 'unavail' && !confirmed) {
-      setConfirm({ name: toName, day: mover.day, role: mover.role, reasons: c.reasons, run: () => moveTo(toName, true) });
-      return;
-    }
-    const m = await run('apply', { day: mover.day, role: mover.role, from_name: mover.fromName,
-      to_name: toName, confirm_unavailable: confirmed });
-    if (m.ok) setMover(null);
-    else setMoverCands((s) => ({ ...(s || {}), loading: false, error: m.error }));
+    const go = async (flags) => {
+      const m = await run('apply', { day: mover.day, role: mover.role, from_name: mover.fromName,
+        to_name: toName, ...flags });
+      if (m.ok) setMover(null);
+      else setMoverCands((s) => ({ ...(s || {}), loading: false, error: m.error }));
+    };
+    if (!c) { go({}); return; }
+    runConfirmed({ name: toName, day: mover.day, role: mover.role,
+      unavReasons: c.status === 'unavail' ? c.reasons : null, limits: c.limits }, setConfirm, setLimit, go);
   }
 
   // a pick from "Who can work extra?"
-  async function finderPick(c, hasOpen, confirmed = false) {
+  function finderPick(c, hasOpen) {
     const { day, role } = finder;
-    if (c.status === 'unavail' && !confirmed) {
-      setConfirm({ name: c.name, day, role, reasons: c.reasons, run: () => finderPick(c, hasOpen, true) });
-      return;
-    }
     const info = view.days.find((x) => x.day === day);
-    let m;
-    if (hasOpen) m = await run('apply', { day, role, to_name: c.name, confirm_unavailable: confirmed });
-    else if (role === 'backup') m = await run('apply_add', { name: c.name, day, role, confirm_unavailable: confirmed });
-    else {
-      if (!window.confirm(`All ${info.routes} routes on ${day} are filled.\n\nAdd ${c.name} as an EXTRA route? `
-        + `${day} becomes ${info.routes + 1} routes.\n\n(To move someone to backup instead, click ${c.name}'s name in the table.)`)) return;
-      m = await run('apply_add', { name: c.name, day, role, extra_route: true, confirm_unavailable: confirmed });
-    }
-    if (!m.ok) toast(m.error.message, 'err');
+    if (!hasOpen && role === 'road' && !window.confirm(`All ${info.routes} routes on ${day} are filled.\n\nAdd ${c.name} as an EXTRA route? `
+      + `${day} becomes ${info.routes + 1} routes.\n\n(To move someone to backup instead, click ${c.name}'s name in the table.)`)) return;
+    runConfirmed({ name: c.name, day, role, unavReasons: c.status === 'unavail' ? c.reasons : null, limits: c.limits },
+      setConfirm, setLimit, async (flags) => {
+        const m = hasOpen ? await run('apply', { day, role, to_name: c.name, ...flags })
+          : await run('apply_add', { name: c.name, day, role, ...(role === 'road' ? { extra_route: true } : {}), ...flags });
+        if (!m.ok) toast(m.error.message, 'err');
+      });
   }
 
   async function cellAct(what, p) {
@@ -419,12 +441,17 @@ function Board() {
   const byTier = {};
   for (const x of view.drivers) (byTier[x.cls] = byTier[x.cls] || []).push(x);
   const todayCount = tday ? view.drivers.reduce((a, x) => {
-    const k = cellKind((x.cells || {})[tday.day]);
-    return a + (k === 'road' || k === 'train' ? 1 : 0);
+    const k = cellInfo((x.cells || {})[tday.day]).kind;
+    return a + (k === 'road' || k === 'trainee' ? 1 : 0);
   }, 0) : null;
 
-  const hoursCls = (h) => (lim.weekly_hours_cap && h > lim.weekly_hours_cap ? 'lv-bad'
-    : lim.weekly_hours_cap && h >= lim.weekly_hours_cap ? 'lv-warn' : '');
+  const max7Lim = lim.max_7day_hours || 60;
+  const hoursCls = (h) => (h > max7Lim ? 'lv-bad' : lim.weekly_hours_cap && h > lim.weekly_hours_cap ? 'lv-warn' : '');
+  const max7Cls = (h) => (h > max7Lim ? 'lv-bad' : h >= max7Lim - 6 ? 'lv-warn' : '');
+  // "Last 7d" like Amazon: the 7 days ending today, or ending the week's last
+  // day for a week that's over (an upcoming week shows its busiest 7 days)
+  const lastDay = view.days[view.days.length - 1].date;
+  const endISO = today < view.days[0].date ? null : today > lastDay ? lastDay : today;
   const streakCls = (n) => (n > (lim.max_consecutive || 5) ? 'lv-bad' : n === (lim.max_consecutive || 5) ? 'lv-warn' : '');
   const daysCls = (n) => (n > (lim.max_worked_days || 5) ? 'lv-bad' : n === (lim.max_worked_days || 5) ? 'lv-warn' : '');
   const goFind = (day, role) => {
@@ -476,43 +503,57 @@ function Board() {
       <div class="scroll-x lv-wrap"><table class="lv-grid">
         <thead><tr>
           <th class="lv-namecol">Driver</th>
-          ${view.days.map((x) => html`<th class=${(x.date === today ? 'today ' : '') + (x.open ? '' : 'closed')}>
+          ${view.days.map((x) => html`<th class=${(x.date === today ? 'today ' : x.date < today ? 'past ' : '') + (x.open ? '' : 'closed')}>
             ${x.day} <span class="lv-date">${shortDate(x.date)}</span>
             ${x.open ? html`<div class="lv-fill">
               <span class=${x.routes_filled < x.routes ? 'lv-bad' : ''} title="routes filled / needed">${x.routes_filled}/${x.routes}</span>
               <span class=${x.backup_filled < x.backup ? 'lv-warnc' : ''} title="backups filled / needed"> · bk ${x.backup_filled}/${x.backup}</span></div>`
               : html`<div class="lv-fill">closed</div>`}</th>`)}
-          <th title="Scheduled hours this week">Hours</th>
-          <th title=${`Days worked this week (max ${lim.max_worked_days || 5})`}>Days</th>
+          <th title="On the clock this week (scheduled)">Week</th>
+          <th title=${`Most hours on the clock in any 7 days in a row, last week included (max ${max7Lim}h)`}>Max 7d</th>
+          <th title=${`Days worked this week (usual max ${lim.max_worked_days || 5}; a 6th needs the pop-up)`}>Days</th>
           <th title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
         </tr></thead>
         <tbody>${TIER_ORDER.filter((t) => byTier[t]).map((t) => {
           const meta = TIER_META[t];
           return html`
-            <tr class="tier-sep"><td colspan=${view.days.length + 4}><span class="chip ${meta.chip}">${meta.label}</span>
+            <tr class="tier-sep"><td colspan=${view.days.length + 5}><span class="chip ${meta.chip}">${meta.label}</span>
               <span class="muted"> · ${byTier[t].length}</span></td></tr>
             ${byTier[t].map((x) => {
               const nWorked = (x.worked_dates || []).length;
               return html`<tr>
                 <td class="lv-namecol"><button class="link lv-name" title=${'Give ' + x.name + ' a shift'}
-                  onClick=${() => setAdder({ name: x.name })}>${x.name}</button></td>
+                  onClick=${() => setAdder({ name: x.name })}>${x.name}</button>
+                  ${(x.helper_days || []).length ? html` <span class="chip trainer-chip" title="Trains a new hire this week">Trainer</span>` : ''}
+                  <div class="lv-sub">Week: ${x.clock_hours ?? x.hours}h${endISO && x.day_hours
+                    ? html` · <span class=${max7Cls(last7(x.day_hours, endISO))}>Last 7d: ${last7(x.day_hours, endISO)}h</span>` : ''}</div></td>
                 ${view.days.map((dd) => {
                   const v = (x.cells || {})[dd.day] || '';
-                  const k = cellKind(v);
-                  return html`<td class=${'lv-cell k-' + k + (dd.date === today ? ' today' : '') + (dd.open ? '' : ' closed')}
-                    title=${v || (dd.open ? 'Not scheduled — click for options' : 'Closed')}
-                    onClick=${dd.open ? () => setCell({ name: x.name, day: dd.day }) : undefined}>${cellText(v)}</td>`;
+                  const c = cellInfo(v);
+                  return html`<td class=${'lv-cell k-' + c.kind + (dd.date === today ? ' today' : '') + (dd.open ? '' : ' closed')}
+                    title=${c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed')}
+                    onClick=${dd.open ? () => setCell({ name: x.name, day: dd.day }) : undefined}><${Block} v=${v} /></td>`;
                 })}
-                <td class=${hoursCls(x.hours)}>${x.hours}h</td>
+                <td class=${hoursCls(x.clock_hours ?? x.hours)}>${x.clock_hours ?? x.hours}h</td>
+                <td class=${max7Cls(x.max7 ?? 0)}>${x.max7 ?? '—'}${x.max7 != null ? 'h' : ''}</td>
                 <td class=${daysCls(nWorked)}>${nWorked}</td>
                 <td class=${streakCls(x.streak)}>${x.streak}</td>
               </tr>`;
             })}`;
         })}</tbody>
       </table></div>
-      <p class="hint lv-legend"><span class="lv-sw k-road">10:45</span> route · <span class="lv-sw k-bk">Bk 10:45</span> backup ·
-        <span class="lv-sw k-train">Train</span> training · <span class="lv-sw k-mark">Called out</span> call-out / no-show / day off ·
-        <span class="lv-sw k-off">off</span> asked off. Orange numbers are at the limit, red are over it.</p>
+      <div class="lv-legend">
+        ${Object.entries(WAVE_COLORS).map(([w, bg]) => html`<span class="lv-sw" style=${`background:${bg}`}>${w}</span>`)}
+        <span class="lv-sw" style=${`background:${WAVE_COLORS['10:25']}`}>10:25 <small>Backup</small></span>
+        <span class="lv-sw" style=${`background:${SHIFT_COLORS.trainer}`}>Trainer</span>
+        <span class="lv-sw" style=${`background:${SHIFT_COLORS.disp}`}>Dispatch</span>
+        <span class="lv-sw" style=${`background:${SHIFT_COLORS.meet}`}>Meeting</span>
+        <span class="lv-sw" style=${`background:${SHIFT_COLORS.off}`}>Unavailable</span>
+        <span class="lv-sw" style=${`background:${SHIFT_COLORS.mark}`}>Called out / No-show</span>
+      </div>
+      <p class="hint">Hours are scheduled on-the-clock hours. Orange = at or near a limit, red = over it.
+        Locked: 12h in a day, ${max7Lim}h in any 7 days (last week counts), 7 days in a row. A 6-day or overtime
+        goes through after a pop-up.</p>
     </div>
 
     <${Finder} view=${view} finder=${finder} setFinder=${setFinder} ready=${ready} rev=${data.rev} busy=${busy}
@@ -542,5 +583,7 @@ function Board() {
       onClose=${() => setAdder(null)} onApplied=${() => setAdder(null)} />` : ''}
     ${confirm ? html`<${ConfirmOverride} req=${confirm} onCancel=${() => setConfirm(null)}
       onConfirm=${() => { const q = confirm; setConfirm(null); q.run(); }} />` : ''}
+    ${limit ? html`<${LimitConfirm} req=${limit} onCancel=${() => setLimit(null)}
+      onConfirm=${() => { const q = limit; setLimit(null); q.run(); }} />` : ''}
   </div>`;
 }

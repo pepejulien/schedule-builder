@@ -21,7 +21,8 @@ export function sundayOf(iso) {
 }
 
 const DRIVER_KEYS = ['name', 'cls', 'target', 'hours', 'streak', 'road_days', 'backup_days',
-  'helper_days', 'dispatch_days', 'meeting_days', 'unavailable', 'cells', 'worked_dates'];
+  'helper_days', 'dispatch_days', 'meeting_days', 'unavailable', 'cells', 'worked_dates',
+  'day_hours', 'clock_hours', 'max7'];
 
 export function summaryFromReport(r, meta) {
   const chk = r.check || {};
@@ -57,16 +58,24 @@ export function prevWorkedFrom(summary) {
   return Object.fromEntries((summary.drivers || []).map((d) => [d.name, d.worked_dates || []]));
 }
 
-// Load a saved week into an engine slot. Last week's REAL worked days (from
-// its own Live board, if it was published) replace the uploaded file's tail.
+// {name: {ISO date: hours}} — last week's on-the-clock hours, for the 60h rule.
+export function prevHoursFrom(summary) {
+  const out = {};
+  for (const d of (summary.drivers || [])) if (d.day_hours) out[d.name] = d.day_hours;
+  return Object.keys(out).length ? out : null;
+}
+
+// Load a saved week into an engine slot. Last week's REAL worked days and
+// hours (from its own Live board, if it was published) replace the uploaded
+// file's tail.
 export async function loadEngine(weekISO, engineJson, slot = 'live') {
-  let prev = null;
+  let prev = null, prevHours = null;
   try {
     const p = await liveWeek(prevISO(weekISO));
-    if (p) prev = prevWorkedFrom(JSON.parse(p.summary));
+    if (p) { const sm = JSON.parse(p.summary); prev = prevWorkedFrom(sm); prevHours = prevHoursFrom(sm); }
   } catch { /* no history for last week — keep the builder's tail */ }
   const m = await editRequest('load_state',
-    { state: engineJson, out: `/work/${slot}.xlsx`, prev_worked: prev }, slot);
+    { state: engineJson, out: `/work/${slot}.xlsx`, prev_worked: prev, prev_hours: prevHours }, slot);
   if (!m.ok) throw Object.assign(new Error(m.error.message), { kind: m.error.kind });
   return m.report;
 }
@@ -96,12 +105,37 @@ export async function saveWeek({ slot = 'live', weekISO, meta, report, expectRev
   return { rev, engine: ex.data.state };
 }
 
+// Amazon's own shift colors (logistics.amazon.com scheduling, 2026-10-06).
+export const WAVE_COLORS = { '10:05': '#B5EBF3', '10:25': '#FCDE4D', '10:45': '#FFB5CA', '11:05': '#78D9CF', '11:25': '#FCDE4D' };
+export const SHIFT_COLORS = { trainer: '#FFA28A', disp: '#C3EB5E', meet: '#E9C6E4', off: '#D5DBDB',
+  mark: 'rgba(255,121,121,.73)', other: '#DCE3F0' };
+const waveColor = (w) => WAVE_COLORS[w] || SHIFT_COLORS.other;
+
+// One grid cell as Amazon draws it: {kind, top, sub, bg, partner}.
+// kind: road | bk | trainee | trainer | disp | meet | off | mark | empty
+export function cellInfo(v) {
+  const s = String(v || '');
+  if (!s) return { kind: 'empty', top: '', sub: '' };
+  const m = s.match(/^(\d{1,2}:\d{2}) ([AP]M)/);
+  const wave = m ? m[1] : null;
+  const time = m ? `${m[1]} ${m[2]}` : '';
+  const partner = (s.match(/w\/ ([^)]+)\)/) || [])[1] || '';
+  if (/^(Called out|No-show|Day off)$/.test(s)) return { kind: 'mark', top: s, sub: '', bg: SHIFT_COLORS.mark };
+  if (/TRAIN helper/.test(s)) return { kind: 'trainer', top: time, sub: 'Trainer', partner, bg: SHIFT_COLORS.trainer };
+  if (/TRAIN drives/.test(s)) return { kind: 'trainee', top: time, sub: 'Trainee', partner, bg: waveColor(wave) };
+  if (/Backup/.test(s)) return { kind: 'bk', top: time || 'Backup', sub: time ? 'Backup' : '', bg: waveColor(wave) };
+  if (wave) return { kind: 'road', top: time, sub: '', bg: waveColor(wave) };
+  if (s === 'Unavailable') return { kind: 'off', top: 'Unavailable', sub: '', bg: SHIFT_COLORS.off };
+  if (s === 'Dispatch') return { kind: 'disp', top: 'Dispatch', sub: '', bg: SHIFT_COLORS.disp };
+  return { kind: 'meet', top: s, sub: '', bg: SHIFT_COLORS.meet };
+}
+
 // Short text for a grid cell.
 export function cellText(v) {
   const s = String(v || '');
   if (!s) return '';
   if (/TRAIN drives/.test(s)) return 'Train ' + (s.match(/^\d{1,2}:\d{2}/) || [''])[0];
-  if (/TRAIN helper/.test(s)) return 'Ride-along';
+  if (/TRAIN helper/.test(s)) return 'Trainer ' + (s.match(/^\d{1,2}:\d{2}/) || [''])[0];
   let m = s.match(/^(\d{1,2}:\d{2}) [AP]M Backup$/);
   if (m) return 'Bk ' + m[1];
   m = s.match(/^(\d{1,2}:\d{2}) [AP]M$/);

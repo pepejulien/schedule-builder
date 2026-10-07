@@ -37,6 +37,15 @@ week never clobbers next week's build. use_slot(name) picks one before a call.
     runner.export_xlsx(json)   -> write the workbook on demand (the live slot
                                   skips the per-edit rewrite)
 
+HOURS + 6-DAYS (2026-10-06, Jose): two HARD limits everywhere, on the clock
+hours (route 10h, backup 2h, meeting 2h, dispatch 12h; last week from its Live
+board when published, else 10h per worked day): never over 12h in a day, never
+over 60h in ANY 7-day window (last week included). And 7 days in a row is
+never allowed. On the LIVE board only, a 6-day (6 in a row or a 6th worked
+day in the week) and overtime (road over 40h / over the road-day cap) are
+allowed after a pop-up: _assess() puts them in `limits`, the edit must carry
+confirm_limits, and the verifier lists them as approved overrides.
+
 AUTO TRAINERS (2026-10): cfg["auto_training"] = [{trainee, pool}] is resolved
 to concrete training_pairs by rotation before the build (see
 _build_with_auto_trainers).
@@ -61,9 +70,10 @@ ONE = datetime.timedelta(days=1)
 # 'marks' = {day: {norm_name: {name, kind, was, note}}} -- call-outs etc.
 # 'write' = rewrite the xlsx after every edit (the wizard needs it; the Live
 # board downloads on demand instead).
-def _new_state(write=True):
+def _new_state(write=True, live=False):
     return {'cfg': None, 'res': None, 'edits': [], 'undo': [],
-            'ovr_unav': set(), 'ovr_policy': set(), 'marks': {}, 'write': write}
+            'ovr_unav': set(), 'ovr_policy': set(), 'ovr_limits': set(),
+            'marks': {}, 'write': write, 'live': live}
 
 
 _SLOTS = {'build': _new_state()}
@@ -74,7 +84,7 @@ def use_slot(name):
     """Point every call that follows at one engine state ('build' | 'live')."""
     global _STATE
     if name not in _SLOTS:
-        _SLOTS[name] = _new_state(write=(name == 'build'))
+        _SLOTS[name] = _new_state(write=(name == 'build'), live=name.startswith('live'))
     _STATE = _SLOTS[name]
     return name
 
@@ -135,6 +145,10 @@ def _driver_rows(res):
             cells=cells,
             worked_dates=sorted(x.isoformat() for x in _worked_dates(res, dr)),
             streak=_streak(res, dr),
+            day_hours={k.isoformat(): v for k, v in sorted(_day_hours(res, dr).items())},
+            clock_hours=sum(v for k, v in _day_hours(res, dr).items()
+                            if k >= res.DATEALL["Sun"]),
+            max7=_max7(_day_hours(res, dr), [res.DATEALL[d] for d in ALL_DAYS])[0],
         ))
     rows.sort(key=lambda r: (-r["hours"], r["name"]))
     return rows
@@ -194,7 +208,9 @@ def _report(cfg, res, chk):
         days=_days_info(res, chk),
         limits=dict(max_consecutive=res.MAXC, primary_hours=res.PH,
                     backup_hours=res.BH, max_road_days=res.MAXPRIM,
-                    weekly_hours_cap=res.HCAP, max_worked_days=res.MAXTOT),
+                    weekly_hours_cap=res.HCAP, max_worked_days=res.MAXTOT,
+                    max_day_hours=MAX_DAY_H, max_7day_hours=MAX_7DAY_H,
+                    dispatch_hours=DISPATCH_H, live=bool(_STATE.get("live"))),
         marks=[dict(day=d, **m) for d in ALL_DAYS
                for m in _STATE["marks"].get(d, {}).values()],
     )
@@ -291,7 +307,7 @@ def run(config_path):
         res.notes = list(res.notes) + tnotes
         write_xlsx(res)                       # -> cfg['out']
         _STATE.update(cfg=cfg, res=res, edits=[], undo=[],
-                      ovr_unav=set(), ovr_policy=set(), marks={})
+                      ovr_unav=set(), ovr_policy=set(), ovr_limits=set(), marks={})
         chk = _verify(res)
         # Shortfalls straight from the finished grid (routes AND backups), so
         # the on-screen warnings match the workbook's totals row.
@@ -353,6 +369,62 @@ def _no_state():
                 "or the engine restarted). Rebuild first, then make manual edits."))
 
 
+MAX_DAY_H = 12        # on the clock in one day
+MAX_7DAY_H = 60       # on the clock in any 7 days in a row
+DISPATCH_H = 12       # a dispatch day (Amazon's Dispatcher shift is 12h)
+
+
+def _day_hours(res, dr):
+    """{date: hours on the clock} for this week AND last week's tail."""
+    out = dict(dr.get("h_prev") or {d: res.PH for d in dr["w_prev"]})
+    for k, h in (("prim", res.PH), ("helper", res.PH), ("bk", res.BH),
+                 ("meet", res.BH), ("extra", DISPATCH_H)):
+        for d in dr[k]:
+            if d in res.DATEALL:
+                dt = res.DATEALL[d]
+                out[dt] = out.get(dt, 0) + h
+    return out
+
+
+def _num(h):
+    h = float(h)
+    return int(h) if h.is_integer() else round(h, 2)
+
+
+def _max7(hours, dates=None):
+    """Worst 7-day total among the windows that touch `dates` (default: every
+    window in `hours`). Returns (total, first_day_of_window)."""
+    if not hours:
+        return 0, None
+    keys = dates if dates is not None else list(hours)
+    best, at = 0, None
+    for d in keys:
+        for k in range(7):
+            s0 = d - k * ONE
+            tot = sum(hours.get(s0 + j * ONE, 0) for j in range(7))
+            if tot > best:
+                best, at = tot, s0
+    return best, at
+
+
+def _hour_limits(res, dr, day, role):
+    """Hard on-the-clock limits for adding (day, role): 12h in a day, 60h in
+    any 7 days (last week included). Returns block reasons."""
+    hrs = _day_hours(res, dr)
+    dt = res.DATEALL[day]
+    add = res.PH if role == "road" else res.BH
+    hrs[dt] = hrs.get(dt, 0) + add
+    out = []
+    if hrs[dt] > MAX_DAY_H:
+        out.append(f"would be on the clock {hrs[dt]}h on {day} (max {MAX_DAY_H}h)")
+    tot, s0 = _max7(hrs, [dt])
+    if tot > MAX_7DAY_H:
+        e = s0 + 6 * ONE
+        out.append(f"would be on the clock {tot}h in 7 days ({s0:%a %m/%d}-{e:%a %m/%d}; "
+                   f"max {MAX_7DAY_H}h)")
+    return out
+
+
 def _assess(res, dr, day, role):
     """Return (status, reasons, notes) for giving `dr` the (day, role) slot.
 
@@ -364,9 +436,13 @@ def _assess(res, dr, day, role):
                   deliberate, typed confirmation in the UI.
       'warn'    - company POLICY (tier pins, Fair caps, backup eligibility,
                   weekend spread). Allowed; logged and flagged.
-      'ok'      - nothing breaks."""
+      'ok'      - nothing breaks.
+    LIVE board (2026-10-06): a 6-day and overtime go to `limits` instead of
+    'blocked' -- status 'confirm', allowed after a pop-up (confirm_limits).
+    Returns (status, reasons, notes, limits)."""
     n = norm(dr["name"])
-    blocks, unav, warns, notes = [], [], [], []
+    blocks, unav, warns, notes, limits = [], [], [], [], []
+    live = _STATE.get("live", False)
     HCAP = res.HCAP
     BKCAP = HCAP if HCAP else 4 * res.PH
 
@@ -396,12 +472,20 @@ def _assess(res, dr, day, role):
     if not blocks:
         rl = _run_len(res, dr, day)
         if rl > res.MAXC:
-            blocks.append(f"would work {rl} days in a row (max {res.MAXC})")
+            if live and rl == res.MAXC + 1:
+                limits.append(f"6-day: would work {rl} days in a row (usual max {res.MAXC})")
+            else:
+                blocks.append(f"would work {rl} days in a row (max "
+                              f"{res.MAXC + 1 if live else res.MAXC})")
+        blocks += _hour_limits(res, dr, day, role)
 
     # total worked-days caps
     tot = _pdays(dr) + len(dr["bk"]) + len(dr["extra"]) + len(dr["meet"])
     if tot + 1 > res.MAXTOT:
-        blocks.append(f"already at {res.MAXTOT} worked days")
+        if live and tot + 1 == res.MAXTOT + 1:
+            limits.append(f"6-day: a 6th worked day this week (usual max {res.MAXTOT})")
+        else:
+            blocks.append(f"already at {tot} worked days")
     if FREE_name(dr, res.TARGET, res.MOST) and _pdays(dr) + len(dr["bk"]) + 1 > res.FREETOT:
         warns.append(f"Fair drivers normally max out at {res.FREETOT} total days")
 
@@ -411,9 +495,10 @@ def _assess(res, dr, day, role):
 
     if role == "road":
         if HCAP and (_pdays(dr) + 1) * res.PH > HCAP:
-            blocks.append(f"would put road hours over {HCAP}h (overtime)")
+            (limits if live else blocks).append(
+                f"overtime: road hours go to {(_pdays(dr) + 1) * res.PH}h (over {HCAP}h)")
         elif _pdays(dr) + 1 > res.MAXPRIM:
-            blocks.append(f"at the {res.MAXPRIM} road-day cap")
+            (limits if live else blocks).append(f"at the {res.MAXPRIM} road-day cap")
         capx = (getattr(res, "CAPX", {}) or {}).get(n, 0)
         if n in res.TARGET and n not in res.REDS:
             pin = min(res.TARGET[n] + capx, res.MAXPRIM)
@@ -441,14 +526,15 @@ def _assess(res, dr, day, role):
         notes.append("usually has this day off")
 
     status = ("blocked" if blocks else "unavail" if unav
-              else "warn" if warns else "ok")
-    return status, blocks + unav + warns, notes
+              else "confirm" if limits else "warn" if warns else "ok")
+    return status, blocks + unav + limits + warns, notes, (limits if not blocks else [])
 
 
 def _gate(res, dr, day, role, payload):
     """Server-side enforcement of _assess for an edit about to be applied.
     Returns (error_json_or_None, status, reasons)."""
-    status, reasons, _ = _assess(res, dr, day, role)
+    _STATE.pop("_pending_limits", None)
+    status, reasons, _, limits = _assess(res, dr, day, role)
     if status == "blocked":
         return json.dumps(dict(ok=False, kind="compliance",
             message=f"Can't give {dr['name']} {day}: " + "; ".join(reasons)
@@ -458,6 +544,12 @@ def _gate(res, dr, day, role, payload):
         return json.dumps(dict(ok=False, kind="needs_confirm",
             message=f"{dr['name']} is marked Unavailable on {day}. Confirm the "
                     "override first.")), status, reasons
+    if limits and not payload.get("confirm_limits"):
+        return json.dumps(dict(ok=False, kind="needs_limits", limits=limits,
+            message=f"{dr['name']} on {day}: " + "; ".join(limits)
+                    + ". Confirm the pop-up first.")), status, reasons
+    if limits:
+        _STATE["_pending_limits"] = (norm(dr["name"]), limits)
     return None, status, reasons
 
 
@@ -466,15 +558,20 @@ def _note_override(dr, day, status, reasons):
     acknowledged override instead of a failed rule. Returns a suffix for the
     edit-log line."""
     n = norm(dr["name"])
+    pend = _STATE.pop("_pending_limits", None)
+    lim = pend[1] if pend and pend[0] == n else []
+    if lim:
+        _STATE["ovr_limits"].add(n)
     if status == "unavail":
         _STATE["ovr_unav"].add((n, day))
     if status in ("unavail", "warn"):
         _STATE["ovr_policy"].add(n)
+    tag = f"  [OK'D: {'; '.join(lim)}]" if lim else ""
     if status == "unavail":
-        return f"  [OVERRIDE: {reasons[0]}]"
+        return f"  [OVERRIDE: {reasons[0]}]" + tag
     if status == "warn":
-        return f"  [flagged: {'; '.join(reasons)}]"
-    return ""
+        return f"  [flagged: {'; '.join(reasons)}]" + tag
+    return tag
 
 
 _OVR_RES = (
@@ -483,6 +580,10 @@ _OVR_RES = (
     (re.compile(r"^FAIR-SHAPE: (.+) roads\+backups over"), "policy"),
     (re.compile(r"^BACKUP<2PRIMARY: (.+)$"), "policy"),
     (re.compile(r"^BACKUP-ONLY: (.+)$"), "policy"),
+    (re.compile(r"^CONSEC>\d+: (.+) run=(\d+)$"), "limits"),
+    (re.compile(r"^OT: (.+) road days over"), "limits"),
+    (re.compile(r"^DAYCAP: (.+) over"), "limits"),
+    (re.compile(r"^TOTDAYS: (.+) over"), "limits"),
 )
 
 
@@ -506,10 +607,26 @@ def _verify(res):
             if not m:
                 continue
             nm = norm(m.group(1))
-            hit = ((nm, m.group(2)) in _STATE["ovr_unav"] if kind == "unav"
-                   else nm in _STATE["ovr_policy"])
+            if kind == "unav":
+                hit = (nm, m.group(2)) in _STATE["ovr_unav"]
+            elif kind == "limits":
+                # an OK'd 6-day; 7 in a row is never OK
+                hit = nm in _STATE.get("ovr_limits", set()) and not (
+                    e.startswith("CONSEC") and int(m.group(2)) > res.MAXC + 1)
+            else:
+                hit = nm in _STATE["ovr_policy"]
             break
         (ovr if hit else keep).append(e)
+    # the hard on-the-clock limits (last week included)
+    for dr in res.roster:
+        hrs = _day_hours(res, dr)
+        week = [res.DATEALL[d] for d in ALL_DAYS]
+        for dt in week:
+            if hrs.get(dt, 0) > MAX_DAY_H:
+                keep.append(f"HOURS-DAY: {dr['name']} {hrs[dt]}h on {dt:%a %m/%d} (max {MAX_DAY_H}h)")
+        tot, s0 = _max7(hrs, week)
+        if tot > MAX_7DAY_H:
+            keep.append(f"HOURS-7DAY: {dr['name']} {tot}h in 7 days from {s0:%a %m/%d} (max {MAX_7DAY_H}h)")
     chk["errors"] = keep
     chk["overridden"] = ovr
     return chk
@@ -532,15 +649,15 @@ def candidates(payload_json):
         for dr in res.roster:
             if norm(dr["name"]) == from_n:
                 continue
-            status, reasons, notes = _assess(res, dr, day, role)
+            status, reasons, notes, limits = _assess(res, dr, day, role)
             h = _hours(res, dr)
             out.append(dict(
                 name=dr["name"], cls=_classify(dr, res),
                 hours=h,
                 new_hours=h + (res.PH if role == "road" else res.BH),
                 road_days=sorted(dr["prim"]), backup_days=sorted(dr["bk"]),
-                status=status, reasons=reasons, notes=notes))
-        rank = {"ok": 0, "warn": 1, "unavail": 2, "blocked": 3}
+                status=status, reasons=reasons, notes=notes, limits=limits))
+        rank = {"ok": 0, "warn": 1, "confirm": 2, "unavail": 3, "blocked": 4}
         out.sort(key=lambda c: (rank[c["status"]], c["hours"], norm(c["name"])))
         return json.dumps(dict(ok=True, day=day, role=role, candidates=out))
     except Exception:  # noqa: BLE001
@@ -593,6 +710,7 @@ def _snapshot(res):
         edits=list(_STATE["edits"]),
         ovr_unav=set(_STATE["ovr_unav"]),
         ovr_policy=set(_STATE["ovr_policy"]),
+        ovr_limits=set(_STATE.get("ovr_limits", set())),
         marks=copy.deepcopy(_STATE["marks"]),
     )
 
@@ -610,6 +728,7 @@ def _restore(res, snap):
     _STATE["ovr_unav"] = snap["ovr_unav"]
     _STATE["ovr_policy"] = snap["ovr_policy"]
     _STATE["marks"] = snap.get("marks", {})
+    _STATE["ovr_limits"] = snap.get("ovr_limits", set())
 
 
 def _routes_filled(res, day):
@@ -730,18 +849,18 @@ def add_options(payload_json):
                    else "backup" if d in dr["bk"] else "meeting" if d in dr["meet"]
                    else "dispatch" if d in dr["extra"]
                    else "unavailable" if d in dr["unav"] else "")
-            road_st, road_why, _ = _assess(res, dr, d, "road")
-            bk_st, bk_why, _ = _assess(res, dr, d, "backup")
+            road_st, road_why, _, road_lim = _assess(res, dr, d, "road")
+            bk_st, bk_why, _, bk_lim = _assess(res, dr, d, "backup")
             r_filled, r_want = _routes_filled(res, d), res.routes[d]
             b_filled, b_want = _bk_filled(res, d), res.backup[d]
             full = road_st != "blocked" and r_filled >= r_want
-            if full and road_st != "unavail":
+            if full and road_st in ("ok", "warn"):
                 road_st = "full"     # takeable, but only by swapping someone out
             days.append(dict(
                 day=d, current=cur,
-                road=dict(status=road_st, reasons=road_why, full=full,
+                road=dict(status=road_st, reasons=road_why, full=full, limits=road_lim,
                           filled=r_filled, want=r_want),
-                backup=dict(status=bk_st, reasons=bk_why,
+                backup=dict(status=bk_st, reasons=bk_why, limits=bk_lim,
                             filled=b_filled, want=b_want,
                             over_target=(bk_st != "blocked" and b_filled >= b_want)),
             ))
@@ -1094,6 +1213,7 @@ def export_state(payload_json):  # noqa: ARG001
         st = dict(v=1, res=_enc(res.__dict__), edits=list(_STATE["edits"]),
                   ovr_unav=[list(x) for x in sorted(_STATE["ovr_unav"])],
                   ovr_policy=sorted(_STATE["ovr_policy"]),
+                  ovr_limits=sorted(_STATE.get("ovr_limits", set())),
                   marks=_STATE["marks"])
         return json.dumps(dict(ok=True, state=json.dumps(st, separators=(",", ":"))))
     except Exception:  # noqa: BLE001
@@ -1101,7 +1221,8 @@ def export_state(payload_json):  # noqa: ARG001
 
 
 def load_state(payload_json):
-    """payload: {state, out?, prev_worked?: {name: [ISO dates]}}. Rehydrate a
+    """payload: {state, out?, prev_worked?: {name: [ISO dates]},
+    prev_hours?: {name: {ISO date: hours}}}. Rehydrate a
     saved week into the current slot. prev_worked (last week's REAL worked
     days, from its own Live board) replaces the tail read from the uploaded
     file, so a midweek extra shift last Saturday still counts toward this
@@ -1123,9 +1244,20 @@ def load_state(payload_json):
                 got = byn.get(norm(dr["name"]))
                 if got is not None:
                     dr["w_prev"] = {x for x in got if lo <= x < start}
+        ph = p.get("prev_hours")
+        if ph:
+            start = res.DATEALL["Sun"]
+            lo = start - 7 * ONE
+            byn = {norm(k): v for k, v in ph.items()}
+            for dr in res.roster:
+                got = byn.get(norm(dr["name"]))
+                if got is not None:
+                    dr["h_prev"] = {datetime.date.fromisoformat(k): _num(h) for k, h in got.items()
+                                    if lo <= datetime.date.fromisoformat(k) < start and h}
         _STATE.update(cfg=res.cfg, res=res, edits=list(st.get("edits", [])), undo=[],
                       ovr_unav={tuple(x) for x in st.get("ovr_unav", [])},
                       ovr_policy=set(st.get("ovr_policy", [])),
+                      ovr_limits=set(st.get("ovr_limits", [])),
                       marks=st.get("marks") or {})
         chk = _verify(res)
         res.infeasible = ([ln for ln in res.infeasible if not ln.startswith(("P1 ", "P2 "))]
