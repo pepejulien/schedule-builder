@@ -280,3 +280,43 @@ export function overRisk(d, days, today, lim) {
   }
   return { max, over, hot, fixes, breakdown };
 }
+
+// 7 days in a row (2026-10-07): locked by the rules, so this should never show — a safeguard.
+// Worked days = any day with hours or on the worked list (last week's tail included). Flags
+// runs of 7+ that still reach today or later; the upcoming days in them shake, and each fix is
+// a day off that breaks every such run (two days off if one isn't enough). null = fine.
+export function runRisk(d, days, today, lim, maxRun = 6) {
+  const dh = d.day_hours || {};
+  const sh = (iso, n) => toISODate(addDays(parseISODate(iso), n));
+  const first = days[0].date, last = days[days.length - 1].date;
+  const span = [];
+  for (let i = -maxRun; sh(first, i) <= last; i++) span.push(sh(first, i));
+  const runsOf = (w) => {
+    const out = [];
+    let cur = [];
+    for (const iso of span) {
+      if (w.has(iso)) cur.push(iso);
+      else { if (cur.length) out.push(cur); cur = []; }
+    }
+    if (cur.length) out.push(cur);
+    return out.filter((r) => r.length > maxRun && r[r.length - 1] >= today);
+  };
+  const worked = new Set([...Object.keys(dh).filter((k) => Number(dh[k]) > 0), ...(d.worked_dates || [])]);
+  const bad = runsOf(worked);
+  if (!bad.length) return null;
+  const act = new Set(d.act_dates || []);
+  const inWeek = new Set(days.map((x) => x.date));
+  const hot = bad.flat().filter((iso) => inWeek.has(iso) && iso >= today && !act.has(iso));
+  const without = (...isos) => { const w = new Set(worked); isos.forEach((x) => w.delete(x)); return w; };
+  let fixes = hot.filter((iso) => !runsOf(without(iso)).length).map((iso) => ({ kind: 'off', dates: [iso] }));
+  if (!fixes.length) {
+    for (let i = 0; i < hot.length; i++) {
+      for (let j = i + 1; j < hot.length; j++) {
+        if (!runsOf(without(hot[i], hot[j])).length) fixes.push({ kind: 'off2', dates: [hot[i], hot[j]] });
+      }
+    }
+  }
+  const top = bad.reduce((a, r) => (r.length > a.length ? r : a));
+  return { maxRun, runs: bad, hot, fixes,
+    breakdown: top.map((iso) => ({ date: iso, done: iso < today || act.has(iso), hot: hot.includes(iso) })) };
+}

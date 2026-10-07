@@ -22,7 +22,7 @@ import {
 } from '../steps/step9-build.js';
 import {
   loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
-  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk,
+  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk, runRisk,
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
@@ -52,6 +52,29 @@ function last7(dayHours, endISO) {
 // The over-60 card (2026-10-07): what goes over, the hours behind it, and every fix.
 const mdy = (iso) => pd(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const wkd = (iso) => pd(iso).toLocaleDateString('en-US', { weekday: 'long' });
+// both limits on one card: over the hours max and/or 7 days in a row
+function RiskInfo({ d, risk, iso }) {
+  return html`<div>${risk.hours ? html`<${OverInfo} d=${d} risk=${risk.hours} iso=${iso} />` : ''}
+    ${risk.hours && risk.run ? html`<hr class="ov-hr" />` : ''}
+    ${risk.run ? html`<${RunInfo} d=${d} risk=${risk.run} iso=${iso} />` : ''}
+    <div class="ov-foot">✓ = already worked. Click a day to change it.</div></div>`;
+}
+function RunInfo({ d, risk, iso }) {
+  const longest = Math.max(...risk.runs.map((r) => r.length));
+  const here = iso && risk.fixes.length && !risk.fixes.some((f) => f.dates.includes(iso));
+  return html`<div class="ov-card">
+    <div class="ov-title">${d.name} would work ${longest} days in a row (max ${risk.maxRun})</div>
+    ${risk.runs.map((r) => html`<div class="ov-win">${mdy(r[0])} → ${mdy(r[r.length - 1])}: <b>${r.length} days</b></div>`)}
+    <div class="ov-days">${risk.breakdown.map((x) => html`<span class=${'ov-day' + (x.hot ? ' hot' : '') + (x.done ? ' done' : '')}
+      >${mdy(x.date).replace(/,.*/, '')}${x.done ? ' ✓' : ''}</span>`)}</div>
+    ${risk.fixes.length ? html`<div class="ov-sub">Ways to fix it — any one of these works:</div>
+      <ul class="ov-fix">${risk.fixes.map((f) => html`<li>Take ${f.dates.map((x, i) => html`${i ? ' and ' : ''}<b>${wkd(x)}</b>`)} off
+        — give that shift to someone else (a backup counts as a day worked too)</li>`)}</ul>
+      ${here ? html`<div class="ov-note">Taking ${wkd(iso)} off alone doesn't break the run — use one of the days above.</div>` : ''}`
+      : risk.hot.length ? html`<div class="ov-note">No one or two days off fix it — this week needs a bigger rework.</div>`
+      : html`<div class="ov-note">These days are already worked — nothing left to change this week.</div>`}
+  </div>`;
+}
 function OverInfo({ d, risk, iso }) {
   const first = d.name.split(/\s+/)[0];
   const fixText = (f) => {
@@ -74,7 +97,6 @@ function OverInfo({ d, risk, iso }) {
       ${here ? html`<div class="ov-note">Changing ${wkd(iso)} alone is not enough — use one of the days above.</div>` : ''}`
       : risk.hot.length ? html`<div class="ov-note">No one or two changes fix it — this week needs a bigger rework.</div>`
       : html`<div class="ov-note">These days are already worked — nothing left to change this week.</div>`}
-    <div class="ov-foot">✓ = already worked. Click a day to change it.</div>
   </div>`;
 }
 
@@ -205,7 +227,7 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
         <div class=${d.streak >= (lim.max_consecutive || 5) ? 'hot' : ''}><b>${d.streak}</b><span>days in a row (usual max ${lim.max_consecutive || 5})</span></div>
       </div>
 
-      ${risk && risk.hot.includes(info.date) ? html`<div class="dm-info warn dm-over"><${OverInfo} d=${d} risk=${risk} iso=${info.date} /></div>` : ''}
+      ${risk && risk.hot.includes(info.date) ? html`<div class="dm-info warn dm-over"><${RiskInfo} d=${d} risk=${risk} iso=${info.date} /></div>` : ''}
       ${kind === 'trainer' || kind === 'trainee' ? html`<div class="dm-info">${kind === 'trainer'
         ? html`<b>Trainer</b> — rides along with <b>${c.partner}</b> on the ${c.top} route.`
         : html`<b>Trainee</b> — drives the ${c.top} route with trainer <b>${c.partner}</b>.`}</div>` : ''}
@@ -725,8 +747,12 @@ function Board() {
   const daysCls = (n) => (n > (lim.max_worked_days || 5) ? 'lv-bad' : n === (lim.max_worked_days || 5) ? 'lv-warn' : '');
   const nCols = view.days.length + 5;
   // over the 7-day max: the upcoming days that cause it shake; hover one for what and how to fix
-  const risks = Object.fromEntries(view.drivers.map((x) => [x.name, overRisk(x, view.days, today, lim)]));
-  Object.values(risks).forEach((r) => { if (r) r.backupH = lim.backup_hours || 2; });
+  // and the days that would make 7 in a row (a safeguard: the rules lock that)
+  const risks = Object.fromEntries(view.drivers.map((x) => {
+    const hours = overRisk(x, view.days, today, lim), run = runRisk(x, view.days, today, lim);
+    if (hours) hours.backupH = lim.backup_hours || 2;
+    return [x.name, hours || run ? { hours, run, hot: [...new Set([...(hours ? hours.hot : []), ...(run ? run.hot : [])])] } : null];
+  }));
   const showPop = (e, name, iso) => {
     const b = e.currentTarget.getBoundingClientRect();
     setPop({ name, iso, left: Math.max(8, Math.min(b.left, window.innerWidth - 392)), top: b.bottom + 6,
@@ -844,8 +870,8 @@ function Board() {
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.mark}`}>Called out / No-show</span>
       </div>
       ${pop && risks[pop.name] && byName[pop.name] ? html`<div class="lv-pop" style=${`left:${pop.left}px;` + (pop.up != null
-        ? `top:${pop.up}px;transform:translateY(-100%)` : `top:${pop.top}px`)}><${OverInfo} d=${byName[pop.name]} risk=${risks[pop.name]} iso=${pop.iso} /></div>` : ''}
-      <p class="hint">A shaking day would put that driver over ${max7Lim}h in 7 days — hover it to see why and how to fix it.
+        ? `top:${pop.up}px;transform:translateY(-100%)` : `top:${pop.top}px`)}><${RiskInfo} d=${byName[pop.name]} risk=${risks[pop.name]} iso=${pop.iso} /></div>` : ''}
+      <p class="hint">A shaking day would put that driver over ${max7Lim}h in 7 days or at 7 days in a row — hover it to see why and how to fix it.
         Hours are scheduled on-the-clock hours. Orange = at or near a limit, red = over it.
         Locked: 12h in a day, ${max7Lim}h in any 7 days (last week counts), 7 days in a row. A 6-day or overtime
         goes through after a pop-up.</p>
