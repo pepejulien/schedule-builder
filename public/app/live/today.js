@@ -7,10 +7,11 @@ import { html } from '../preact-setup.js';
 import { useState, useEffect } from 'preact/hooks';
 import { setState } from '../store.js';
 import { Banner, Spinner, Icon } from '../ui.js';
-import { liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours } from '../api.js';
+import { liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveConfirms } from '../api.js';
+import { MissingCheck } from './missing.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 import { sundayOf, todayISO, cellInfo, WAVE_COLORS, SHIFT_COLORS, prevISO, actualList, mergeActual,
-  overRisk, runRisk, riskCardHtml } from './live-model.js';
+  overRisk, runRisk, riskCardHtml, missingDays, withConfirmed } from './live-model.js';
 
 const longDate = (iso) => parseISODate(iso).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 const when = (iso) => (iso ? new Date(iso).toLocaleString('en-US',
@@ -53,6 +54,7 @@ export function Today({ buildCard }) {
   const [week, setWeek] = useState(undefined);   // the published week to show (meta) | null
   const [smRaw, setSm] = useState(null);         // its saved summary
   const [act, setAct] = useState({});            // Route Tracker's actual hours {cur, prev}
+  const [confirms, setConfirms] = useState({});  // "not in Route Tracker" answers
   const [log, setLog] = useState([]);
   const [rev, setRev] = useState(null);
   const [err, setErr] = useState('');
@@ -78,9 +80,12 @@ export function Today({ buildCard }) {
     if (!week) return undefined;
     const un1 = watchActualHours(week.week, (d) => setAct((a) => ({ ...a, cur: d })));
     const un2 = watchActualHours(prevISO(week.week), (d) => setAct((a) => ({ ...a, prev: d })));
-    return () => { un1(); un2(); };
+    const un3 = watchLiveConfirms(week.week, (c) => setConfirms(c || {}));
+    return () => { un1(); un2(); un3(); };
   }, [week && week.week]);
-  const sm = smRaw && mergeActual(smRaw, actualList(act.prev, act.cur));
+  const actList = actualList(act.prev, act.cur);
+  const missing = smRaw ? missingDays(smRaw, actList, confirms) : [];
+  const sm = smRaw && mergeActual(smRaw, withConfirmed(actList, missing, smRaw.limits || {}));
 
   useEffect(() => {
     if (!week || rev == null) return;
@@ -174,6 +179,8 @@ export function Today({ buildCard }) {
           '✓ = already worked. On the Live schedule these days shake — click one to change it.') }} />
       </details>`)}
     </div>` : ''}
+
+    <${MissingCheck} week=${week.week} missing=${missing} />
 
     ${weekOpen.length ? html`<div class="card td-alert">
       <b>Open slots still to fill:</b>

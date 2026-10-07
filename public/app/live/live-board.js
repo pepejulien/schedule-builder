@@ -13,7 +13,8 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest } from '../solver-client.js';
-import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote } from '../api.js';
+import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms } from '../api.js';
+import { MissingCheck } from './missing.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
 import {
@@ -22,7 +23,7 @@ import {
 } from '../steps/step9-build.js';
 import {
   loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
-  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk, runRisk, riskCardHtml, roomOn, clockOutBy,
+  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk, runRisk, riskCardHtml, roomOn, clockOutBy, missingDays, workedSig, actualList,
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
@@ -499,6 +500,8 @@ function Board() {
   const [q, setQ] = useState('');                   // name search
   const [pop, setPop] = useState(null);             // the over-60 card: {name, iso, left, top, up}
   const [notes, setNotes] = useState({});           // comments on shifts: {"<ISO day>|<name>": {text, by, at}}
+  const [confirms, setConfirms] = useState({});     // "not in Route Tracker" answers
+  const [actDocs, setActDocs] = useState({});       // Route Tracker's actual_hours docs {cur, prev}
 
   // async work reads the newest values through refs
   const R = useRef({});
@@ -542,8 +545,17 @@ function Board() {
     openWeek(sel);
     const un1 = watchLiveWeek(sel, (m) => setMetaLive(m));
     const un2 = watchLiveLog(sel, (l) => setLog(l));
-    setNotes({});
+    setNotes({}); setConfirms({}); setActDocs({});
     const unNotes = watchLiveNotes(sel, (n) => setNotes(n || {}));
+    const unConf = watchLiveConfirms(sel, (c) => {
+      setConfirms(c || {});
+      // a "they worked" answer changed: reload so the hours count it
+      const seen = ACT_LOADED[sel];
+      if (!seen || workedSig(c) === seen.confirm) return;
+      if (saving.current || !R.current.eng || R.current.eng.status !== 'ready') return;
+      seen.confirm = workedSig(c);
+      openWeek(sel);
+    });
     // a clock-out in Route Tracker changed someone's real hours: reload so the limits use them
     const onActual = (which) => (doc) => {
       const seen = ACT_LOADED[sel];
@@ -555,7 +567,9 @@ function Board() {
     };
     const un3 = watchActualHours(sel, onActual('cur'));
     const un4 = watchActualHours(prevISO(sel), onActual('prev'));
-    return () => { unNotes(); un1(); un2(); un3(); un4(); };
+    const unA = watchActualHours(sel, (doc) => setActDocs((x) => ({ ...x, cur: doc })));
+    const unB = watchActualHours(prevISO(sel), (doc) => setActDocs((x) => ({ ...x, prev: doc })));
+    return () => { unNotes(); unConf(); unA(); unB(); un1(); un2(); un3(); un4(); };
   }, [sel]);
 
   // someone else saved this week: pull it in
@@ -831,6 +845,7 @@ function Board() {
         const slot = m ? { day: m[1], role: 'road' } : (m = l.match(/P2 SHORT (\w+)/)) ? { day: m[1], role: 'backup' } : null;
         return html`<li>${openText(l)}${slot ? html` <button class="small" onClick=${() => goFind(slot.day, slot.role)}>Find someone…</button>` : ''}</li>`;
       })}</ul><//>` : ''}
+    <${MissingCheck} week=${sel} missing=${missingDays(data.summary, actualList(actDocs.prev, actDocs.cur), confirms, today)} />
     <${RuleProblems} lines=${view.errors || []} />
     ${(view.overridden || []).length ? html`<details class="banner warn"><summary><b>${view.overridden.length} approved override${view.overridden.length === 1 ? '' : 's'}</b></summary>
       <ul>${view.overridden.map((l) => html`<li>${translateOverride(l)}</li>`)}</ul></details>` : ''}

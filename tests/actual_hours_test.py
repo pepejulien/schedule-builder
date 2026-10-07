@@ -119,6 +119,11 @@ if other:
     gone = other['day_hours'].get(mon, 0) + other['day_hours'].get(tue, 0)   # Monday is tracked too
     ok(abs(r5['clock_hours'] - (other['clock_hours'] - gone)) < 0.01, 'the week total drops by the days not worked')
     # someone Route Tracker doesn't know at all keeps the schedule (a name mismatch never hides risk)
+    # same day, but Route Tracker says they were on a route with no out time yet ("open"): they worked
+    act4 = [act3[0], dict(act3[1], open=[tue])]
+    l4 = J(runner.load_state, {'state': st['state'], 'out': os.path.join(tmp, 'live4.xlsx'), 'actual': act4})
+    r6 = next(x for x in l4['drivers'] if x['name'] == other['name'])
+    ok(r6['day_hours'].get(tue) == 10 and tue in r6['worked_dates'], 'on a route with no out time: keeps the planned 10h')
     stranger = next(x for x in l3['drivers'] if x['name'] not in (name, other['name']) and 'Tue' in x['road_days'])
     ok(stranger['day_hours'].get(tue) == 10, 'a driver with no clock-outs at all keeps the planned 10h')
 else:

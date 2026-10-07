@@ -209,6 +209,19 @@ export const deleteLiveWeek = (weekISO) => window.JAJB.deleteScheduleWeek(weekIS
 export const watchLiveNotes = (weekISO, cb) => (window.JAJB.watchScheduleNotes
   ? window.JAJB.watchScheduleNotes(weekISO, cb) : (cb({}), () => {}));
 export const saveLiveNote = (weekISO, name, day, text) => window.JAJB.saveScheduleNote(weekISO, name, day, text);
+// "not in Route Tracker - what happened?" answers: {"<ISO day>|<name>": {name, day, answer, by, at}}
+const canConfirm = () => onFirebase() && typeof window.JAJB.watchScheduleConfirms === 'function';
+export const watchLiveConfirms = (weekISO, cb) => (canConfirm() ? window.JAJB.watchScheduleConfirms(weekISO, cb) : (cb({}), () => {}));
+export const saveLiveConfirm = (weekISO, name, day, answer) => window.JAJB.saveScheduleConfirm(weekISO, name, day, answer);
+export function confirmsOnce(weekISO, ms = 6000) {
+  if (!canConfirm()) return Promise.resolve({});
+  return new Promise((resolve) => {
+    let done = false, un = null;
+    const finish = (d) => { if (done) return; done = true; clearTimeout(t); setTimeout(() => un && un(), 0); resolve(d || {}); };
+    const t = setTimeout(() => finish({}), ms);
+    un = window.JAJB.watchScheduleConfirms(weekISO, finish);
+  });
+}
 
 // Actual hours from Route Tracker's clock-outs (2026-10-07): Firestore actual_hours/{weekStart}
 // = {week, drivers: {id: {name, keys, tid, days: {ISO: hours}}}, by, at}. Written by Route Tracker

@@ -498,7 +498,13 @@ def _apply_actual(res, actual):
                 act[d] = h
             elif lo <= d < start:
                 prev[d] = h
-        for d in tracked:                    # tracked days without them: they didn't work
+        open_days = set()                    # on a route, out time not entered yet: they worked
+        for iso in (a.get("open") or []):
+            try:
+                open_days.add(datetime.date.fromisoformat(iso))
+            except Exception:  # noqa: BLE001
+                pass
+        for d in tracked - open_days:        # tracked days without them: they didn't work
             if start <= d:
                 act.setdefault(d, 0)
             else:

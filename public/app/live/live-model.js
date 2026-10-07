@@ -8,12 +8,12 @@
 //            days-in-a-row tail, and is what a drivers' app will read later
 //   engine   the schedule engine's whole state (runner.export_state)
 import { editRequest } from '../solver-client.js';
-import { liveWeek, saveLiveWeek, actualHoursOnce } from '../api.js';
+import { liveWeek, saveLiveWeek, actualHoursOnce, confirmsOnce } from '../api.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 // the limit checks + actual-hours merge live in limits.js (no app imports), so the
 // Vehicle Assigner can load them too
-import { actualList } from './limits.js';
-export { actualList, flKey, mergeActual, overRisk, runRisk, riskCardHtml, roomOn, clockOutBy } from './limits.js';
+import { actualList, missingDays, withConfirmed } from './limits.js';
+export { actualList, flKey, mergeActual, overRisk, runRisk, riskCardHtml, roomOn, clockOutBy, missingDays, withConfirmed } from './limits.js';
 
 export const prevISO = (iso) => toISODate(addDays(parseISODate(iso), -7));
 export const todayISO = () => toISODate(new Date());
@@ -70,6 +70,8 @@ export function prevHoursFrom(summary) {
 }
 
 export const actualSig = (doc) => JSON.stringify((doc && doc.drivers) || null);
+// only the "they worked" answers change the hours (the engine reloads when they do)
+export const workedSig = (confirms) => JSON.stringify(Object.keys(confirms || {}).filter((k) => confirms[k].answer === 'worked').sort());
 
 export const ACT_LOADED = {};
 
@@ -83,11 +85,16 @@ export async function loadEngine(weekISO, engineJson, slot = 'live') {
     if (p) { const sm = JSON.parse(p.summary); prev = prevWorkedFrom(sm); prevHours = prevHoursFrom(sm); }
   } catch { /* no history for last week — keep the builder's tail */ }
   // the real hours of days already worked (Route Tracker), this week and last
-  const [actCur, actPrev] = await Promise.all([actualHoursOnce(weekISO), actualHoursOnce(prevISO(weekISO))]);
-  ACT_LOADED[weekISO] = { cur: actualSig(actCur), prev: actualSig(actPrev) };
+  const [actCur, actPrev, confirms, cur] = await Promise.all([actualHoursOnce(weekISO), actualHoursOnce(prevISO(weekISO)),
+    confirmsOnce(weekISO), liveWeek(weekISO).catch(() => null)]);
+  ACT_LOADED[weekISO] = { cur: actualSig(actCur), prev: actualSig(actPrev), confirm: workedSig(confirms) };
+  // a "they worked" answer counts the scheduled hours until Route Tracker has the clock-out
+  let actual = actualList(actPrev, actCur);
+  try {
+    if (cur) { const sm = JSON.parse(cur.summary); actual = withConfirmed(actual, missingDays(sm, actual, confirms), sm.limits || {}); }
+  } catch { /* keep the clock-outs */ }
   const m = await editRequest('load_state',
-    { state: engineJson, out: `/work/${slot}.xlsx`, prev_worked: prev, prev_hours: prevHours,
-      actual: actualList(actPrev, actCur) }, slot);
+    { state: engineJson, out: `/work/${slot}.xlsx`, prev_worked: prev, prev_hours: prevHours, actual }, slot);
   if (!m.ok) throw Object.assign(new Error(m.error.message), { kind: m.error.kind });
   return m.report;
 }

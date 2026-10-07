@@ -14,6 +14,8 @@ export function actualList(...docs) {
   for (const doc of docs) for (const [id, d] of Object.entries((doc && doc.drivers) || {})) {
     const cur = by.get(id) || { name: d.name, keys: d.keys || [], tid: d.tid || '', days: {} };
     Object.assign(cur.days, d.days || {});
+    // days on a route with no out time yet: they worked (Route Tracker, 2026-10-07)
+    if ((d.open || []).length) cur.open = [...new Set([...(cur.open || []), ...d.open])];
     by.set(id, cur);
   }
   return [...by.values()];
@@ -48,7 +50,7 @@ export function mergeActual(summary, list) {
     const a = dup.has(k) ? null : byKey.get(k);
     if (!a) return d;
     const missed = {};
-    for (const iso of tracked) if (!Number((a.days || {})[iso])) missed[iso] = 0;
+    for (const iso of tracked) if (!Number((a.days || {})[iso]) && !(a.open || []).includes(iso)) missed[iso] = 0;
     const day_hours = { ...(d.day_hours || {}), ...missed, ...a.days };
     const clock_hours = Object.entries(day_hours).filter(([k2]) => k2 >= start).reduce((t, [, h]) => t + Number(h || 0), 0);
     let max7 = 0;
@@ -241,4 +243,70 @@ export function clockOutBy(clockInMin, room, earlyMin = 30) {
   const span = room >= 5.5 ? room + 0.5 : Math.max(0, room);
   const limit = Math.round(clockInMin + span * 60);
   return { limit, by: limit - earlyMin };
+}
+
+// ---- "Not in Route Tracker — what happened?" (Jose 2026-10-07) ---------------------------
+// A day that's over and that Route Tracker tracked (anyone clocked out), where a driver it knows
+// was scheduled to work but has no clock-out and wasn't marked off. Someone answers once —
+// called off / no-show / sent home / worked — in the Schedule Builder or Route Tracker
+// (Firestore schedule_weeks/{week}/confirm/{date|name}). Until then the day counts 0 hours;
+// "worked" counts the scheduled hours until the real clock-out arrives (withConfirmed).
+export const ANSWERS = { callout: 'Called off', noshow: 'No-show', senthome: 'Sent home', worked: 'Worked' };
+export const confirmKey = (iso, name) => `${iso}|${name}`;
+// a schedule cell -> the hours it stands for (0 = not a shift someone works)
+function shiftHours(v, lim) {
+  const s = String(v || '').trim();
+  if (!s || /^(Called out|No-show|Day off|Unavailable)$/.test(s) || /meeting/i.test(s)) return 0;
+  if (/Backup/.test(s)) return lim.backup_hours || 2;
+  if (s === 'Dispatch') return lim.dispatch_hours || 12;
+  return /^\d{1,2}:\d{2} [AP]M/.test(s) ? (lim.primary_hours || 10) : 0;
+}
+function actualIndex(list) {
+  const by = new Map(), dup = new Set();
+  for (const a of list || []) for (const k of new Set([flKey(a.name), ...(a.keys || [])])) {
+    if (!k) continue;
+    if (by.has(k) && by.get(k) !== a) dup.add(k);
+    by.set(k, a);
+  }
+  return (name) => { const k = flKey(name); return dup.has(k) ? null : by.get(k) || null; };
+}
+// -> [{name, date, day, cell, hours, answer, by, at}] for this week's summary
+export function missingDays(summary, list, confirms, today = toISODate(new Date())) {
+  if (!summary || !(list || []).length) return [];
+  const lim = summary.limits || {};
+  const tracked = new Set();
+  for (const a of list) for (const [iso, h] of Object.entries(a.days || {})) if (iso < today && Number(h)) tracked.add(iso);
+  const find = actualIndex(list), out = [];
+  for (const d of summary.drivers || []) {
+    const a = find(d.name);
+    if (!a) continue;                          // Route Tracker doesn't know them: the schedule stands
+    for (const x of summary.days || []) {
+      if (x.date >= today || !tracked.has(x.date) || Number((a.days || {})[x.date])) continue;
+      const cell = String((d.cells || {})[x.day] || '').trim(), hours = shiftHours(cell, lim);
+      if (!hours) continue;
+      if ((a.open || []).includes(x.date)) {   // on a route, out time not entered: they worked
+        out.push({ name: d.name, date: x.date, day: x.day, cell, hours, answer: 'worked', auto: true, by: 'Route Tracker' });
+        continue;
+      }
+      const c = (confirms || {})[confirmKey(x.date, d.name)];
+      out.push({ name: d.name, date: x.date, day: x.day, cell, hours, answer: c ? c.answer : null, by: c && c.by, at: c && c.at });
+    }
+  }
+  return out.sort((p, q) => p.date.localeCompare(q.date) || p.name.localeCompare(q.name));
+}
+// "worked" answers (and route days with no out time yet): the scheduled hours count as that
+// day's hours until Route Tracker has the real clock-out — a route day nobody scheduled counts a
+// full route. Folded into the driver's own entry so name matching stays the same.
+export function withConfirmed(list, missing, lim = {}) {
+  const worked = (missing || []).filter((m) => m.answer === 'worked');
+  if (!worked.length && !(list || []).some((a) => (a.open || []).length)) return list;
+  const find = actualIndex(list);
+  const out = (list || []).map((a) => ({ ...a, days: { ...(a.days || {}) } }));
+  const byOrig = new Map((list || []).map((a, i) => [a, out[i]]));
+  for (const m of worked) {
+    const a = find(m.name);
+    if (a && !Number(a.days && a.days[m.date])) byOrig.get(a).days[m.date] = m.hours;
+  }
+  for (const a of out) for (const iso of a.open || []) if (!Number(a.days[iso])) a.days[iso] = lim.primary_hours || 10;
+  return out;
 }

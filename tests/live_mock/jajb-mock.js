@@ -101,6 +101,16 @@
       if (t) all[k] = { name: nm, day, text: t, by: name, at: now() }; else delete all[k];
       put('notes/' + week, all); fire();
     },
+    watchScheduleConfirms: (week, cb) => {
+      const f = () => cb(get('confirm/' + week) || {});
+      listeners.add(f); setTimeout(f, 0);
+      return () => listeners.delete(f);
+    },
+    saveScheduleConfirm: async (week, nm, day, answer) => {
+      const all = get('confirm/' + week) || {}, k = day + '|' + nm;
+      if (answer) all[k] = { name: nm, day, answer, by: name, at: now() }; else delete all[k];
+      put('confirm/' + week, all); fire();
+    },
     deleteScheduleWeek: async (week) => {
       const all = weeks(); delete all[week]; put('weeks', all);
       localStorage.removeItem(K + 'log/' + week);
