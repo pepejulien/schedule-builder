@@ -160,10 +160,10 @@ async function edit(msg) {
     candidates: 'candidates', add_options: 'add_options', swap_candidates: 'swap_candidates',
     wave_options: 'wave_options',
     apply: 'apply_edit', apply_add: 'apply_add', apply_wave: 'apply_wave', undo: 'undo_last',
-    apply_mark: 'apply_mark', clear_mark: 'clear_mark',
+    apply_mark: 'apply_mark', clear_mark: 'clear_mark', set_role: 'set_role',
     load_state: 'load_state', export_state: 'export_state', export_xlsx: 'export_xlsx',
   };
-  const MUTATING = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'load_state']);
+  const MUTATING = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'set_role', 'load_state']);
   // Ops whose answer comes with the slot's workbook bytes.
   const WITH_XLSX = slot === 'build' ? MUTATING : new Set(['export_xlsx']);
   try {
@@ -177,7 +177,7 @@ async function edit(msg) {
     const out = JSON.parse(fn(JSON.stringify(msg.payload || {})));
     runner.destroy();
     if (out.ok === false) {
-      fail({ kind: out.kind || 'edit', message: out.message || 'The edit failed.', full: out.full });
+      fail({ kind: out.kind || 'edit', message: out.message || 'The edit failed.', full: out.full, limits: out.limits });
       return;
     }
     if (MUTATING.has(msg.op) || WITH_XLSX.has(msg.op)) {

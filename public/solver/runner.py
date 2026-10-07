@@ -924,10 +924,12 @@ def swap_candidates(payload_json):
 
 
 def apply_add(payload_json):
-    """payload: {name, day, role, swap_name?, extra_route?}. Give `name` an
-    extra shift on `day`. For a route on a full day, either `swap_name` (that
+    """payload: {name, day, role, swap_name?, extra_route?, wave?}. Give `name`
+    an extra shift on `day`. For a route on a full day, either `swap_name` (that
     driver's route becomes a backup, freeing the slot) or `extra_route:true`
-    (raise the day's route count by one) must be provided."""
+    (raise the day's route count by one) must be provided. `wave` (Live board,
+    2026-10-06): a route in exactly that wave -- a full wave just gets one more
+    route (Amazon may have handed out routes the app doesn't know yet)."""
     try:
         p = json.loads(payload_json)
         res, cfg = _STATE.get("res"), _STATE.get("cfg")
@@ -948,11 +950,18 @@ def apply_add(payload_json):
         swap_name = p.get("swap_name")
         extra_route = bool(p.get("extra_route"))
 
+        wave = p.get("wave")
+        if wave and wave not in res.waves[day]:
+            return json.dumps(dict(ok=False, kind="edit", message=f"No {wave} wave on {day}."))
+
         if role == "backup":
             _STATE["undo"].append(_snapshot(res))
             to_dr["bk"].append(day)
-            res.cell[day][i_to] = _fill_label(res, day, "backup")
+            res.cell[day][i_to] = (wave + " Backup") if wave else _fill_label(res, day, "backup")
             desc = f"Added a {day} backup for {to_dr['name']}"
+        elif wave:
+            _STATE["undo"].append(_snapshot(res))
+            desc = _put_route(res, i_to, to_dr, day, wave)
         elif swap_name:
             i_sw, sw_dr = _find(res, swap_name)
             if sw_dr is None or day not in sw_dr["prim"]:
@@ -1010,6 +1019,81 @@ def apply_add(payload_json):
 
 
 _WAVE_RE = re.compile(r"(\d{1,2}:\d{2} [AP]M)")
+
+
+def _wave_filled(res, day, wave):
+    """Routes driven in `wave` on `day` (trainees drive; ride-alongs don't)."""
+    return sum(1 for v in res.cell[day].values()
+               if "Backup" not in v and "TRAIN helper" not in v and _cell_wave(v) == wave)
+
+
+def _put_route(res, i, dr, day, wave):
+    """Give dr a route in `wave`; a full wave gets one more route. Returns the
+    change-log text."""
+    extra = _wave_filled(res, day, wave) >= res.waves[day].get(wave, 0)
+    if extra:
+        res.waves[day][wave] = res.waves[day].get(wave, 0) + 1
+        res.routes[day] += 1
+    dr["prim"].append(day)
+    res.cell[day][i] = wave
+    return (f"Added a {day} {wave} route for {dr['name']}"
+            + (f" - an EXTRA route ({day} is now {res.routes[day]} routes)" if extra else ""))
+
+
+def set_role(payload_json):
+    """payload: {name, day, to: 'backup'|'road', confirm_*?}. Turn a driver's
+    route that day into a backup (same wave; the route slot is left open), or a
+    backup into a route (checked like a new route; a full wave gets one more
+    route). Live board, 2026-10-06."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        day, to = p.get("day"), p.get("to")
+        i, dr = _find(res, p.get("name") or "")
+        if dr is None or day not in res.DAYS or to not in ("backup", "road"):
+            return json.dumps(dict(ok=False, kind="edit", message="Bad request."))
+        label = res.cell[day].get(i, "")
+        if "TRAIN" in label:
+            return json.dumps(dict(ok=False, kind="edit",
+                message="That is a training-pair day - training days can only be changed by a rebuild."))
+        wave = _cell_wave(label)
+        snap = _snapshot(res)
+        if to == "backup":
+            if day not in dr["prim"]:
+                return json.dumps(dict(ok=False, kind="edit", message=f"{dr['name']} has no route on {day}."))
+            st, why = _swap_assess(res, dr, label)
+            dr["prim"].remove(day)
+            dr["bk"].append(day)
+            res.cell[day][i] = (wave + " Backup") if wave else "Backup"
+            if st == "warn":
+                _STATE["ovr_policy"].add(norm(dr["name"]))
+            desc = (f"Made {dr['name']}'s {day} {wave or ''} route a backup (route slot left open)"
+                    .replace("  ", " "))
+            if st == "warn":
+                desc += f"  [flagged: {'; '.join(why)}]"
+        else:
+            if day not in dr["bk"]:
+                return json.dumps(dict(ok=False, kind="edit", message=f"{dr['name']} has no backup on {day}."))
+            dr["bk"].remove(day)                  # checked as if the backup weren't there
+            res.cell[day].pop(i, None)
+            err, st, why = _gate(res, dr, day, "road", p)
+            if err:
+                _restore(res, snap)
+                return err
+            w = wave if wave in res.waves[day] else _fill_label(res, day, "road")
+            desc = _put_route(res, i, dr, day, w).replace("Added a", "Made", 1)
+            desc = desc.replace(f" route for {dr['name']}", f" route for {dr['name']} (was a backup)", 1)
+            desc += _note_override(dr, day, st, why)
+        _STATE["undo"].append(snap)
+        _STATE["edits"].append(desc)
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
 
 
 def _cell_wave(v):

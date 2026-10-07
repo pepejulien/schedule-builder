@@ -17,7 +17,7 @@ import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog } from '../ap
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
 import {
-  AddEditor, WaveEditor, SlotEditor, ConfirmOverride, LimitConfirm, runConfirmed, TIER_META, TIER_ORDER,
+  WaveEditor, SlotEditor, ConfirmOverride, LimitConfirm, runConfirmed, TIER_META, TIER_ORDER,
   translateInfeasible, translateOverride,
 } from '../steps/step9-build.js';
 import {
@@ -27,8 +27,9 @@ import {
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-const MUT = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark']);
-const KIND = { apply: 'edit', apply_add: 'extra', apply_wave: 'wave', undo: 'undo', apply_mark: 'mark', clear_mark: 'mark' };
+const MUT = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'set_role']);
+const KIND = { apply: 'edit', apply_add: 'extra', apply_wave: 'wave', undo: 'undo', apply_mark: 'mark', clear_mark: 'mark',
+  set_role: 'edit' };
 const MARKS = [
   ['callout', 'Called out', 'They called in and won\'t work.'],
   ['noshow', 'No-show', 'They didn\'t show up and didn\'t call.'],
@@ -80,8 +81,54 @@ function NotHere() {
   </div>`;
 }
 
+// "10:05 AM" < "10:25 AM" < "1:05 PM"
+const waveMins = (w) => { const m = String(w).match(/(\d{1,2}):(\d{2}) ([AP]M)/); if (!m) return 9999;
+  return ((+m[1] % 12) + (m[3] === 'PM' ? 12 : 0)) * 60 + +m[2]; };
+
+// Routes driven per wave on a day, from the grid (trainees drive).
+function waveFills(view, day) {
+  const out = {};
+  for (const x of view.drivers) {
+    const c = cellInfo((x.cells || {})[day]);
+    if (c.kind === 'road' || c.kind === 'trainee') out[c.top] = (out[c.top] || 0) + 1;
+  }
+  return out;
+}
+
+// Jose 2026-10-06: clicking a day shows THAT day's waves right away — one
+// click puts the driver on a route there. A full wave is fine: it just gets
+// one more route (Amazon may have handed out routes the app doesn't know
+// yet). Rule results show up front; pop-ups still come where they're needed.
+function DayShifts({ name, info, road, fills, busy, onPick, compact }) {
+  const first = name.split(/\s+/)[0];
+  if (!road) return html`<p class="muted"><${Spinner}/> Checking the rules…</p>`;
+  if (road.status === 'blocked') {
+    return html`<div class="lv-lock">🔒 Can't put ${first} on a route${compact ? '' : ` ${info.day}`}: ${road.reasons.join('; ')}</div>`;
+  }
+  const waves = Object.keys(info.waves || {}).sort((a, b) => waveMins(a) - waveMins(b));
+  const warns = road.status === 'warn' || road.status === 'full'
+    ? road.reasons.filter((r) => !/^(6-day|overtime)/.test(r)) : [];
+  return html`<div class="lv-dayshifts">
+    ${road.status === 'unavail' ? html`<div class="lv-note unavail">${first} asked for this day off — you'll confirm before it's saved.</div>` : ''}
+    ${(road.limits || []).length ? html`<div class="lv-note confirm">${road.limits.join('; ')} — a pop-up will ask you first.</div>` : ''}
+    ${warns.length ? html`<div class="lv-note warn">Allowed, but flagged: ${warns.join('; ')}</div>` : ''}
+    ${!compact ? html`<div class="muted" style="margin:6px 0 4px">Put ${first} on a route:</div>` : ''}
+    <div class="lv-wavebtns">
+      ${waves.map((w) => {
+        const want = info.waves[w] || 0, got = fills[w] || 0;
+        const full = got >= want;
+        return html`<button class="lv-wavebtn" disabled=${busy} style=${`background:${WAVE_COLORS[w.replace(/ [AP]M$/, '')] || SHIFT_COLORS.other}`}
+          aria-label=${`${w}: ${full ? 'full, adds one more route' : `${got} of ${want} filled`}`}
+          title=${full ? `All ${want} route${want === 1 ? '' : 's'} in this wave ${want === 1 ? 'is' : 'are'} filled — this adds one more` : `${got} of ${want} filled`}
+          onClick=${() => onPick(w)}><b>${w}</b><small>${full ? 'full · +1 route' : `${got} of ${want} filled`}</small></button>`;
+      })}
+      ${!waves.length ? html`<span class="muted">No waves set for this day.</span>` : ''}
+    </div>
+  </div>`;
+}
+
 // What one driver is doing on one day, and what can be done about it.
-function CellMenu({ d, day, info, mark, busy, onClose, act }) {
+function CellMenu({ d, day, info, mark, busy, onClose, act, road, fills }) {
   const v = (d.cells || {})[day] || '';
   const c = cellInfo(v);
   const kind = c.kind;
@@ -100,17 +147,51 @@ function CellMenu({ d, day, info, mark, busy, onClose, act }) {
         ${role ? html`
           <button disabled=${busy} onClick=${() => act('move', { day, role, fromName: d.name })}>Give this ${role === 'road' ? 'route' : 'backup'} to someone else…</button>
           <button disabled=${busy} onClick=${() => act('wave', { day, name: d.name })}>Change wave…</button>
+          ${role === 'road'
+            ? html`<button disabled=${busy} onClick=${() => act('role', { name: d.name, day, to: 'backup' })}>Make it a backup (the route stays open)</button>`
+            : html`<button disabled=${busy} onClick=${() => act('role', { name: d.name, day, to: 'road' })}>Make it a route</button>`}
           <button disabled=${busy} onClick=${() => act('mark', { name: d.name, day, kind: 'callout' })}>${first} called out…</button>
           <button disabled=${busy} onClick=${() => act('mark', { name: d.name, day, kind: 'noshow' })}>No-show…</button>
           <button disabled=${busy} onClick=${() => act('remove', { day, role, fromName: d.name })}>Remove — leave the slot open</button>` : ''}
         ${mark ? html`<button disabled=${busy} onClick=${() => act('clear', { name: d.name, day })}>Clear this mark</button>` : ''}
+        ${info.open && (kind === 'empty' || kind === 'off') ? html`
+          <${DayShifts} name=${d.name} info=${info} road=${road} fills=${fills} busy=${busy}
+            onPick=${(w) => act('wave-add', { name: d.name, day, wave: w, road })} />` : ''}
         ${info.open && kind === 'empty' ? html`
-          <button class="primary" disabled=${busy} onClick=${() => act('add', { name: d.name })}>Give ${first} a shift…</button>
           <button disabled=${busy} onClick=${() => act('mark', { name: d.name, day, kind: 'off' })}>${first} asked for ${day} off…</button>` : ''}
-        ${info.open && kind === 'off' ? html`
-          <button disabled=${busy} onClick=${() => act('add', { name: d.name })}>Give ${first} a shift anyway…</button>` : ''}
         ${kind === 'trainer' || kind === 'trainee' ? html`<p class="muted">Training day — change it with a rebuild in the builder.</p>` : ''}
         ${kind === 'disp' || kind === 'meet' ? html`<p class="muted">Dispatch duty / meetings come from the builder's settings.</p>` : ''}
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button disabled=${busy} onClick=${onClose}>Close</button>
+        ${busy ? html`<span><${Spinner}/> Saving…</span>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+// Click on a name: the driver's week, each free day with its waves.
+function WeekShifts({ d, view, opts, busy, onClose, onPick }) {
+  const first = d.name.split(/\s+/)[0];
+  return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div class="edit-modal card">
+      <h3>Give ${d.name} a shift</h3>
+      <p class="hint">${d.clock_hours ?? d.hours}h this week · most in any 7 days ${d.max7 ?? '—'}h. Pick a wave on a free day —
+        a full wave just gets one more route. To make a backup, click the shift in the table afterwards.</p>
+      ${opts && opts.error ? html`<${Banner} kind="err">${opts.error.message}<//>` : ''}
+      <div class="lv-week">
+        ${view.days.filter((x) => x.open).map((info) => {
+          const v = (d.cells || {})[info.day] || '';
+          const k = cellInfo(v).kind;
+          const dd = opts && opts.data ? opts.data.days.find((x) => x.day === info.day) : null;
+          return html`<div class="lv-weekrow">
+            <div class="lv-weekday"><b>${info.day}</b> <span class="muted">${shortDate(info.date)}</span></div>
+            <div>${k !== 'empty' && k !== 'off'
+              ? html`<div style="max-width:150px"><${Block} v=${v} /></div>`
+              : html`<${DayShifts} compact name=${d.name} info=${info} road=${dd ? dd.road : null}
+                  fills=${waveFills(view, info.day)} busy=${busy} onPick=${(w) => onPick(info.day, w, dd && dd.road)} />`}</div>
+          </div>`;
+        })}
       </div>
       <div class="row" style="margin-top:12px">
         <button disabled=${busy} onClick=${onClose}>Close</button>
@@ -229,6 +310,7 @@ function Board() {
   const [marker, setMarker] = useState(null);  // {name, day, kind}
   const [confirm, setConfirm] = useState(null);
   const [limit, setLimit] = useState(null);     // the 6-day / overtime pop-up
+  const [opts, setOpts] = useState(null);       // add_options for the driver whose day/week is open
   const [finder, setFinder] = useState({ day: null, role: 'road' });
   const [showLog, setShowLog] = useState(false);
   const [sortBy, setSortBy] = useState(readSort);   // 'tier' | 'name'
@@ -347,6 +429,43 @@ function Board() {
   }
   const req = (op, p) => (MUT.has(op) ? run(op, p) : liveRequest(op, p));
 
+  // rule check of every day for the driver whose cell / week is open
+  const optName = (cell && cell.name) || (adder && adder.name) || null;
+  useEffect(() => {
+    if (!optName || !data) { setOpts(null); return undefined; }
+    let alive = true;
+    setOpts({ loading: true });
+    const go = () => liveRequest('add_options', { name: optName }).then((m) => {
+      if (alive) setOpts(m.ok ? { data: m.data } : { error: m.error });
+    });
+    if (R.current.eng.status === 'ready') go();
+    else { const t = setInterval(() => { if (R.current.eng.status === 'ready') { clearInterval(t); go(); } }, 300);
+      return () => { alive = false; clearInterval(t); }; }
+    return () => { alive = false; };
+  }, [optName, data && data.rev, eng.status]);
+
+  // A route in a chosen wave, through whatever pop-ups it needs.
+  function addWave(name, day, wave, road) {
+    runConfirmed({ name, day, role: 'road', unavReasons: road && road.status === 'unavail' ? road.reasons : null,
+      limits: road && road.limits }, setConfirm, setLimit, async (flags) => {
+      const m = await run('apply_add', { name, day, role: 'road', wave, ...flags });
+      if (m.ok) { setCell(null); setAdder(null); } else toast(m.error.message, 'err');
+    });
+  }
+
+  // Any edit; if the engine asks for a pop-up first, show it and try again.
+  async function runAsking(op, payload, who) {
+    const m = await run(op, payload);
+    if (m.ok || !m.error) return m;
+    if (m.error.kind === 'needs_confirm') {
+      setConfirm({ ...who, reasons: [m.error.message.replace(/ Confirm the override first\.$/, '')],
+        run: () => runAsking(op, { ...payload, confirm_unavailable: true }, who) });
+    } else if (m.error.kind === 'needs_limits') {
+      setLimit({ ...who, limits: m.error.limits || [], run: () => runAsking(op, { ...payload, confirm_limits: true }, who) });
+    } else toast(m.error.message, 'err');
+    return m;
+  }
+
   // candidates for "give this shift to someone else"
   useEffect(() => {
     if (!mover) { setMoverCands(null); return undefined; }
@@ -374,9 +493,8 @@ function Board() {
   // a pick from "Who can work extra?"
   function finderPick(c, hasOpen) {
     const { day, role } = finder;
-    const info = view.days.find((x) => x.day === day);
-    if (!hasOpen && role === 'road' && !window.confirm(`All ${info.routes} routes on ${day} are filled.\n\nAdd ${c.name} as an EXTRA route? `
-      + `${day} becomes ${info.routes + 1} routes.\n\n(To move someone to backup instead, click ${c.name}'s name in the table.)`)) return;
+    // a full day just gets one more route (Jose 2026-10-06: Amazon may have
+    // handed out routes the app doesn't know yet) — the change log says so
     runConfirmed({ name: c.name, day, role, unavReasons: c.status === 'unavail' ? c.reasons : null, limits: c.limits },
       setConfirm, setLimit, async (flags) => {
         const m = hasOpen ? await run('apply', { day, role, to_name: c.name, ...flags })
@@ -386,11 +504,13 @@ function Board() {
   }
 
   async function cellAct(what, p) {
-    setCell(null);
+    if (what !== 'wave-add') setCell(null);
     if (what === 'move') setMover(p);
     else if (what === 'wave') setWaver(p);
     else if (what === 'mark') setMarker(p);
     else if (what === 'add') setAdder(p);
+    else if (what === 'wave-add') addWave(p.name, p.day, p.wave, p.road);
+    else if (what === 'role') runAsking('set_role', p, { name: p.name, day: p.day, role: p.to === 'road' ? 'road' : 'backup' });
     else if (what === 'remove') {
       const m = await run('apply', { day: p.day, role: p.role, from_name: p.fromName });
       if (!m.ok) toast(m.error.message, 'err');
@@ -595,6 +715,8 @@ function Board() {
 
     ${cell && byName[cell.name] ? html`<${CellMenu} d=${byName[cell.name]} day=${cell.day}
       info=${view.days.find((x) => x.day === cell.day)} mark=${markOf(cell.name, cell.day)} busy=${busy}
+      road=${opts && opts.data && opts.data.name === cell.name ? (opts.data.days.find((x) => x.day === cell.day) || {}).road : null}
+      fills=${waveFills(view, cell.day)}
       onClose=${() => setCell(null)} act=${cellAct} />` : ''}
     ${marker ? html`<${MarkDialog} req=${marker} busy=${busy} onClose=${() => setMarker(null)}
       onSave=${async (kind, note) => { const m = await run('apply_mark', { ...marker, kind, note }); if (m.ok) setMarker(null); else toast(m.error.message, 'err'); }} />` : ''}
@@ -603,8 +725,9 @@ function Board() {
       onRemove=${async () => { const m = await run('apply', { day: mover.day, role: mover.role, from_name: mover.fromName }); if (m.ok) setMover(null); }} />` : ''}
     ${waver ? html`<${WaveEditor} day=${waver.day} name=${waver.name} req=${req}
       onClose=${() => setWaver(null)} onApplied=${() => setWaver(null)} />` : ''}
-    ${adder ? html`<${AddEditor} name=${adder.name} req=${req}
-      onClose=${() => setAdder(null)} onApplied=${() => setAdder(null)} />` : ''}
+    ${adder && byName[adder.name] ? html`<${WeekShifts} d=${byName[adder.name]} view=${view} busy=${busy}
+      opts=${opts && (opts.error || (opts.data && opts.data.name === adder.name)) ? opts : null}
+      onClose=${() => setAdder(null)} onPick=${(day, w, road) => addWave(adder.name, day, w, road)} />` : ''}
     ${confirm ? html`<${ConfirmOverride} req=${confirm} onCancel=${() => setConfirm(null)}
       onConfirm=${() => { const q = confirm; setConfirm(null); q.run(); }} />` : ''}
     ${limit ? html`<${LimitConfirm} req=${limit} onCancel=${() => setLimit(null)}

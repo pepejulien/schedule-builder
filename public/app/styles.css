@@ -424,3 +424,19 @@ table.lv-grid { font-size: 12.5px; }
 .seg button + button { border-left: 1px solid #dcdce1; }
 .seg button.on { background: var(--navy); color: #fff; }
 .chip.tier-mini { padding: 1px 7px; font-size: 10.5px; }
+
+/* Live board: a day's waves, one click (2026-10-06) */
+.lv-wavebtns { display: flex; flex-wrap: wrap; gap: 8px; }
+.lv-wavebtn { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 112px; padding: 7px 11px;
+  border: 1px solid rgba(0,0,0,.08); border-radius: 6px; color: #16191f; text-align: left; box-shadow: none; }
+.lv-wavebtn:hover { filter: brightness(.95); outline: 2px solid var(--navy); outline-offset: 1px; }
+.lv-wavebtn small { font-weight: 500; font-size: 11px; }
+.lv-dayshifts { align-self: stretch; }
+.lv-note { font-size: 12.5px; border-radius: 8px; padding: 6px 10px; margin: 0 0 8px; }
+.lv-note.warn { background: #fff8e6; color: #7d5a12; }
+.lv-note.confirm { background: #fff4ec; color: #8a3f12; }
+.lv-note.unavail { background: #fdf0ef; color: #8a231c; }
+.lv-lock { font-size: 12.5px; color: var(--muted); background: #f6f7f9; border-radius: 8px; padding: 6px 10px; }
+.lv-week { display: flex; flex-direction: column; gap: 4px; }
+.lv-weekrow { display: grid; grid-template-columns: 82px 1fr; gap: 10px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.lv-weekday { padding-top: 6px; }
