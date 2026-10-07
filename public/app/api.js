@@ -204,3 +204,18 @@ export const liveWeek = (weekISO) => window.JAJB.scheduleWeekData(weekISO);
 export const watchLiveWeek = (weekISO, cb) => window.JAJB.watchScheduleWeek(weekISO, cb);
 export const watchLiveLog = (weekISO, cb) => window.JAJB.watchScheduleLog(weekISO, cb);
 export const saveLiveWeek = (weekISO, w) => window.JAJB.saveScheduleWeek(weekISO, w);
+
+// Actual hours from Route Tracker's clock-outs (2026-10-07): Firestore actual_hours/{weekStart}
+// = {week, drivers: {id: {name, keys, tid, days: {ISO: hours}}}, by, at}. Written by Route Tracker
+// a few seconds after each clock-out; read here so days already worked count their real hours.
+const canActual = () => onFirebase() && typeof window.JAJB.watch === 'function';
+export const watchActualHours = (weekISO, cb) => (canActual() ? window.JAJB.watch('actual_hours/' + weekISO, cb) : () => {});
+export function actualHoursOnce(weekISO, ms = 6000) {
+  if (!canActual()) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let done = false, un = null;
+    const finish = (d) => { if (done) return; done = true; clearTimeout(t); setTimeout(() => un && un(), 0); resolve(d); };
+    const t = setTimeout(() => finish(null), ms);   // no signal: plan with what we have
+    un = window.JAJB.watch('actual_hours/' + weekISO, finish);
+  });
+}

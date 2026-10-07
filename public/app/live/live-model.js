@@ -8,7 +8,7 @@
 //            days-in-a-row tail, and is what a drivers' app will read later
 //   engine   the schedule engine's whole state (runner.export_state)
 import { editRequest } from '../solver-client.js';
-import { liveWeek, saveLiveWeek } from '../api.js';
+import { liveWeek, saveLiveWeek, actualHoursOnce } from '../api.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 
 export const prevISO = (iso) => toISODate(addDays(parseISODate(iso), -7));
@@ -22,7 +22,7 @@ export function sundayOf(iso) {
 
 const DRIVER_KEYS = ['name', 'cls', 'target', 'hours', 'streak', 'road_days', 'backup_days',
   'helper_days', 'dispatch_days', 'meeting_days', 'unavailable', 'cells', 'worked_dates',
-  'day_hours', 'clock_hours', 'max7'];
+  'day_hours', 'clock_hours', 'max7', 'act_dates'];
 
 export function summaryFromReport(r, meta) {
   const chk = r.check || {};
@@ -65,6 +65,60 @@ export function prevHoursFrom(summary) {
   return Object.keys(out).length ? out : null;
 }
 
+// Route Tracker's actual-hours docs -> one entry per driver (both weeks merged), the shape
+// runner._apply_actual takes: [{name, keys, tid, days: {ISO: hours}}].
+export function actualList(...docs) {
+  const by = new Map();
+  for (const doc of docs) for (const [id, d] of Object.entries((doc && doc.drivers) || {})) {
+    const cur = by.get(id) || { name: d.name, keys: d.keys || [], tid: d.tid || '', days: {} };
+    Object.assign(cur.days, d.days || {});
+    by.set(id, cur);
+  }
+  return [...by.values()];
+}
+export const actualSig = (doc) => JSON.stringify((doc && doc.drivers) || null);
+
+// "first|last" - the same key Route Tracker sends, for matching a summary's names (Today page)
+const SUFFIX = new Set(['jr', 'sr', 'ii', 'iii', 'iv']);
+export function flKey(name) {
+  const t = String(name || '').toLowerCase().replace(/[.,]/g, ' ').split(/\s+/).filter(Boolean);
+  if (t.length > 2 && SUFFIX.has(t[t.length - 1])) t.pop();
+  return t.length > 1 ? `${t[0]}|${t[t.length - 1]}` : (t[0] || '');
+}
+
+// The Today page reads the saved summary (no engine): lay the actual hours over it so the
+// watch list counts what was really worked. Same matching as the engine: shared names skipped.
+export function mergeActual(summary, list) {
+  if (!summary || !list || !list.length) return summary;
+  const byKey = new Map(), dup = new Set();
+  for (const a of list) for (const k of new Set([flKey(a.name), ...(a.keys || [])])) {
+    if (!k) continue;
+    if (byKey.has(k) && byKey.get(k) !== a) dup.add(k);
+    byKey.set(k, a);
+  }
+  const dates = (summary.days || []).map((d) => d.date);
+  const start = dates[0];
+  const drivers = (summary.drivers || []).map((d) => {
+    const k = flKey(d.name);
+    const a = dup.has(k) ? null : byKey.get(k);
+    if (!a) return d;
+    const day_hours = { ...(d.day_hours || {}), ...a.days };
+    const clock_hours = Object.entries(day_hours).filter(([k2]) => k2 >= start).reduce((t, [, h]) => t + Number(h || 0), 0);
+    let max7 = 0;
+    for (const end of dates) {
+      let t = 0;
+      for (let i = 0; i < 7; i++) t += Number(day_hours[toISODate(addDays(parseISODate(end), -i))] || 0);
+      max7 = Math.max(max7, t);
+    }
+    return { ...d, day_hours, clock_hours: Math.round(clock_hours * 100) / 100, max7: Math.round(max7 * 100) / 100,
+      act_dates: Object.keys(a.days).filter((x) => dates.includes(x)).sort() };
+  });
+  return { ...summary, drivers };
+}
+
+// What actual hours each loaded week used (live board compares, and reloads when they change).
+export const ACT_LOADED = {};
+
 // Load a saved week into an engine slot. Last week's REAL worked days and
 // hours (from its own Live board, if it was published) replace the uploaded
 // file's tail.
@@ -74,8 +128,12 @@ export async function loadEngine(weekISO, engineJson, slot = 'live') {
     const p = await liveWeek(prevISO(weekISO));
     if (p) { const sm = JSON.parse(p.summary); prev = prevWorkedFrom(sm); prevHours = prevHoursFrom(sm); }
   } catch { /* no history for last week — keep the builder's tail */ }
+  // the real hours of days already worked (Route Tracker), this week and last
+  const [actCur, actPrev] = await Promise.all([actualHoursOnce(weekISO), actualHoursOnce(prevISO(weekISO))]);
+  ACT_LOADED[weekISO] = { cur: actualSig(actCur), prev: actualSig(actPrev) };
   const m = await editRequest('load_state',
-    { state: engineJson, out: `/work/${slot}.xlsx`, prev_worked: prev, prev_hours: prevHours }, slot);
+    { state: engineJson, out: `/work/${slot}.xlsx`, prev_worked: prev, prev_hours: prevHours,
+      actual: actualList(actPrev, actCur) }, slot);
   if (!m.ok) throw Object.assign(new Error(m.error.message), { kind: m.error.kind });
   return m.report;
 }

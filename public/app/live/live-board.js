@@ -13,7 +13,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest } from '../solver-client.js';
-import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog } from '../api.js';
+import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours } from '../api.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
 import {
@@ -22,7 +22,7 @@ import {
 } from '../steps/step9-build.js';
 import {
   loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
-  WAVE_COLORS, SHIFT_COLORS,
+  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO,
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
@@ -173,7 +173,8 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view }) 
       </div>
 
       <div class="dm-stats">
-        <div><b>${d.clock_hours ?? d.hours}h</b><span>this week</span></div>
+        <div><b>${d.clock_hours ?? d.hours}h</b><span>this week${(d.act_dates || []).length
+          ? html` · <span class="act-note" title="Real hours from Route Tracker's clock-outs for these days; planned hours for the rest">actual through ${new Date(d.act_dates[d.act_dates.length - 1] + 'T12:00').toLocaleDateString('en-US', { weekday: 'short' })}</span>` : ''}</span></div>
         <div class=${(d.max7 ?? 0) > (lim.max_7day_hours || 60) - 6 ? 'hot' : ''}><b>${d.max7 ?? '—'}h</b><span>most in any 7 days (max ${lim.max_7day_hours || 60})</span></div>
         <div class=${d.streak >= (lim.max_consecutive || 5) ? 'hot' : ''}><b>${d.streak}</b><span>days in a row (usual max ${lim.max_consecutive || 5})</span></div>
       </div>
@@ -445,7 +446,18 @@ function Board() {
     openWeek(sel);
     const un1 = watchLiveWeek(sel, (m) => setMetaLive(m));
     const un2 = watchLiveLog(sel, (l) => setLog(l));
-    return () => { un1(); un2(); };
+    // a clock-out in Route Tracker changed someone's real hours: reload so the limits use them
+    const onActual = (which) => (doc) => {
+      const seen = ACT_LOADED[sel];
+      if (!seen || actualSig(doc) === seen[which]) return;
+      if (saving.current || !R.current.eng || R.current.eng.status !== 'ready') return;
+      seen[which] = actualSig(doc);
+      toast('Hours updated from Route Tracker clock-outs.');
+      openWeek(sel);
+    };
+    const un3 = watchActualHours(sel, onActual('cur'));
+    const un4 = watchActualHours(prevISO(sel), onActual('prev'));
+    return () => { un1(); un2(); un3(); un4(); };
   }, [sel]);
 
   // someone else saved this week: pull it in

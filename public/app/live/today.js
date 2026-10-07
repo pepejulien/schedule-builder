@@ -7,9 +7,9 @@ import { html } from '../preact-setup.js';
 import { useState, useEffect } from 'preact/hooks';
 import { setState } from '../store.js';
 import { Banner, Spinner, Icon } from '../ui.js';
-import { liveWeeks, liveWeek, watchLiveWeek, watchLiveLog } from '../api.js';
+import { liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours } from '../api.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
-import { sundayOf, todayISO, cellInfo, WAVE_COLORS, SHIFT_COLORS } from './live-model.js';
+import { sundayOf, todayISO, cellInfo, WAVE_COLORS, SHIFT_COLORS, prevISO, actualList, mergeActual } from './live-model.js';
 
 const longDate = (iso) => parseISODate(iso).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 const when = (iso) => (iso ? new Date(iso).toLocaleString('en-US',
@@ -49,7 +49,8 @@ function watchList(sm, endISO) {
 
 export function Today({ buildCard }) {
   const [week, setWeek] = useState(undefined);   // the published week to show (meta) | null
-  const [sm, setSm] = useState(null);            // its saved summary
+  const [smRaw, setSm] = useState(null);         // its saved summary
+  const [act, setAct] = useState({});            // Route Tracker's actual hours {cur, prev}
   const [log, setLog] = useState([]);
   const [rev, setRev] = useState(null);
   const [err, setErr] = useState('');
@@ -69,6 +70,15 @@ export function Today({ buildCard }) {
     const un2 = watchLiveLog(week.week, (l) => setLog(l));
     return () => { un1(); un2(); };
   }, [week && week.week]);
+
+  // days already worked count their real hours (Route Tracker clock-outs), live
+  useEffect(() => {
+    if (!week) return undefined;
+    const un1 = watchActualHours(week.week, (d) => setAct((a) => ({ ...a, cur: d })));
+    const un2 = watchActualHours(prevISO(week.week), (d) => setAct((a) => ({ ...a, prev: d })));
+    return () => { un1(); un2(); };
+  }, [week && week.week]);
+  const sm = smRaw && mergeActual(smRaw, actualList(act.prev, act.cur));
 
   useEffect(() => {
     if (!week || rev == null) return;

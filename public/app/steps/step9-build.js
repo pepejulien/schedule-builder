@@ -7,8 +7,8 @@ import { ensureStanding } from './step7-standing.js';
 import { Banner, Spinner, download } from '../ui.js';
 import { assembleFromWizard } from '../build-inputs.js';
 import { build, editRequest } from '../solver-client.js';
-import { storeGet, loadTrainingHistory, saveTrainingWeek, canLive, liveWeek } from '../api.js';
-import { saveWeek } from '../live/live-model.js';
+import { storeGet, loadTrainingHistory, saveTrainingWeek, canLive, liveWeek, actualHoursOnce } from '../api.js';
+import { saveWeek, actualList, prevISO } from '../live/live-model.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { GROUP_OPTIONS } from '../lib/config-assemble.js';
 import { AdvancedPanel } from './advanced-panel.js';
@@ -698,6 +698,14 @@ export function Step9Build() {
       if (h && typeof h === 'object') trainerHistory = h;
     } catch { /* use the cached copy */ }
     const { config } = assembleFromWizard({ ...wizard, trainerHistory });
+    // last week's REAL hours (Route Tracker clock-outs) for the 12h / 60h checks across the weeks
+    if (wizard.week?.startISO) {
+      try {
+        const act = await actualHoursOnce(prevISO(wizard.week.startISO));
+        const list = actualList(act);
+        if (list.length) config.actual = list;
+      } catch { /* no actual hours: last week counts as planned */ }
+    }
 
     let prefsText = null;
     if (config.prefs_csv) {

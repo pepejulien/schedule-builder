@@ -149,6 +149,8 @@ def _driver_rows(res):
             clock_hours=sum(v for k, v in _day_hours(res, dr).items()
                             if k >= res.DATEALL["Sun"]),
             max7=_max7(_day_hours(res, dr), [res.DATEALL[d] for d in ALL_DAYS])[0],
+            # days this week whose hours are ACTUAL (Route Tracker clock-outs), not planned
+            act_dates=sorted(k.isoformat() for k in (dr.get("h_act") or {})),
         ))
     rows.sort(key=lambda r: (-r["hours"], r["name"]))
     return rows
@@ -305,6 +307,8 @@ def run(config_path):
         cfg = load_config(config_path)
         cfg, res, tnotes = _build_with_auto_trainers(cfg)
         res.notes = list(res.notes) + tnotes
+        if _apply_actual(res, cfg.get("actual")):   # last week's REAL hours (Route Tracker)
+            res.notes = list(res.notes) + ["Last week's hours: actual clock-outs from Route Tracker"]
         write_xlsx(res)                       # -> cfg['out']
         _STATE.update(cfg=cfg, res=res, edits=[], undo=[],
                       ovr_unav=set(), ovr_policy=set(), ovr_limits=set(), marks={})
@@ -383,7 +387,75 @@ def _day_hours(res, dr):
             if d in res.DATEALL:
                 dt = res.DATEALL[d]
                 out[dt] = out.get(dt, 0) + h
+    # days already worked: the real hours from Route Tracker's clock-outs win (_apply_actual)
+    for dt, h in (dr.get("h_act") or {}).items():
+        out[dt] = h
     return out
+
+
+# ---- actual hours (2026-10-07): Route Tracker -> Schedule ------------------
+# Route Tracker publishes every driver's real on-the-clock hours per day
+# (Firestore actual_hours/{Sunday}, from dispatch's out times). For days already
+# worked they replace the planned 10h / 2h: this week -> dr["h_act"], last week
+# -> dr["h_prev"] (and w_prev). Drivers match by Amazon Transporter Id, else by
+# first + last name; a name two people share is skipped (never guessed).
+_SUFFIX = {"jr", "sr", "ii", "iii", "iv"}
+
+
+def _fl_key(name):
+    t = norm(str(name or "")).replace(".", "").replace(",", " ").split()
+    if len(t) > 2 and t[-1] in _SUFFIX:
+        t = t[:-1]
+    if not t:
+        return ""
+    return t[0] + "|" + t[-1] if len(t) > 1 else t[0]
+
+
+def _apply_actual(res, actual):
+    """actual: [{name, keys: ["first|last", ...], tid, days: {ISO: hours}}].
+    Returns how many roster drivers got actual hours."""
+    if not actual:
+        return 0
+    by_tid, by_key, dup = {}, {}, set()
+    for a in actual:
+        if not isinstance(a, dict):
+            continue
+        if a.get("tid"):
+            by_tid[str(a["tid"]).strip()] = a
+        for k in {_fl_key(a.get("name"))} | {str(x) for x in (a.get("keys") or []) if x}:
+            if not k:
+                continue
+            if k in by_key and by_key[k] is not a:
+                dup.add(k)
+            by_key[k] = a
+    start = res.DATEALL["Sun"]
+    lo, hi = start - 7 * ONE, start + 7 * ONE
+    n = 0
+    for dr in res.roster:
+        a = by_tid.get(str(dr.get("tid")).strip()) if dr.get("tid") else None
+        if a is None:
+            k = _fl_key(dr["name"])
+            a = None if k in dup else by_key.get(k)
+        if a is None:
+            continue
+        act, prev = {}, {}
+        for iso, h in (a.get("days") or {}).items():
+            try:
+                d, h = datetime.date.fromisoformat(iso), _num(h)
+            except Exception:  # noqa: BLE001
+                continue
+            if start <= d < hi:
+                act[d] = h
+            elif lo <= d < start:
+                prev[d] = h
+        dr["h_act"] = act
+        if prev:
+            hp = dict(dr.get("h_prev") or {x: res.PH for x in dr["w_prev"]})
+            hp.update(prev)
+            dr["h_prev"] = {k: v for k, v in hp.items() if v}
+            dr["w_prev"] = set(dr["w_prev"]) | {d for d, h in prev.items() if h}
+        n += 1
+    return n
 
 
 def _num(h):
@@ -1433,7 +1505,7 @@ def export_state(payload_json):  # noqa: ARG001
 
 def load_state(payload_json):
     """payload: {state, out?, prev_worked?: {name: [ISO dates]},
-    prev_hours?: {name: {ISO date: hours}}}. Rehydrate a
+    prev_hours?: {name: {ISO date: hours}}, actual?: [see _apply_actual]}. Rehydrate a
     saved week into the current slot. prev_worked (last week's REAL worked
     days, from its own Live board) replaces the tail read from the uploaded
     file, so a midweek extra shift last Saturday still counts toward this
@@ -1465,6 +1537,7 @@ def load_state(payload_json):
                 if got is not None:
                     dr["h_prev"] = {datetime.date.fromisoformat(k): _num(h) for k, h in got.items()
                                     if lo <= datetime.date.fromisoformat(k) < start and h}
+        _apply_actual(res, p.get("actual"))
         _STATE.update(cfg=res.cfg, res=res, edits=list(st.get("edits", [])), undo=[],
                       ovr_unav={tuple(x) for x in st.get("ovr_unav", [])},
                       ovr_policy=set(st.get("ovr_policy", [])),
