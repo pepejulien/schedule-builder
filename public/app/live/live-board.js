@@ -43,6 +43,10 @@ const fold = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g,
 const SORT_KEY = 'lv_sort';
 const readSort = () => { try { return localStorage.getItem(SORT_KEY) === 'name' ? 'name' : 'tier'; } catch { return 'tier'; } };
 const saveSort = (v) => { try { localStorage.setItem(SORT_KEY, v); } catch { /* private window */ } };
+// "Working" for the day filter (Jose 2026-10-07): any shift on the clock — route, backup,
+// trainer / trainee, dispatch, meeting. Not: blank, Unavailable, called out / no-show.
+const WORKING = new Set(['road', 'bk', 'trainee', 'trainer', 'disp', 'meet']);
+const worksOn = (x, day) => WORKING.has(cellInfo((x.cells || {})[day]).kind);
 
 // Sum of on-the-clock hours over the 7 days ending `endISO`.
 function last7(dayHours, endISO) {
@@ -498,6 +502,7 @@ function Board() {
   const [showLog, setShowLog] = useState(false);
   const [sortBy, setSortBy] = useState(readSort);   // 'tier' | 'name'
   const [q, setQ] = useState('');                   // name search
+  const [dayF, setDayF] = useState([]);             // day filter: only drivers working every picked day
   const [pop, setPop] = useState(null);             // the over-60 card: {name, iso, left, top, up}
   const [notes, setNotes] = useState({});           // comments on shifts: {"<ISO day>|<name>": {text, by, at}}
   const [confirms, setConfirms] = useState({});     // "not in Route Tracker" answers
@@ -788,7 +793,11 @@ function Board() {
   const byName = Object.fromEntries(view.drivers.map((x) => [x.name, x]));
   const markOf = (name, day) => (view.marks || []).find((x) => x.name === name && x.day === day);
   // search + sort: by tier (Top/Solid first, as the builder groups them) or A-Z
-  const shown = view.drivers.filter((x) => !q.trim() || fold(x.name).includes(fold(q.trim())));
+  const shown = view.drivers.filter((x) => (!q.trim() || fold(x.name).includes(fold(q.trim())))
+    && dayF.every((day) => worksOn(x, day)));
+  const filtered = q.trim() || dayF.length;
+  const toggleDay = (day) => setDayF((f) => (f.includes(day) ? f.filter((y) => y !== day)
+    : view.days.map((y) => y.day).filter((y) => y === day || f.includes(y))));
   const groups = sortBy === 'name'
     ? [{ key: 'all', rows: shown.slice().sort((a, b) => a.name.localeCompare(b.name)) }]
     : TIER_ORDER.map((t) => ({ key: t, meta: TIER_META[t], rows: shown.filter((x) => x.cls === t) }))
@@ -873,13 +882,23 @@ function Board() {
           <button class=${sortBy === 'tier' ? 'on' : ''} onClick=${() => { setSortBy('tier'); saveSort('tier'); }}>By tier</button>
           <button class=${sortBy === 'name' ? 'on' : ''} onClick=${() => { setSortBy('name'); saveSort('name'); }}>A–Z</button>
         </div>
-        ${q.trim() ? html`<span class="muted">${shown.length} of ${view.drivers.length} drivers</span>` : ''}
+        ${filtered ? html`<span class="muted">${shown.length} of ${view.drivers.length} drivers</span>` : ''}
+      </div>
+      <div class="row lv-dayf">
+        <span class="muted">Working on:</span>
+        <div class="seg" role="group" aria-label="Show only drivers working on these days">
+          <button class=${dayF.length ? '' : 'on'} onClick=${() => setDayF([])}>All days</button>
+          ${view.days.filter((x) => x.open).map((x) => html`<button class=${dayF.includes(x.day) ? 'on' : ''}
+            aria-pressed=${dayF.includes(x.day)} title=${`Only drivers with a shift on ${x.day} ${shortDate(x.date)}`}
+            onClick=${() => toggleDay(x.day)}>${x.day}</button>`)}
+        </div>
+        ${dayF.length > 1 ? html`<span class="muted">working all ${dayF.length} days</span>` : ''}
       </div>
 
       <div class="scroll-x lv-wrap"><table class="lv-grid">
         <thead><tr>
           <th class="lv-namecol">Driver</th>
-          ${view.days.map((x) => html`<th class=${(x.date === today ? 'today ' : x.date < today ? 'past ' : '') + (x.open ? '' : 'closed')}>
+          ${view.days.map((x) => html`<th class=${(x.date === today ? 'today ' : x.date < today ? 'past ' : '') + (x.open ? '' : 'closed') + (dayF.includes(x.day) ? ' lv-dayon' : '')}>
             ${x.day} <span class="lv-date">${shortDate(x.date)}</span>
             ${x.open ? html`<div class="lv-fill">
               <span class=${x.routes_filled < x.routes ? 'lv-bad' : ''} title="routes filled / needed">${x.routes_filled}/${x.routes}</span>
@@ -891,7 +910,7 @@ function Board() {
           <th title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
         </tr></thead>
         <tbody>${!shown.length ? html`<tr><td colspan=${nCols} class="muted" style="text-align:left">
-            No driver matches “${q}”.</td></tr>` : ''}
+            ${q.trim() ? `No driver matches “${q}”` : 'Nobody'}${dayF.length ? ` working ${dayF.join(' + ')}` : ''}.</td></tr>` : ''}
           ${groups.map((g) => html`
             ${g.meta ? html`<tr class="tier-sep"><td colspan=${nCols}><span class="chip ${g.meta.chip}">${g.meta.label}</span>
               <span class="muted"> · ${g.rows.length}</span></td></tr>` : ''}
