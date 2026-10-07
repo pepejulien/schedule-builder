@@ -123,12 +123,12 @@ def _driver_rows(res):
                 cells[d] = res.cell[d][i]
             elif mk:
                 cells[d] = MARK_LABEL.get(mk["kind"], mk["kind"])
-            elif d in dr["unav"]:
-                cells[d] = "Unavailable"
-            elif d in dr["extra"]:
-                cells[d] = "Dispatch"
             elif d in dr["meet"]:
                 cells[d] = dr["meet_txt"].get(d, "Meeting")
+            elif d in dr["extra"]:
+                cells[d] = "Dispatch"
+            elif d in dr["unav"]:
+                cells[d] = "Unavailable"
             else:
                 cells[d] = ""
         rows.append(dict(
@@ -412,7 +412,7 @@ def _hour_limits(res, dr, day, role):
     any 7 days (last week included). Returns block reasons."""
     hrs = _day_hours(res, dr)
     dt = res.DATEALL[day]
-    add = res.PH if role == "road" else res.BH
+    add = {"road": res.PH, "trainer": res.PH, "dispatch": DISPATCH_H}.get(role, res.BH)
     hrs[dt] = hrs.get(dt, 0) + add
     out = []
     if hrs[dt] > MAX_DAY_H:
@@ -493,7 +493,7 @@ def _assess(res, dr, day, role):
     if res.weekend_rule and day in WEEKEND and _wknd_used(dr) + 1 > res.MAXWKND:
         warns.append(f"over the {res.MAXWKND}-weekend-day limit")
 
-    if role == "road":
+    if role in ("road", "trainer"):          # a trainer day counts as a road day
         if HCAP and (_pdays(dr) + 1) * res.PH > HCAP:
             (limits if live else blocks).append(
                 f"overtime: road hours go to {(_pdays(dr) + 1) * res.PH}h (over {HCAP}h)")
@@ -505,7 +505,7 @@ def _assess(res, dr, day, role):
             if _pdays(dr) + 1 > pin:
                 warns.append("benched this week (0 shifts)" if res.TARGET[n] == 0
                              else f"set to {res.TARGET[n]} road day(s) - this adds one more")
-    else:  # backup
+    elif role == "backup":
         xbk = getattr(res, "XBK", set()) or set()
         if _pdays(dr) < 2 and n not in xbk:
             warns.append("backups normally go to drivers with 2+ road days")
@@ -701,7 +701,10 @@ def _snapshot(res):
     """Everything a manual edit can mutate, deep-copied. Small: lists of day
     names per driver plus the per-day cell/wave maps."""
     return dict(
-        assign=[dict(prim=list(dr["prim"]), bk=list(dr["bk"])) for dr in res.roster],
+        assign=[dict(prim=list(dr["prim"]), bk=list(dr["bk"]), helper=list(dr["helper"]),
+                     extra=set(dr["extra"]), meet=set(dr["meet"]), unav=set(dr["unav"]),
+                     meet_txt=dict(dr["meet_txt"])) for dr in res.roster],
+        pairlog=list(res.PAIRLOG),
         cell=copy.deepcopy(res.cell),
         waves=copy.deepcopy(res.waves),
         routes=dict(res.routes),
@@ -719,6 +722,12 @@ def _restore(res, snap):
     for dr, a in zip(res.roster, snap["assign"]):
         dr["prim"][:] = a["prim"]
         dr["bk"][:] = a["bk"]
+        if "helper" in a:
+            dr["helper"][:] = a["helper"]
+            dr["extra"], dr["meet"], dr["unav"] = set(a["extra"]), set(a["meet"]), set(a["unav"])
+            dr["meet_txt"] = dict(a["meet_txt"])
+    if "pairlog" in snap:
+        res.PAIRLOG = list(snap["pairlog"])
     res.cell = snap["cell"]
     res.waves = snap["waves"]
     res.routes = snap["routes"]
@@ -851,6 +860,10 @@ def add_options(payload_json):
                    else "unavailable" if d in dr["unav"] else "")
             road_st, road_why, _, road_lim = _assess(res, dr, d, "road")
             bk_st, bk_why, _, bk_lim = _assess(res, dr, d, "backup")
+            duties = {}
+            for k in ("trainer", "meeting", "dispatch"):
+                st_, why_, _, lim_ = _assess(res, dr, d, k)
+                duties[k] = dict(status=st_, reasons=why_, limits=lim_)
             r_filled, r_want = _routes_filled(res, d), res.routes[d]
             b_filled, b_want = _bk_filled(res, d), res.backup[d]
             full = road_st != "blocked" and r_filled >= r_want
@@ -860,6 +873,7 @@ def add_options(payload_json):
                 day=d, current=cur,
                 road=dict(status=road_st, reasons=road_why, full=full, limits=road_lim,
                           filled=r_filled, want=r_want),
+                duties=duties,
                 backup=dict(status=bk_st, reasons=bk_why, limits=bk_lim,
                             filled=b_filled, want=b_want,
                             over_target=(bk_st != "blocked" and b_filled >= b_want)),
@@ -951,8 +965,8 @@ def apply_add(payload_json):
         extra_route = bool(p.get("extra_route"))
 
         wave = p.get("wave")
-        if wave and wave not in res.waves[day]:
-            return json.dumps(dict(ok=False, kind="edit", message=f"No {wave} wave on {day}."))
+        if wave and not re.fullmatch(r"\d{1,2}:\d{2} [AP]M", wave):
+            return json.dumps(dict(ok=False, kind="edit", message=f"Not a wave time: {wave}"))
 
         if role == "backup":
             _STATE["undo"].append(_snapshot(res))
@@ -1038,6 +1052,119 @@ def _put_route(res, i, dr, day, wave):
     res.cell[day][i] = wave
     return (f"Added a {day} {wave} route for {dr['name']}"
             + (f" - an EXTRA route ({day} is now {res.routes[day]} routes)" if extra else ""))
+
+
+def _short(name):
+    p = name.split()
+    return p[0] + " " + p[-1] if len(p) > 1 else name
+
+
+DUTY_LABEL = {"dispatch": "dispatch", "meeting": "a meeting", "trainer": "a trainer day"}
+
+
+def set_duty(payload_json):
+    """payload: {name, day, kind: 'dispatch'|'meeting'|'trainer', with_name?
+    (trainer: who they ride along with), time? (meeting, default 1:00 PM),
+    confirm_*?}. Live board, 2026-10-06: the duties beside routes. Same rules
+    as a shift (hours: dispatch 12h, meeting 2h, trainer 10h)."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        day, kind = p.get("day"), p.get("kind")
+        i, dr = _find(res, p.get("name") or "")
+        if dr is None or day not in res.DAYS or kind not in DUTY_LABEL:
+            return json.dumps(dict(ok=False, kind="edit", message="Bad request."))
+        j = tr = None
+        if kind == "trainer":
+            j, tr = _find(res, p.get("with_name") or "")
+            if tr is None or j == i or day not in tr["prim"]:
+                return json.dumps(dict(ok=False, kind="edit",
+                    message=f"Pick someone who drives a route on {day} to ride along with."))
+            if "TRAIN" in res.cell[day].get(j, ""):
+                return json.dumps(dict(ok=False, kind="edit",
+                    message=f"{tr['name']} already has a trainer on {day}."))
+        err, st, why = _gate(res, dr, day, kind, p)
+        if err:
+            return err
+        snap = _snapshot(res)
+        if kind == "dispatch":
+            dr["extra"].add(day)
+            dr["unav"].add(day)
+            desc = f"Put {dr['name']} on dispatch {day}"
+        elif kind == "meeting":
+            t = str(p.get("time") or "1:00 PM").strip()[:12]
+            dr["meet"].add(day)
+            dr["meet_txt"][day] = f"{t} Meeting"
+            dr["unav"].add(day)
+            desc = f"Put {dr['name']} in a {t} meeting {day}"
+        else:
+            w = _cell_wave(res.cell[day].get(j, "")) or res.cell[day].get(j, "")
+            dr["helper"].append(day)
+            res.cell[day][i] = f"{w} (TRAIN helper w/ {_short(tr['name'])})"
+            res.cell[day][j] = f"{w} (TRAIN drives w/ {_short(dr['name'])})"
+            res.PAIRLOG = list(res.PAIRLOG) + [(dr["name"], tr["name"], day)]
+            desc = f"{dr['name']} trains {tr['name']} {day} {w} (rides along)"
+        desc += _note_override(dr, day, st, why)
+        _STATE["undo"].append(snap)
+        _STATE["edits"].append(desc)
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def clear_duty(payload_json):
+    """payload: {name, day}. Take a driver off dispatch / a meeting / a
+    training pair that day (the trainee then drives alone)."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        day = p.get("day")
+        i, dr = _find(res, p.get("name") or "")
+        if dr is None or day not in res.DAYS:
+            return json.dumps(dict(ok=False, kind="edit", message="Bad request."))
+        snap = _snapshot(res)
+        lab = res.cell[day].get(i, "")
+        if "TRAIN" in lab:
+            pair = next((t for t in res.PAIRLOG if t[2] == day and norm(dr["name"]) in (norm(t[0]), norm(t[1]))), None)
+            if not pair:
+                return json.dumps(dict(ok=False, kind="edit", message="Couldn't find that training pair."))
+            ti, trn = _find(res, pair[0])
+            ni, nee = _find(res, pair[1])
+            w = _cell_wave(lab) or ""
+            if trn is not None:
+                if day in trn["helper"]:
+                    trn["helper"].remove(day)
+                res.cell[day].pop(ti, None)
+            if nee is not None and ni in res.cell[day]:
+                res.cell[day][ni] = w
+            res.PAIRLOG = [t for t in res.PAIRLOG if t is not pair and tuple(t) != tuple(pair)]
+            desc = f"Ended the {day} training pair: {pair[1]} drives alone, {pair[0]} is off that day"
+        elif day in dr["extra"]:
+            dr["extra"].discard(day)
+            dr["unav"].discard(day)
+            desc = f"Took {dr['name']} off dispatch {day}"
+        elif day in dr["meet"]:
+            dr["meet"].discard(day)
+            dr["meet_txt"].pop(day, None)
+            dr["unav"].discard(day)
+            desc = f"Took {dr['name']} out of the {day} meeting"
+        else:
+            return json.dumps(dict(ok=False, kind="edit", message=f"{dr['name']} has no duty on {day}."))
+        _STATE["undo"].append(snap)
+        _STATE["edits"].append(desc)
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
 
 
 def set_role(payload_json):

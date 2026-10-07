@@ -27,9 +27,9 @@ import {
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-const MUT = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'set_role']);
+const MUT = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'set_role', 'set_duty', 'clear_duty']);
 const KIND = { apply: 'edit', apply_add: 'extra', apply_wave: 'wave', undo: 'undo', apply_mark: 'mark', clear_mark: 'mark',
-  set_role: 'edit' };
+  set_role: 'edit', set_duty: 'duty', clear_duty: 'duty' };
 const MARKS = [
   ['callout', 'Called out', 'They called in and won\'t work.'],
   ['noshow', 'No-show', 'They didn\'t show up and didn\'t call.'],
@@ -95,77 +95,164 @@ function waveFills(view, day) {
   return out;
 }
 
-// Jose 2026-10-06: clicking a day shows THAT day's waves right away — one
-// click puts the driver on a route there. A full wave is fine: it just gets
-// one more route (Amazon may have handed out routes the app doesn't know
-// yet). Rule results show up front; pop-ups still come where they're needed.
+// Jose 2026-10-06: clicking a day shows THAT day's choices right away — every
+// wave from the color key (a full wave, or one the day has no routes in yet,
+// just gets one more route: Amazon may have handed out routes the app
+// doesn't know yet), plus trainer / meeting / dispatch. Rule results show up
+// front; the day-off and 6-day pop-ups still come where they're needed.
+const ALL_WAVES = Object.keys(WAVE_COLORS).map((w) => `${w} AM`);
+const dayWaves = (info) => [...new Set([...ALL_WAVES, ...Object.keys(info.waves || {})])]
+  .sort((a, b) => waveMins(a) - waveMins(b));
+const waveBg = (w) => WAVE_COLORS[String(w).replace(/ [AP]M$/, '')] || SHIFT_COLORS.other;
+
+// A rule result in one line: locked (with why), or the notes that come with it.
+function RuleNote({ st, first }) {
+  if (!st) return '';
+  if (st.status === 'blocked') return html`<div class="lv-lock">🔒 ${st.reasons.join('; ')}</div>`;
+  const warns = (st.status === 'warn' || st.status === 'full') ? st.reasons.filter((r) => !/^(6-day|overtime)/.test(r)) : [];
+  return html`
+    ${st.status === 'unavail' ? html`<div class="lv-note unavail">${first} asked for this day off — you'll confirm first.</div>` : ''}
+    ${(st.limits || []).length ? html`<div class="lv-note confirm">${st.limits.join('; ')} — a pop-up will ask you first.</div>` : ''}
+    ${warns.length ? html`<div class="lv-note warn">Allowed, but flagged: ${warns.join('; ')}</div>` : ''}`;
+}
+
 function DayShifts({ name, info, road, fills, busy, onPick, compact }) {
   const first = name.split(/\s+/)[0];
   if (!road) return html`<p class="muted"><${Spinner}/> Checking the rules…</p>`;
-  if (road.status === 'blocked') {
-    return html`<div class="lv-lock">🔒 Can't put ${first} on a route${compact ? '' : ` ${info.day}`}: ${road.reasons.join('; ')}</div>`;
-  }
-  const waves = Object.keys(info.waves || {}).sort((a, b) => waveMins(a) - waveMins(b));
-  const warns = road.status === 'warn' || road.status === 'full'
-    ? road.reasons.filter((r) => !/^(6-day|overtime)/.test(r)) : [];
+  if (road.status === 'blocked') return html`<${RuleNote} st=${road} first=${first} />`;
   return html`<div class="lv-dayshifts">
-    ${road.status === 'unavail' ? html`<div class="lv-note unavail">${first} asked for this day off — you'll confirm before it's saved.</div>` : ''}
-    ${(road.limits || []).length ? html`<div class="lv-note confirm">${road.limits.join('; ')} — a pop-up will ask you first.</div>` : ''}
-    ${warns.length ? html`<div class="lv-note warn">Allowed, but flagged: ${warns.join('; ')}</div>` : ''}
-    ${!compact ? html`<div class="muted" style="margin:6px 0 4px">Put ${first} on a route:</div>` : ''}
-    <div class="lv-wavebtns">
-      ${waves.map((w) => {
-        const want = info.waves[w] || 0, got = fills[w] || 0;
-        const full = got >= want;
-        return html`<button class="lv-wavebtn" disabled=${busy} style=${`background:${WAVE_COLORS[w.replace(/ [AP]M$/, '')] || SHIFT_COLORS.other}`}
-          aria-label=${`${w}: ${full ? 'full, adds one more route' : `${got} of ${want} filled`}`}
-          title=${full ? `All ${want} route${want === 1 ? '' : 's'} in this wave ${want === 1 ? 'is' : 'are'} filled — this adds one more` : `${got} of ${want} filled`}
-          onClick=${() => onPick(w)}><b>${w}</b><small>${full ? 'full · +1 route' : `${got} of ${want} filled`}</small></button>`;
+    <${RuleNote} st=${road} first=${first} />
+    <div class=${'lv-wavebtns' + (compact ? ' compact' : '')}>
+      ${dayWaves(info).map((w) => {
+        const want = (info.waves || {})[w] || 0, got = fills[w] || 0;
+        const state = !want ? 'new wave · +1 route' : got >= want ? 'full · +1 route' : `${got} of ${want} filled`;
+        return html`<button class="lv-wavebtn" disabled=${busy} style=${`background:${waveBg(w)}`}
+          aria-label=${`${w}: ${state}`} title=${state} onClick=${() => onPick(w)}>
+          <b>${w}</b><small>${state}</small></button>`;
       })}
-      ${!waves.length ? html`<span class="muted">No waves set for this day.</span>` : ''}
     </div>
   </div>`;
 }
 
-// What one driver is doing on one day, and what can be done about it.
-function CellMenu({ d, day, info, mark, busy, onClose, act, road, fills }) {
+// One labelled action tile: a big readable title and a short "what it does".
+const Act = ({ icon, title, sub, onClick, busy, tone }) => html`<button class=${'dm-act' + (tone ? ' ' + tone : '')}
+  disabled=${busy} onClick=${onClick}><span class="dm-ico">${icon}</span>
+  <span><b>${title}</b>${sub ? html`<small>${sub}</small>` : ''}</span></button>`;
+
+// "13:00" -> "1:00 PM"
+const ampm = (t) => { const [h, m] = String(t || '13:00').split(':').map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m || 0).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`; };
+
+// What one driver is doing on one day, and everything that can be done about it.
+function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view }) {
   const v = (d.cells || {})[day] || '';
   const c = cellInfo(v);
   const kind = c.kind;
   const role = kind === 'road' ? 'road' : kind === 'bk' ? 'backup' : null;
   const first = d.name.split(/\s+/)[0];
-  const date = parseISODate(info.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  const date = parseISODate(info.date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const lim = view.limits || {};
+  const [mtime, setMtime] = useState('13:00');
+  const [rideWith, setRideWith] = useState('');
+  const free = info.open && (kind === 'empty' || kind === 'off');
+  const duties = (opt && opt.duties) || {};
+  // who drives a plain route that day — a trainer rides along with one of them
+  const drivers = view.drivers.filter((x) => x.name !== d.name && cellInfo((x.cells || {})[day]).kind === 'road')
+    .map((x) => ({ name: x.name, wave: cellInfo(x.cells[day]).top })).sort((a, b) => a.name.localeCompare(b.name));
+  const duty = (k, extra) => act('duty', { name: d.name, day, kind: k, st: duties[k], ...extra });
+
   return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    <div class="edit-modal card">
-      <h3>${d.name} — ${date}</h3>
-      <p class="hint">Now: <b>${kind === 'trainer' ? `Trainer — rides along with ${c.partner}, ${c.top}`
-        : kind === 'trainee' ? `Trainee — drives ${c.top} with trainer ${c.partner}` : (v || 'not scheduled')}</b>
-        · ${d.clock_hours ?? d.hours}h this week · most in any 7 days ${d.max7 ?? '—'}h · ${d.streak} day${d.streak === 1 ? '' : 's'} in a row (longest)</p>
-      ${mark ? html`<${Banner} kind="warn"><b>${c.top}</b>${mark.was ? ` — was a ${mark.was}` : ''}${mark.note ? ` · “${mark.note}”` : ''}<//>` : ''}
-      ${!info.open ? html`<p class="muted">The station is closed this day.</p>` : ''}
-      <div class="lv-actions">
-        ${role ? html`
-          <button disabled=${busy} onClick=${() => act('move', { day, role, fromName: d.name })}>Give this ${role === 'road' ? 'route' : 'backup'} to someone else…</button>
-          <button disabled=${busy} onClick=${() => act('wave', { day, name: d.name })}>Change wave…</button>
+    <div class="edit-modal card daymodal" role="dialog" aria-label=${`${d.name}, ${date}`}>
+      <div class="dm-head">
+        <div class="dm-who">
+          <div class="dm-name">${d.name}</div>
+          <div class="dm-date">${date}</div>
+        </div>
+        <div class="dm-now">${kind === 'empty' ? html`<span class="muted">Not scheduled</span>` : html`<${Block} v=${v} />`}</div>
+        <button class="dm-x" aria-label="Close" onClick=${onClose}>×</button>
+      </div>
+
+      <div class="dm-stats">
+        <div><b>${d.clock_hours ?? d.hours}h</b><span>this week</span></div>
+        <div class=${(d.max7 ?? 0) > (lim.max_7day_hours || 60) - 6 ? 'hot' : ''}><b>${d.max7 ?? '—'}h</b><span>most in any 7 days (max ${lim.max_7day_hours || 60})</span></div>
+        <div class=${d.streak >= (lim.max_consecutive || 5) ? 'hot' : ''}><b>${d.streak}</b><span>days in a row (usual max ${lim.max_consecutive || 5})</span></div>
+      </div>
+
+      ${kind === 'trainer' || kind === 'trainee' ? html`<div class="dm-info">${kind === 'trainer'
+        ? html`<b>Trainer</b> — rides along with <b>${c.partner}</b> on the ${c.top} route.`
+        : html`<b>Trainee</b> — drives the ${c.top} route with trainer <b>${c.partner}</b>.`}</div>` : ''}
+      ${mark ? html`<div class="dm-info warn"><b>${c.top}</b>${mark.was ? ` — was a ${mark.was}` : ''}${mark.note ? html` · “${mark.note}”` : ''}</div>` : ''}
+      ${!info.open ? html`<div class="dm-info">The station is closed this day.</div>` : ''}
+
+      ${role ? html`
+        <div class="dm-sec">Change this shift</div>
+        <div class="dm-grid">
+          <${Act} icon="⇄" title="Give it to someone else" sub=${`Pick who takes this ${role === 'road' ? 'route' : 'backup'}`} busy=${busy}
+            onClick=${() => act('move', { day, role, fromName: d.name })} />
+          <${Act} icon="🕑" title="Change wave" sub="Move to another start time" busy=${busy}
+            onClick=${() => act('wave', { day, name: d.name })} />
           ${role === 'road'
-            ? html`<button disabled=${busy} onClick=${() => act('role', { name: d.name, day, to: 'backup' })}>Make it a backup (the route stays open)</button>`
-            : html`<button disabled=${busy} onClick=${() => act('role', { name: d.name, day, to: 'road' })}>Make it a route</button>`}
-          <button disabled=${busy} onClick=${() => act('mark', { name: d.name, day, kind: 'callout' })}>${first} called out…</button>
-          <button disabled=${busy} onClick=${() => act('mark', { name: d.name, day, kind: 'noshow' })}>No-show…</button>
-          <button disabled=${busy} onClick=${() => act('remove', { day, role, fromName: d.name })}>Remove — leave the slot open</button>` : ''}
-        ${mark ? html`<button disabled=${busy} onClick=${() => act('clear', { name: d.name, day })}>Clear this mark</button>` : ''}
-        ${info.open && (kind === 'empty' || kind === 'off') ? html`
-          <${DayShifts} name=${d.name} info=${info} road=${road} fills=${fills} busy=${busy}
-            onPick=${(w) => act('wave-add', { name: d.name, day, wave: w, road })} />` : ''}
-        ${info.open && kind === 'empty' ? html`
-          <button disabled=${busy} onClick=${() => act('mark', { name: d.name, day, kind: 'off' })}>${first} asked for ${day} off…</button>` : ''}
-        ${kind === 'trainer' || kind === 'trainee' ? html`<p class="muted">Training day — change it with a rebuild in the builder.</p>` : ''}
-        ${kind === 'disp' || kind === 'meet' ? html`<p class="muted">Dispatch duty / meetings come from the builder's settings.</p>` : ''}
-      </div>
-      <div class="row" style="margin-top:12px">
-        <button disabled=${busy} onClick=${onClose}>Close</button>
-        ${busy ? html`<span><${Spinner}/> Saving…</span>` : ''}
-      </div>
+            ? html`<${Act} icon="↓" title="Make it a backup" sub="Same wave — the route stays open" busy=${busy}
+                onClick=${() => act('role', { name: d.name, day, to: 'backup' })} />`
+            : html`<${Act} icon="↑" title="Make it a route" sub="Checked like any new route" busy=${busy}
+                onClick=${() => act('role', { name: d.name, day, to: 'road' })} />`}
+        </div>
+        <div class="dm-sec">${first} isn't coming</div>
+        <div class="dm-grid">
+          <${Act} icon="☎" title="Called out" sub="They called in — the slot opens" busy=${busy}
+            onClick=${() => act('mark', { name: d.name, day, kind: 'callout' })} />
+          <${Act} icon="✕" title="No-show" sub="Didn't show, didn't call" busy=${busy}
+            onClick=${() => act('mark', { name: d.name, day, kind: 'noshow' })} />
+          <${Act} icon="−" title="Remove the shift" sub="Leave the slot open" tone="dm-danger" busy=${busy}
+            onClick=${() => act('remove', { day, role, fromName: d.name })} />
+        </div>` : ''}
+
+      ${kind === 'trainer' || kind === 'trainee' ? html`<div class="dm-grid one">
+        <${Act} icon="−" title="End this training pair" sub=${kind === 'trainer' ? `${c.partner} drives alone; ${first} is off that day` : `${first} drives alone; ${c.partner} is off that day`}
+          tone="dm-danger" busy=${busy} onClick=${() => act('unduty', { name: d.name, day })} /></div>` : ''}
+      ${kind === 'disp' || kind === 'meet' ? html`<div class="dm-grid one">
+        <${Act} icon="−" title=${kind === 'disp' ? 'Take off dispatch' : 'Take out of the meeting'} sub="The day becomes free"
+          tone="dm-danger" busy=${busy} onClick=${() => act('unduty', { name: d.name, day })} /></div>` : ''}
+      ${mark ? html`<div class="dm-grid one"><${Act} icon="↺" title="Clear this mark" sub="Doesn't put the shift back"
+        busy=${busy} onClick=${() => act('clear', { name: d.name, day })} /></div>` : ''}
+
+      ${free ? html`
+        <div class="dm-sec">Put ${first} on a route</div>
+        <${DayShifts} name=${d.name} info=${info} road=${opt ? opt.road : null} fills=${fills} busy=${busy}
+          onPick=${(w) => act('wave-add', { name: d.name, day, wave: w, road: opt && opt.road })} />
+
+        <div class="dm-sec">Or another duty</div>
+        ${!opt ? html`<p class="muted"><${Spinner}/> Checking the rules…</p>` : html`<div class="dm-duties">
+          <div class="dm-duty">
+            <span class="lv-sw" style=${`background:${SHIFT_COLORS.trainer}`}>Trainer</span>
+            ${duties.trainer && duties.trainer.status === 'blocked' ? html`<${RuleNote} st=${duties.trainer} first=${first} />` : html`
+              <select value=${rideWith} onChange=${(e) => setRideWith(e.target.value)} aria-label="Ride along with">
+                <option value="">Rides along with…</option>
+                ${drivers.map((x) => html`<option value=${x.name}>${x.name} · ${x.wave}</option>`)}
+              </select>
+              <button class="small" disabled=${busy || !rideWith} onClick=${() => duty('trainer', { with_name: rideWith })}>Set trainer</button>
+              <${RuleNote} st=${duties.trainer} first=${first} />`}
+          </div>
+          <div class="dm-duty">
+            <span class="lv-sw" style=${`background:${SHIFT_COLORS.meet}`}>Meeting</span>
+            ${duties.meeting && duties.meeting.status === 'blocked' ? html`<${RuleNote} st=${duties.meeting} first=${first} />` : html`
+              <input type="time" value=${mtime} onInput=${(e) => setMtime(e.target.value)} aria-label="Meeting time" />
+              <button class="small" disabled=${busy} onClick=${() => duty('meeting', { time: ampm(mtime) })}>Add ${ampm(mtime)} meeting</button>
+              <${RuleNote} st=${duties.meeting} first=${first} />`}
+          </div>
+          <div class="dm-duty">
+            <span class="lv-sw" style=${`background:${SHIFT_COLORS.disp}`}>Dispatch</span>
+            ${duties.dispatch && duties.dispatch.status === 'blocked' ? html`<${RuleNote} st=${duties.dispatch} first=${first} />` : html`
+              <button class="small" disabled=${busy} onClick=${() => duty('dispatch')}>Put on dispatch (${lim.dispatch_hours || 12}h)</button>
+              <${RuleNote} st=${duties.dispatch} first=${first} />`}
+          </div>
+        </div>`}
+        ${kind === 'empty' ? html`<div class="dm-grid one" style="margin-top:12px">
+          <${Act} icon="☀" title=${`${first} asked for ${day} off`} sub="Marks the day off" busy=${busy}
+            onClick=${() => act('mark', { name: d.name, day, kind: 'off' })} /></div>` : ''}` : ''}
+
+      ${kind === 'disp' || kind === 'meet' || kind === 'trainer' || kind === 'trainee' || role || mark || free ? '' : html`<p class="muted">Nothing to change here.</p>`}
+      ${busy ? html`<p class="muted" style="margin-top:10px"><${Spinner}/> Saving…</p>` : ''}
     </div>
   </div>`;
 }
@@ -504,13 +591,22 @@ function Board() {
   }
 
   async function cellAct(what, p) {
-    if (what !== 'wave-add') setCell(null);
+    if (what !== 'wave-add' && what !== 'duty') setCell(null);
     if (what === 'move') setMover(p);
     else if (what === 'wave') setWaver(p);
     else if (what === 'mark') setMarker(p);
     else if (what === 'add') setAdder(p);
     else if (what === 'wave-add') addWave(p.name, p.day, p.wave, p.road);
     else if (what === 'role') runAsking('set_role', p, { name: p.name, day: p.day, role: p.to === 'road' ? 'road' : 'backup' });
+    else if (what === 'unduty') { const m = await run('clear_duty', p); if (!m.ok) toast(m.error.message, 'err'); }
+    else if (what === 'duty') {
+      const { st, ...payload } = p;
+      runConfirmed({ name: p.name, day: p.day, role: p.kind, unavReasons: st && st.status === 'unavail' ? st.reasons : null,
+        limits: st && st.limits }, setConfirm, setLimit, async (flags) => {
+        const m = await run('set_duty', { ...payload, ...flags });
+        if (m.ok) setCell(null); else toast(m.error.message, 'err');
+      });
+    }
     else if (what === 'remove') {
       const m = await run('apply', { day: p.day, role: p.role, from_name: p.fromName });
       if (!m.ok) toast(m.error.message, 'err');
@@ -715,8 +811,8 @@ function Board() {
 
     ${cell && byName[cell.name] ? html`<${CellMenu} d=${byName[cell.name]} day=${cell.day}
       info=${view.days.find((x) => x.day === cell.day)} mark=${markOf(cell.name, cell.day)} busy=${busy}
-      road=${opts && opts.data && opts.data.name === cell.name ? (opts.data.days.find((x) => x.day === cell.day) || {}).road : null}
-      fills=${waveFills(view, cell.day)}
+      opt=${opts && opts.data && opts.data.name === cell.name ? (opts.data.days.find((x) => x.day === cell.day) || null) : null}
+      fills=${waveFills(view, cell.day)} view=${view}
       onClose=${() => setCell(null)} act=${cellAct} />` : ''}
     ${marker ? html`<${MarkDialog} req=${marker} busy=${busy} onClose=${() => setMarker(null)}
       onSave=${async (kind, note) => { const m = await run('apply_mark', { ...marker, kind, note }); if (m.ok) setMarker(null); else toast(m.error.message, 'err'); }} />` : ''}

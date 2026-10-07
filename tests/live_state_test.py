@@ -202,6 +202,41 @@ ok(not any(f"P1 INFEASIBLE {dd['day']}" in l for l in c2['infeasible']), 'fillin
 u = J(runner.undo_last)
 ok(u['ok'] and next(x for x in u['drivers'] if x['name'] == who['name'])['cells'][dd['day']] == wave + ' Backup', 'undo works')
 
+print('dispatch, meetings, trainers, any wave time (2026-10-06)')
+runner.use_slot('live6')
+r6 = J(runner.load_state, {'state': st['state']})
+ok(all(d['cells'][x] != 'Unavailable' for d in r6['drivers'] for x in d['dispatch_days']),
+   'a dispatch day shows as Dispatch, not Unavailable')
+free = lambda rep, day: [d for d in rep['drivers'] if d['cells'].get(day) == '' and len(d['worked_dates']) < 4]
+day = next(x['day'] for x in r6['days'] if x['open'] and len(free(r6, x['day'])) >= 3)
+a, b, c = [d['name'] for d in free(r6, day)[:3]]
+m = J(runner.set_duty, {'name': a, 'day': day, 'kind': 'dispatch'})
+ok(m['ok'] and next(d for d in m['drivers'] if d['name'] == a)['cells'][day] == 'Dispatch', f'{a} on dispatch {day}')
+ok(next(d for d in m['drivers'] if d['name'] == a)['day_hours'].get(next(x['date'] for x in m['days'] if x['day'] == day)) == 12,
+   'dispatch counts 12h on the clock')
+m = J(runner.set_duty, {'name': b, 'day': day, 'kind': 'meeting'})
+ok(m['ok'] and next(d for d in m['drivers'] if d['name'] == b)['cells'][day] == '1:00 PM Meeting', f'{b} in a 1:00 PM meeting')
+nee = next(d for d in m['drivers'] if day in d['road_days'] and 'TRAIN' not in d['cells'][day])
+m = J(runner.set_duty, {'name': c, 'day': day, 'kind': 'trainer', 'with_name': nee['name']})
+ok(m['ok'], f"{c} trains {nee['name']} {day}")
+cc = next(d for d in m['drivers'] if d['name'] == c)['cells'][day]
+nn = next(d for d in m['drivers'] if d['name'] == nee['name'])['cells'][day]
+ok('TRAIN helper' in cc and 'TRAIN drives' in nn, 'both cells show the pair')
+ok(any(t[0] == c and t[1] == nee['name'] for t in m['pairlog']), 'in the training record')
+ok(not m['check']['errors'], f"no rule errors {m['check']['errors'][:2]}")
+blk = J(runner.candidates, {'day': day, 'role': 'road'})
+ok(next(x for x in blk['candidates'] if x['name'] == a)['status'] == 'blocked', 'dispatch day blocks a route')
+m = J(runner.clear_duty, {'name': nee['name'], 'day': day})
+ok(m['ok'] and next(d for d in m['drivers'] if d['name'] == nee['name'])['cells'][day] == nn.split(' (')[0]
+   and next(d for d in m['drivers'] if d['name'] == c)['cells'][day] == '', 'ending the pair: trainee drives alone')
+m = J(runner.clear_duty, {'name': a, 'day': day})
+ok(m['ok'] and next(d for d in m['drivers'] if d['name'] == a)['cells'][day] == '', 'off dispatch again')
+u = J(runner.undo_last)
+ok(u['ok'] and next(d for d in u['drivers'] if d['name'] == a)['cells'][day] == 'Dispatch', 'undo puts dispatch back')
+nw = J(runner.apply_add, {'name': free(u, day)[-1]['name'] if free(u, day) else b, 'day': day, 'role': 'road', 'wave': '11:25 AM'})
+ok(nw['ok'] and next(x for x in nw['days'] if x['day'] == day)['waves'].get('11:25 AM') == 1 and not nw['check']['errors'],
+   'a route in a wave the day had no routes in')
+
 print()
 print('PASS' if not fails else f'{len(fails)} FAILED')
 sys.exit(1 if fails else 0)

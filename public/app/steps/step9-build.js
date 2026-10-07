@@ -48,6 +48,8 @@ export function translateOverride(line) {
 }
 
 
+const ROLE_WORDS = { road: 'a route', backup: 'a backup', trainer: 'a trainer day', meeting: 'a meeting', dispatch: 'dispatch' };
+
 // A deliberate speed bump before scheduling someone on a day they submitted
 // off: tick the box AND type their first name. Compliance rules never get
 // here — those can't be overridden at all.
@@ -56,7 +58,7 @@ export function ConfirmOverride({ req, onCancel, onConfirm }) {
   const [typed, setTyped] = useState('');
   const first = req.name.trim().split(/\s+/)[0];
   const okName = typed.trim().toLowerCase() === first.toLowerCase();
-  const what = req.role === 'road' ? 'a route' : 'a backup';
+  const what = ROLE_WORDS[req.role] || 'a backup';
   const why = req.reasons[0] || 'marked Unavailable that day';
   return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onCancel(); }}>
     <div class="edit-modal card override-modal">
@@ -87,7 +89,7 @@ export function ConfirmOverride({ req, onCancel, onConfirm }) {
 export function LimitConfirm({ req, onCancel, onConfirm }) {
   const first = req.name.trim().split(/\s+/)[0];
   const six = req.limits.some((l) => /^6-day/.test(l));
-  const what = req.role === 'road' ? 'a route' : 'a backup';
+  const what = ROLE_WORDS[req.role] || 'a backup';
   return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onCancel(); }}>
     <div class="edit-modal card override-modal limit-modal">
       <h3>⚠ ${six ? `${req.name} will be scheduled for a 6-day` : `${req.name} goes over the usual limits`}</h3>

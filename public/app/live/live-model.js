@@ -121,6 +121,8 @@ export function cellInfo(v) {
   const time = m ? `${m[1]} ${m[2]}` : '';
   const partner = (s.match(/w\/ ([^)]+)\)/) || [])[1] || '';
   if (/^(Called out|No-show|Day off)$/.test(s)) return { kind: 'mark', top: s, sub: '', bg: SHIFT_COLORS.mark };
+  // "1:00 PM Meeting" has a time but is no route
+  if (/meeting/i.test(s)) return { kind: 'meet', top: time || 'Meeting', sub: time ? 'Meeting' : '', bg: SHIFT_COLORS.meet };
   if (/TRAIN helper/.test(s)) return { kind: 'trainer', top: time, sub: 'Trainer', partner, bg: SHIFT_COLORS.trainer };
   if (/TRAIN drives/.test(s)) return { kind: 'trainee', top: time, sub: 'Trainee', partner, bg: waveColor(wave) };
   if (/Backup/.test(s)) return { kind: 'bk', top: time || 'Backup', sub: time ? 'Backup' : '', bg: waveColor(wave) };
