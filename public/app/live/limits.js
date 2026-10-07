@@ -207,3 +207,28 @@ export function riskCardHtml(d, risk, iso, foot = '✓ = already worked. Click a
   }
   return parts.join('<hr class="ov-hr">') + (foot ? `<div class="ov-foot">${esc(foot)}</div>` : '');
 }
+
+// Room on one day (2026-10-07): the most hours a driver can be on the clock on `iso` and keep
+// every 7-day stretch holding that day within the max — the max minus the busiest other 6 days
+// of those stretches. `used` = those other days' hours (what the driver "starts the day with").
+export function roomOn(d, iso, lim) {
+  const max = lim.max_7day_hours || 60, dh = d.day_hours || {};
+  const sh = (x, n) => toISODate(addDays(parseISODate(x), n));
+  let used = 0;
+  for (let s = -6; s <= 0; s++) {
+    let t = 0;
+    for (let k = 0; k < 7; k++) { const x = sh(iso, s + k); if (x !== iso) t += Number(dh[x] || 0); }
+    used = Math.max(used, t);
+  }
+  used = Math.round(used * 100) / 100;
+  return { room: Math.round((max - used) * 100) / 100, used, max };
+}
+
+// The latest clock-out that keeps a day within `room` hours, counted the Route Tracker way: on
+// the clock from clock-in to clock-out, minus a 30-min lunch once the span is 6h or more.
+// Minutes after midnight: {limit} = the real last minute, {by} = `earlyMin` before it.
+export function clockOutBy(clockInMin, room, earlyMin = 30) {
+  const span = room >= 5.5 ? room + 0.5 : Math.max(0, room);
+  const limit = Math.round(clockInMin + span * 60);
+  return { limit, by: limit - earlyMin };
+}
