@@ -156,12 +156,23 @@ def _driver_rows(res):
     return rows
 
 
-def _worked_dates(res, dr):
-    """This week's worked dates (road, backup, training, dispatch, meeting)."""
+def _sched_dates(res, dr):
+    """This week's SCHEDULED worked dates (road, backup, training, dispatch, meeting)."""
     s = set()
     for k in ("prim", "bk", "helper", "extra", "meet"):
         s |= {res.DATEALL[d] for d in dr[k] if d in res.DATEALL}
     return s
+
+
+def _act_dates(dr):
+    """Dates Route Tracker says the driver really worked this week (clock-outs)."""
+    return {d for d, h in (dr.get("h_act") or {}).items() if h}
+
+
+def _worked_dates(res, dr):
+    """This week's worked dates: scheduled ones plus any day with a real clock-out
+    (an extra shift nobody put on the schedule still counts toward days in a row)."""
+    return _sched_dates(res, dr) | _act_dates(dr)
 
 
 def _streak(res, dr):
@@ -339,6 +350,15 @@ def _hours(res, dr):
     return _pdays(dr) * res.PH + len(dr["bk"]) * res.BH
 
 
+def _road_hours_real(res, dr):
+    """This week's road hours for the overtime check: the REAL hours of days already
+    worked (Route Tracker), planned 10h for road days still to come. With no clock-outs
+    this is exactly _pdays * PH, as before."""
+    act = dr.get("h_act") or {}
+    road = {res.DATEALL[d] for k in ("prim", "helper") for d in dr[k] if d in res.DATEALL}
+    return sum(act.get(d, 0) for d in act) + sum(res.PH for d in road if d not in act)
+
+
 def _run_len(res, dr, day):
     """Longest consecutive worked run through `day` if the driver also worked
     `day` -- prior-week tail included, same as the solver's runok()."""
@@ -348,6 +368,7 @@ def _run_len(res, dr, day):
         s |= {res.DATEALL[d] for d in dr[k]}
     s |= {res.DATEALL[d] for d in dr["extra"] if d in res.DATEALL}
     s |= {res.DATEALL[d] for d in dr["meet"] if d in res.DATEALL}
+    s |= _act_dates(dr)                      # real clock-outs on unscheduled days
     s.add(dt)
     n = 0
     c = dt
@@ -552,7 +573,8 @@ def _assess(res, dr, day, role):
         blocks += _hour_limits(res, dr, day, role)
 
     # total worked-days caps
-    tot = _pdays(dr) + len(dr["bk"]) + len(dr["extra"]) + len(dr["meet"])
+    tot = (_pdays(dr) + len(dr["bk"]) + len(dr["extra"]) + len(dr["meet"])
+           + len(_act_dates(dr) - _sched_dates(res, dr)))     # + real unscheduled shifts
     if tot + 1 > res.MAXTOT:
         if live and tot + 1 == res.MAXTOT + 1:
             limits.append(f"6-day: a 6th worked day this week (usual max {res.MAXTOT})")
@@ -566,9 +588,10 @@ def _assess(res, dr, day, role):
         warns.append(f"over the {res.MAXWKND}-weekend-day limit")
 
     if role in ("road", "trainer"):          # a trainer day counts as a road day
-        if HCAP and (_pdays(dr) + 1) * res.PH > HCAP:
+        wk = _road_hours_real(res, dr) + res.PH    # real hours for days already worked
+        if HCAP and wk > HCAP:
             (limits if live else blocks).append(
-                f"overtime: road hours go to {(_pdays(dr) + 1) * res.PH}h (over {HCAP}h)")
+                f"overtime: road hours go to {_num(wk)}h (over {HCAP}h)")
         elif _pdays(dr) + 1 > res.MAXPRIM:
             (limits if live else blocks).append(f"at the {res.MAXPRIM} road-day cap")
         capx = (getattr(res, "CAPX", {}) or {}).get(n, 0)

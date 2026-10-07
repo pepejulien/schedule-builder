@@ -110,8 +110,13 @@ export function mergeActual(summary, list) {
       for (let i = 0; i < 7; i++) t += Number(day_hours[toISODate(addDays(parseISODate(end), -i))] || 0);
       max7 = Math.max(max7, t);
     }
+    const act_dates = Object.keys(a.days).filter((x) => dates.includes(x) && Number(a.days[x])).sort();
+    // a real shift on an unscheduled day counts as worked (days in a row, days this week)
+    const worked = [...new Set([...(d.worked_dates || []), ...act_dates])].sort();
+    let run = 0, best = 0;
+    for (const x of dates) { run = worked.includes(x) ? run + 1 : 0; best = Math.max(best, run); }
     return { ...d, day_hours, clock_hours: Math.round(clock_hours * 100) / 100, max7: Math.round(max7 * 100) / 100,
-      act_dates: Object.keys(a.days).filter((x) => dates.includes(x)).sort() };
+      act_dates, worked_dates: worked, streak: Math.max(d.streak || 0, best) };
   });
   return { ...summary, drivers };
 }

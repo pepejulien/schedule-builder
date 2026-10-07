@@ -68,6 +68,26 @@ cand = J(runner.candidates, {'day': 'Mon', 'role': 'backup'})
 row = next((c for c in cand.get('candidates', []) if c.get('name') == name), None)
 ok(row is None or row.get('status') == 'blocked', 'a backup on top of 11.5h is not offered')
 
+print('an unscheduled real shift counts toward days in a row')
+off_day = next((dd for dd in ('Sun','Mon','Tue','Wed','Thu','Fri','Sat') if dd not in d['road_days'] and dd not in d['backup_days'] and not d['cells'].get(dd)), None)
+if off_day:
+    live3 = J(runner.load_state, {'state': st['state'], 'out': os.path.join(tmp, 'live3.xlsx'),
+              'actual': [{'name': name, 'days': {days[off_day]: 9}}]})
+    r4 = next(x for x in live3['drivers'] if x['name'] == name)
+    ok(days[off_day] in r4['worked_dates'], f'extra real shift on {off_day} is a worked date')
+    ok(r4['streak'] >= d['streak'], 'streak counts it')
+else:
+    ok(True, '(driver works every day - skipped)')
+
+print('overtime uses real hours')
+dr = next(x for x in runner._STATE['res'].roster if x['name'] == name)
+res = runner._STATE['res']
+planned = runner._road_hours_real(res, dict(dr, h_act={}))
+ok(planned == runner._pdays(dr) * res.PH, 'no clock-outs: same as before (road days x 10h)')
+first_road = res.DATEALL[d['road_days'][0]]
+real = runner._road_hours_real(res, dict(dr, h_act={first_road: 12.5}))
+ok(real == planned + 2.5, 'a 12.5h real day adds 2.5h to the overtime count')
+
 print('ambiguous names are skipped')
 twin = [{'name': name, 'days': {mon: 3}}, {'name': name + ' Jr', 'keys': [f'{first}|{last}'], 'days': {mon: 9}}]
 live2 = J(runner.load_state, {'state': st['state'], 'out': os.path.join(tmp, 'live2.xlsx'), 'actual': twin})
