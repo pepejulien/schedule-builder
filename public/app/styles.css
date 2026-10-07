@@ -371,6 +371,9 @@ table.lv-grid { font-size: 12.5px; }
 .lv-fill { font-weight: 500; text-transform: none; letter-spacing: 0; font-size: 10.5px; color: var(--muted2); }
 .lv-name { font-weight: 600; color: var(--ink); text-align: left; padding: 0; }
 .lv-cell { cursor: pointer; font-variant-numeric: tabular-nums; border-left: 1px solid var(--line); position: relative; }
+.lv-ifsent { font-size: 11.5px; font-weight: 500; color: var(--muted); white-space: nowrap; margin-top: 1px; }
+.lv-ifsent.lv-warn { color: #c0603a; font-weight: 700; }
+.lv-ifsent.lv-bad { font-weight: 700; }
 .lv-notedot { position: absolute; top: 1px; right: 2px; font-size: 11px; line-height: 1; pointer-events: none; }
 .dm-seven { margin: 12px 24px 0; padding: 10px 12px; border-radius: 10px; background: #f3f5f9; font-size: 14px; line-height: 1.55; }
 .dm-seven .lv-warn, .dm-seven .lv-bad { font-weight: 700; }

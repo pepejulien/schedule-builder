@@ -49,6 +49,23 @@ function last7(dayHours, endISO) {
   for (let k = 0; k < 7; k++) t += Number((dayHours || {})[toISODate(addDays(pd(endISO), -k))] || 0);
   return Math.round(t * 100) / 100;
 }
+// "If sent out" (Jose 2026-10-07): Max 7d counts a backup day as 2h, so it can't say what
+// happens if a backup gets a route. This is the same number with every backup day still ahead
+// (not worked yet) counted as a full route. null = no such backup days.
+function max7IfSent(d, days, today, lim) {
+  const dh = { ...(d.day_hours || {}) }, act = new Set(d.act_dates || []), full = lim.primary_hours || 10;
+  const bk = days.filter((x) => x.date >= today && !act.has(x.date) && cellInfo((d.cells || {})[x.day]).kind === 'bk');
+  if (!bk.length) return null;
+  for (const x of bk) dh[x.date] = full;
+  let best = 0;
+  for (const x of days) {
+    let t = 0;
+    for (let k = 0; k < 7; k++) t += Number(dh[toISODate(addDays(pd(x.date), -k))] || 0);
+    best = Math.max(best, t);
+  }
+  return Math.round(best * 100) / 100;
+}
+
 // The over-the-limit card (hours in 7 days / days in a row): the same HTML the Vehicle
 // Assigner's alarm pop-up shows (limits.js riskCardHtml).
 function RiskInfo({ d, risk, iso }) {
@@ -854,7 +871,7 @@ function Board() {
               <span class=${x.backup_filled < x.backup ? 'lv-warnc' : ''} title="backups filled / needed"> · bk ${x.backup_filled}/${x.backup}</span></div>`
               : html`<div class="lv-fill">closed</div>`}</th>`)}
           <th title="On the clock this week (scheduled)">Week</th>
-          <th title=${`Most hours on the clock in any 7 days in a row, last week included (max ${max7Lim}h)`}>Max 7d</th>
+          <th title=${`Most hours on the clock in any 7 days in a row, last week included (max ${max7Lim}h). A backup counts 2h; "if sent out" counts each backup day still ahead as a full route.`}>Max 7d</th>
           <th title=${`Days worked this week (usual max ${lim.max_worked_days || 5}; a 6th needs the pop-up)`}>Days</th>
           <th title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
         </tr></thead>
@@ -886,7 +903,11 @@ function Board() {
                       note ? html`<span class="lv-notedot" aria-label="Has a comment">💬</span>` : ''}</td>`;
                 })}
                 <td class=${hoursCls(x.clock_hours ?? x.hours)}>${x.clock_hours ?? x.hours}h</td>
-                <td class=${max7Cls(x.max7 ?? 0)}>${x.max7 ?? '—'}${x.max7 != null ? 'h' : ''}</td>
+                <td class=${max7Cls(x.max7 ?? 0)}>${x.max7 ?? '—'}${x.max7 != null ? 'h' : ''}${(() => {
+                  const ifs = max7IfSent(x, view.days, today, lim);
+                  return ifs == null ? '' : html`<div class=${'lv-ifsent ' + max7Cls(ifs)}
+                    title="If every backup day still ahead becomes a full route">if sent out: ${ifs}h</div>`;
+                })()}</td>
                 <td class=${daysCls(nWorked)}>${nWorked}</td>
                 <td class=${streakCls(x.streak)}>${x.streak}</td>
               </tr>`;
