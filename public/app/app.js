@@ -15,6 +15,7 @@ import { Step7Standing } from './steps/step7-standing.js';
 import { Step9Build } from './steps/step9-build.js';
 import { Settings } from './settings.js';
 import { LiveBoard } from './live/live-board.js';
+import { Today } from './live/today.js';
 
 // A step rendered INSIDE another step hides its own Back/Next bar.
 export const Embedded = createContext(false);
@@ -92,7 +93,35 @@ function Login() {
 
 const STATUS_CHIP = { done: ['open', 'Ready'], warn: ['lock', 'Check'], todo: ['todo', 'To do'] };
 
+// Next week's build in one card — the Today page's footer (Jose 2026-10-06:
+// the old Overview was only this checklist).
+function BuildCard() {
+  const wizard = useStore((s) => s.wizard);
+  const r = readiness(wizard);
+  const started = !!(wizard.availability || wizard.week?.num || wizard.build?.status === 'done');
+  const cont = () => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); };
+  const nWarn = r.warnings.length;
+  return html`<div class="card buildcard">
+    <div>
+      <h2>Next week's build</h2>
+      <p class="hint">${started
+        ? html`<b>${wizard.week?.label || 'In progress'}</b> · ${r.doneCount} of ${STEPS.length} steps ready${nWarn ? ` · ${nWarn} thing${nWarn === 1 ? '' : 's'} to check` : ''}${wizard.build?.published ? ' · published' : ''}`
+        : "Not started yet. Have this week's availability export ready — last week comes from the Live board."}</p>
+    </div>
+    <div class="row">${started
+      ? html`<button class="primary" onClick=${cont}>Continue ${Icon('arrow', 16)}</button>
+          <button class="ghost" onClick=${() => { if (confirm('Start over? This clears the current build from this browser.')) startFresh(); }}>Start over</button>`
+      : html`<button class="accent" onClick=${startFresh}>Start a new schedule ${Icon('arrow', 16)}</button>`}</div>
+  </div>`;
+}
+
 function Home() {
+  if (canLive()) return html`<${Today} buildCard=${html`<${BuildCard} />`} />`;
+  return html`<${BuildHome} />`;
+}
+
+// The Netlify site (no Live board): the build checklist as before.
+function BuildHome() {
   const wizard = useStore((s) => s.wizard);
   const r = readiness(wizard);
   const started = !!(wizard.availability || wizard.week?.num || wizard.build?.status === 'done');
@@ -150,7 +179,7 @@ function Sidebar() {
     <div class="sblogo"><img src="assets/logo.png" alt="" />
       <div><div class="sbname">Schedule Builder</div><div class="sbsub">JAJB Logistics · WWV9</div></div></div>
     <nav>
-      ${nav(route === 'home', 'home', 'Overview', () => setState({ route: 'home' }))}
+      ${nav(route === 'home', 'home', canLive() ? 'Today' : 'Overview', () => setState({ route: 'home' }))}
       ${nav(route === 'live', 'live', 'Live schedule', () => setState({ route: 'live' }))}
       <div class="sbgroup">Build a week</div>
       ${STEPS.map((s, i) => {
@@ -173,16 +202,17 @@ function TopBar() {
   const route = useStore((s) => s.route);
   const step = useStore((s) => s.wizard.step);
   const week = useStore((s) => s.wizard.week);
-  let title = 'Overview', sub = 'Where this week\'s schedule stands';
+  let title = canLive() ? 'Today' : 'Overview';
+  let sub = canLive() ? 'This week at a glance' : 'Where this week\'s schedule stands';
   if (route === 'settings') { title = 'Settings'; sub = 'Saved for every week'; }
   else if (route === 'live') { title = 'Live schedule'; sub = 'The published week, worked day by day — every change is logged'; }
   else if (route === 'wizard') { title = STEPS[step].title; sub = `Step ${step + 1} of ${STEPS.length} · ${STEPS[step].sub}`; }
   return html`<header class="topbar"><div class="tbrow">
     <div>
-      <div class="tbtitle"><h1>${title}</h1>${week?.label && route !== 'live' ? html`<span class="wkpill">${week.label}</span>` : ''}</div>
+      <div class="tbtitle"><h1>${title}</h1>${week?.label && route !== 'live' && !(route === 'home' && canLive()) ? html`<span class="wkpill">${week.label}</span>` : ''}</div>
       <div class="tbsub">${sub}</div>
     </div>
-    ${route === 'home' && (week?.num || step) ? html`<button class="rbtn" onClick=${() => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); }}>
+    ${route === 'home' && !canLive() && (week?.num || step) ? html`<button class="rbtn" onClick=${() => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); }}>
       Continue ${Icon('arrow', 16)}</button>` : ''}
   </div></header>`;
 }
@@ -192,7 +222,7 @@ function MobileSteps() {
   const route = useStore((s) => s.route);
   const step = useStore((s) => s.wizard.step);
   return html`<div class="msteps">
-    <button class=${'mstep' + (route === 'home' ? ' on' : '')} onClick=${() => setState({ route: 'home' })}>Overview</button>
+    <button class=${'mstep' + (route === 'home' ? ' on' : '')} onClick=${() => setState({ route: 'home' })}>${canLive() ? 'Today' : 'Overview'}</button>
     <button class=${'mstep' + (route === 'live' ? ' on' : '')} onClick=${() => setState({ route: 'live' })}>Live schedule</button>
     ${STEPS.map((s, i) => html`
     <button class=${'mstep' + (route === 'wizard' && i === step ? ' on' : '')}

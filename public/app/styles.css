@@ -482,3 +482,27 @@ table.lv-grid { font-size: 12.5px; }
   .dm-grid, .dm-stats { grid-template-columns: 1fr; }
   .daymodal .dm-head { flex-wrap: wrap; }
 }
+
+/* Today page (2026-10-06) */
+.td-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.td-title { font-size: 20px; font-weight: 700; color: var(--ink); letter-spacing: -.01em; }
+.td-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; border-left: 5px solid var(--err); padding: 14px 20px; }
+.td-open { background: #fdf0ef; color: #8a231c; font-weight: 600; padding: 3px 10px; border-radius: 999px; font-size: 13px; }
+.td-waves { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-top: 10px; }
+.td-wave { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.td-wavehead { display: flex; justify-content: space-between; padding: 7px 10px; font-size: 13.5px; color: #16191f; }
+.td-wave ul { list-style: none; margin: 0; padding: 6px 10px 8px; font-size: 13.5px; }
+.td-wave li { padding: 3px 0; }
+.td-wave li.td-bk { color: #6b4a14; }
+.td-other { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.td-other > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.td-other .lv-sw { padding: 3px 9px; border-radius: 6px; font-weight: 700; font-size: 12.5px; min-width: 90px; text-align: center; }
+.td-pill { background: #f3f4f7; border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+.td-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.td-watch { list-style: none; padding: 0; margin: 0; }
+.td-watch li { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 10px; margin-bottom: 6px; background: #f6f7f9; font-size: 13.5px; }
+.td-watch li.lvl3 { background: #fdf0ef; }
+.td-watch li.lvl3 b { color: var(--err); }
+.td-watch li.lvl2 { background: #fff1e6; }
+.td-watch li.lvl2 b { color: #c0603a; }
+@media (max-width: 900px) { .td-cols { grid-template-columns: 1fr; } }
