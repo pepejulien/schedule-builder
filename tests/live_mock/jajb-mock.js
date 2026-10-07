@@ -91,6 +91,16 @@
       listeners.add(f); setTimeout(f, 0);
       return () => listeners.delete(f);
     },
+    watchScheduleNotes: (week, cb) => {
+      const f = () => cb(get('notes/' + week) || {});
+      listeners.add(f); setTimeout(f, 0);
+      return () => listeners.delete(f);
+    },
+    saveScheduleNote: async (week, nm, day, text) => {
+      const all = get('notes/' + week) || {}, k = day + '|' + nm, t = String(text || '').trim();
+      if (t) all[k] = { name: nm, day, text: t, by: name, at: now() }; else delete all[k];
+      put('notes/' + week, all); fire();
+    },
     deleteScheduleWeek: async (week) => {
       const all = weeks(); delete all[week]; put('weeks', all);
       localStorage.removeItem(K + 'log/' + week);

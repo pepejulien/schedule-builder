@@ -370,7 +370,13 @@ table.lv-grid { font-size: 12.5px; }
 .lv-date { font-weight: 500; text-transform: none; letter-spacing: 0; }
 .lv-fill { font-weight: 500; text-transform: none; letter-spacing: 0; font-size: 10.5px; color: var(--muted2); }
 .lv-name { font-weight: 600; color: var(--ink); text-align: left; padding: 0; }
-.lv-cell { cursor: pointer; font-variant-numeric: tabular-nums; border-left: 1px solid var(--line); }
+.lv-cell { cursor: pointer; font-variant-numeric: tabular-nums; border-left: 1px solid var(--line); position: relative; }
+.lv-notedot { position: absolute; top: 1px; right: 2px; font-size: 11px; line-height: 1; pointer-events: none; }
+.dm-seven { margin: 12px 24px 0; padding: 10px 12px; border-radius: 10px; background: #f3f5f9; font-size: 14px; line-height: 1.55; }
+.dm-seven .lv-warn, .dm-seven .lv-bad { font-weight: 700; }
+.dm-note { margin: 6px 24px 0; display: flex; flex-direction: column; gap: 6px; }
+.dm-note textarea { width: 100%; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; resize: vertical; }
+.dm-note-old { background: #fff8e6; border-radius: 9px; padding: 8px 10px; font-size: 14px; }
 .lv-cell:hover { outline: 2px solid var(--navy); outline-offset: -2px; }
 .lv-cell.today { border-left: 2px solid rgba(223,115,50,.55); border-right: 2px solid rgba(223,115,50,.55); }
 .lv-grid tr.tier-sep td { text-align: left; }

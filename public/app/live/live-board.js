@@ -13,7 +13,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest } from '../solver-client.js';
-import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours } from '../api.js';
+import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote } from '../api.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
 import {
@@ -171,8 +171,52 @@ function HoursLeft({ d, info, v, lim, today }) {
           back and clocked out by <b>${t}</b> (${wave} start).`}</div>`;
 }
 
+// The 7 days ending the clicked day (Jose 2026-10-07): the 6 days before it, and that 7-day total
+// if the driver works a full route that day — e.g. a backup day, "what if she's sent out?".
+// Days not worked yet count their scheduled hours; days already worked count the real clock-out.
+function SevenDays({ d, info, v, lim }) {
+  const dh = d.day_hours || {}, iso = info.date;
+  const at = (n) => toISODate(addDays(pd(iso), n));
+  const r2 = (x) => Math.round(x * 100) / 100;
+  let prior = 0;
+  for (let k = 1; k <= 6; k++) prior += Number(dh[at(-k)] || 0);
+  prior = r2(prior);
+  const full = lim.primary_hours || 10, max = lim.max_7day_hours || 60;
+  const worked = (d.act_dates || []).includes(iso), now = Number(dh[iso] || 0);
+  const day = pd(iso).toLocaleDateString('en-US', { weekday: 'long' });
+  const span = `${pd(at(-6)).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} – ${pd(at(-1)).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`;
+  const tone = (t) => (t > max ? 'lv-bad' : t >= max - 6 ? 'lv-warn' : '');
+  const k = cellInfo(v).kind;
+  const line = worked
+    ? html`Worked <b>${now}h</b> on ${day} → <b class=${tone(prior + now)}>${r2(prior + now)}h</b> in these 7 days`
+    : html`With a ${full}h route on ${day}: <b class=${tone(prior + full)}>${r2(prior + full)}h</b> in 7 days${
+        k === 'bk' ? html` <span class="muted">(as a backup: ${r2(prior + now)}h)</span>` : ''}`;
+  return html`<div class="dm-seven">
+    <div><b>${prior}h</b> in the 6 days before (${span})</div>
+    <div>${line} <span class="muted">· max ${max}</span></div>
+  </div>`;
+}
+
+// A comment on this day (Jose 2026-10-07): on any cell — a shift, Unavailable, an empty day.
+function NoteBox({ note, busy, onSave }) {
+  const [txt, setTxt] = useState(note ? note.text : '');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setTxt(note ? note.text : ''); }, [note && note.text]);
+  const save = async (t) => { setSaving(true); try { await onSave(t); } finally { setSaving(false); } };
+  return html`<div class="dm-note">
+    ${note ? html`<div class="dm-note-old">💬 ${note.text} <span class="muted">— ${note.by || '—'}${note.at ? ', ' + new Date(note.at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : ''}</span></div>` : ''}
+    <textarea rows="2" maxlength="500" placeholder="Add a comment about this day — everyone with the app sees it"
+      value=${txt} onInput=${(e) => setTxt(e.target.value)}></textarea>
+    <div class="row">
+      <button class="small" disabled=${busy || saving || txt.trim() === (note ? note.text : '')} onClick=${() => save(txt)}>
+        ${saving ? 'Saving…' : note ? 'Save changes' : 'Save comment'}</button>
+      ${note ? html`<button class="link" disabled=${saving} onClick=${() => save('')}>Delete comment</button>` : ''}
+    </div>
+  </div>`;
+}
+
 // What one driver is doing on one day, and everything that can be done about it.
-function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk }) {
+function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk, note, onSaveNote }) {
   const v = (d.cells || {})[day] || '';
   const c = cellInfo(v);
   const kind = c.kind;
@@ -207,6 +251,7 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
         <div class=${d.streak >= (lim.max_consecutive || 5) ? 'hot' : ''}><b>${d.streak}</b><span>days in a row (usual max ${lim.max_consecutive || 5})</span></div>
       </div>
 
+      <${SevenDays} d=${d} info=${info} v=${v} lim=${lim} />
       ${risk && risk.hot.includes(info.date) ? html`<div class="dm-info warn dm-over"><${RiskInfo} d=${d} risk=${risk} iso=${info.date} /></div>` : ''}
       ${info.open && kind !== 'disp' && kind !== 'meet' && kind !== 'mark' ? html`<${HoursLeft} d=${d} info=${info} v=${v} lim=${lim} today=${todayISO()} />` : ''}
       ${kind === 'trainer' || kind === 'trainee' ? html`<div class="dm-info">${kind === 'trainer'
@@ -214,6 +259,8 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
         : html`<b>Trainee</b> — drives the ${c.top} route with trainer <b>${c.partner}</b>.`}</div>` : ''}
       ${mark ? html`<div class="dm-info warn"><b>${c.top}</b>${mark.was ? ` — was a ${mark.was}` : ''}${mark.note ? html` · “${mark.note}”` : ''}</div>` : ''}
       ${!info.open ? html`<div class="dm-info">The station is closed this day.</div>` : ''}
+      <div class="dm-sec">Comment</div>
+      <${NoteBox} note=${note} busy=${busy} onSave=${onSaveNote} />
 
       ${role ? html`
         <div class="dm-sec">Change this shift</div>
@@ -434,6 +481,7 @@ function Board() {
   const [sortBy, setSortBy] = useState(readSort);   // 'tier' | 'name'
   const [q, setQ] = useState('');                   // name search
   const [pop, setPop] = useState(null);             // the over-60 card: {name, iso, left, top, up}
+  const [notes, setNotes] = useState({});           // comments on shifts: {"<ISO day>|<name>": {text, by, at}}
 
   // async work reads the newest values through refs
   const R = useRef({});
@@ -477,6 +525,8 @@ function Board() {
     openWeek(sel);
     const un1 = watchLiveWeek(sel, (m) => setMetaLive(m));
     const un2 = watchLiveLog(sel, (l) => setLog(l));
+    setNotes({});
+    const unNotes = watchLiveNotes(sel, (n) => setNotes(n || {}));
     // a clock-out in Route Tracker changed someone's real hours: reload so the limits use them
     const onActual = (which) => (doc) => {
       const seen = ACT_LOADED[sel];
@@ -488,7 +538,7 @@ function Board() {
     };
     const un3 = watchActualHours(sel, onActual('cur'));
     const un4 = watchActualHours(prevISO(sel), onActual('prev'));
-    return () => { un1(); un2(); un3(); un4(); };
+    return () => { unNotes(); un1(); un2(); un3(); un4(); };
   }, [sel]);
 
   // someone else saved this week: pull it in
@@ -827,11 +877,13 @@ function Board() {
                   const v = (x.cells || {})[dd.day] || '';
                   const c = cellInfo(v);
                   const hot = risks[x.name] && risks[x.name].hot.includes(dd.date);
+                  const note = notes[dd.date + '|' + x.name];
                   return html`<td class=${'lv-cell k-' + c.kind + (dd.date === today ? ' today' : '') + (dd.open ? '' : ' closed') + (hot ? ' lv-over' : '')}
-                    title=${hot ? undefined : c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed')}
+                    title=${hot ? undefined : (note ? `💬 ${note.text} — ${note.by || ''}\n` : '') + (c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed'))}
                     onMouseEnter=${hot ? (e) => showPop(e, x.name, dd.date) : undefined}
                     onMouseLeave=${hot ? () => setPop(null) : undefined}
-                    onClick=${dd.open ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} /></td>`;
+                    onClick=${dd.open || note ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} />${
+                      note ? html`<span class="lv-notedot" aria-label="Has a comment">💬</span>` : ''}</td>`;
                 })}
                 <td class=${hoursCls(x.clock_hours ?? x.hours)}>${x.clock_hours ?? x.hours}h</td>
                 <td class=${max7Cls(x.max7 ?? 0)}>${x.max7 ?? '—'}${x.max7 != null ? 'h' : ''}</td>
@@ -874,6 +926,11 @@ function Board() {
       info=${view.days.find((x) => x.day === cell.day)} mark=${markOf(cell.name, cell.day)} busy=${busy}
       opt=${opts && opts.data && opts.data.name === cell.name ? (opts.data.days.find((x) => x.day === cell.day) || null) : null}
       fills=${waveFills(view, cell.day)} view=${view} risk=${risks[cell.name]}
+      note=${notes[(view.days.find((x) => x.day === cell.day) || {}).date + '|' + cell.name]}
+      onSaveNote=${async (t) => {
+        try { await saveLiveNote(sel, cell.name, view.days.find((x) => x.day === cell.day).date, t); toast(t.trim() ? 'Comment saved' : 'Comment deleted'); }
+        catch (e) { toast('Could not save the comment: ' + (e.message || e), 'err'); }
+      }}
       onClose=${() => setCell(null)} act=${cellAct} />` : ''}
     ${marker ? html`<${MarkDialog} req=${marker} busy=${busy} onClose=${() => setMarker(null)}
       onSave=${async (kind, note) => { const m = await run('apply_mark', { ...marker, kind, note }); if (m.ok) setMarker(null); else toast(m.error.message, 'err'); }} />` : ''}
