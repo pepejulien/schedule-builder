@@ -195,7 +195,15 @@ export function assembleConfig(state) {
   let backupField;
   if (state.backups?.mode === 'perday') {
     backupField = { backup_per_day: {} };
-    for (const d of Object.keys(waves)) backupField.backup_per_day[d] = Number(state.backups.perDay?.[d] || 0);
+    // A box HR never typed in shows the percent count (Step 3) — build with
+    // that same number, not 0 (Jose 2026-10-06: per-day counts reset to zero).
+    const pct = Number(state.backups.pct ?? 0.15);
+    for (const d of Object.keys(waves)) {
+      const v = state.backups.perDay?.[d];
+      const routes = Object.values(waves[d]).reduce((s, n) => s + (Number(n) || 0), 0);
+      backupField.backup_per_day[d] = (v === undefined || v === null || String(v).trim() === '')
+        ? Math.round(routes * pct) : Number(v) || 0;
+    }
   } else {
     backupField = { backup_pct: Number(state.backups?.pct ?? 0.15) };
   }

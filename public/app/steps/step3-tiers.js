@@ -191,7 +191,8 @@ export function Step3Tiers() {
                 onInput=${(e) => setRow(r.name, { routes: e.target.value === '' ? null : Number(e.target.value) })} /></td>
               <td><input type="text" value=${r.rate ?? ''} style="width:70px"
                 onInput=${(e) => setRow(r.name, { rate: e.target.value === '' ? null : Number(e.target.value) })} /></td>
-              <td><select value=${r.groupValue} onChange=${(e) => setRow(r.name, { groupValue: e.target.value })}>
+              <td><select value=${r.conflict ? '' : r.groupValue} onChange=${(e) => setRow(r.name, { groupValue: e.target.value })}>
+                ${r.conflict ? html`<option value="" disabled>— choose a day target —</option>` : ''}
                 ${GROUP_OPTIONS.map((o) => html`<option value=${o.value}>${o.label}</option>`)}
               </select></td>
             </tr>`)}</tbody>

@@ -39,7 +39,8 @@ export function Step6Backups() {
         <label><input type="radio" name="bkmode" checked=${backups.mode === 'pct'}
           onChange=${() => setB({ mode: 'pct' })} /> Percent of routes</label>
         <label><input type="radio" name="bkmode" checked=${backups.mode === 'perday'}
-          onChange=${() => setB({ mode: 'perday' })} /> Exact count per day</label>
+          onChange=${() => setB({ mode: 'perday', perDay: Object.fromEntries(opDays.map((d) =>
+            [d, backups.perDay?.[d] ?? String(pctCount(d))])) })} /> Exact count per day</label>
       </div>
 
       ${backups.mode === 'pct' ? html`

@@ -528,9 +528,12 @@ function QuickAdjust({ wizard, onRebuild }) {
 
       <div class="row" style="margin-bottom:8px">
         <span>Backups:</span>
-        <select value=${String(wizard.backups?.pct ?? 0.15)} onChange=${(e) => setBk(Number(e.target.value))}>
+        ${wizard.backups?.mode === 'perday'
+          ? html`<span class="muted">exact count per day — change them on
+              <a href="#" onClick=${(e) => { e.preventDefault(); goStep(2); }}>Routes & backups</a></span>`
+          : html`<select value=${String(wizard.backups?.pct ?? 0.15)} onChange=${(e) => setBk(Number(e.target.value))}>
           <option value="0.1">10%</option><option value="0.15">15%</option><option value="0.2">20%</option>
-        </select>
+        </select>`}
       </div>
 
       <div class="scroll-x"><table>
