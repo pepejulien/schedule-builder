@@ -85,5 +85,10 @@
       fire();
       return next;
     },
+    deleteScheduleWeek: async (week) => {
+      const all = weeks(); delete all[week]; put('weeks', all);
+      localStorage.removeItem(K + 'log/' + week);
+      fire();
+    },
   };
 }());

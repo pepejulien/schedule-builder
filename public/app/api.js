@@ -204,6 +204,7 @@ export const liveWeek = (weekISO) => window.JAJB.scheduleWeekData(weekISO);
 export const watchLiveWeek = (weekISO, cb) => window.JAJB.watchScheduleWeek(weekISO, cb);
 export const watchLiveLog = (weekISO, cb) => window.JAJB.watchScheduleLog(weekISO, cb);
 export const saveLiveWeek = (weekISO, w) => window.JAJB.saveScheduleWeek(weekISO, w);
+export const deleteLiveWeek = (weekISO) => window.JAJB.deleteScheduleWeek(weekISO);
 
 // Actual hours from Route Tracker's clock-outs (2026-10-07): Firestore actual_hours/{weekStart}
 // = {week, drivers: {id: {name, keys, tid, days: {ISO: hours}}}, by, at}. Written by Route Tracker

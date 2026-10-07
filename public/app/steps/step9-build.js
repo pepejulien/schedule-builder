@@ -7,9 +7,10 @@ import { ensureStanding } from './step7-standing.js';
 import { Banner, Spinner, download } from '../ui.js';
 import { assembleFromWizard } from '../build-inputs.js';
 import { build, editRequest } from '../solver-client.js';
-import { storeGet, loadTrainingHistory, saveTrainingWeek, canLive, liveWeek, actualHoursOnce } from '../api.js';
+import { storeGet, loadTrainingHistory, saveTrainingWeek, canLive, liveWeek, liveWeeks, deleteLiveWeek, actualHoursOnce } from '../api.js';
 import { saveWeek, actualList, prevISO } from '../live/live-model.js';
 import { driverCsv } from '../lib/driver-csv.js';
+import { parseISODate as pd } from '../lib/weeks.js';
 import { GROUP_OPTIONS } from '../lib/config-assemble.js';
 import { AdvancedPanel } from './advanced-panel.js';
 
@@ -531,16 +532,26 @@ function PublishCard({ wizard, r }) {
     try {
       const weekISO = wizard.week.startISO;
       const cur = await liveWeek(weekISO);
-      if (cur && !window.confirm(`${cur.meta.label} is already on the Live board (last change by ${cur.meta.by || 'someone'}).\n\n`
-        + 'Publishing replaces it — including any changes made there during the week (they stay in the change log).\n\nReplace it?')) {
-        setSt({ busy: false, err: '' });
-        return;
+      // the same week number already published under another Sunday (2026-10-07): one week, one
+      // copy — publishing replaces it. Week numbers restart each year, so only look ~20 weeks around.
+      const num = parseInt(wizard.week.num, 10) || 0;
+      const near = (iso) => Math.abs(pd(iso) - pd(weekISO)) < 140 * 864e5;
+      const dupes = num ? (await liveWeeks(80)).filter((w) => w.week !== weekISO && w.num === num && near(w.week)) : [];
+      if (cur || dupes.length) {
+        const old = [cur && cur.meta, ...dupes].filter(Boolean);
+        const msg = `Week ${num || wizard.week.label} is already on the Live board:\n\n`
+          + old.map((m) => `   • ${m.label || m.week}  (last change by ${m.by || 'someone'})`).join('\n')
+          + `\n\nPublishing will REPLACE ${old.length === 1 ? 'it' : 'them'} with this one — ${wizard.week.label}.`
+          + `\nChanges made there during the week are lost${dupes.length ? '' : ' (they stay in the change log)'}.\n\nReplace ${old.length === 1 ? 'it' : 'them'}?`;
+        if (!window.confirm(msg)) { setSt({ busy: false, err: '' }); return; }
       }
       const n = (r.edits || []).length;
-      const text = cur ? `Republished ${wizard.week.label} from a new build — replaces the earlier version`
+      const replaced = dupes.map((m) => m.label || m.week).join(', ');
+      const text = cur || dupes.length ? `Republished ${wizard.week.label} from a new build — replaces ${replaced || 'the earlier version'}`
         : `Published ${wizard.week.label}` + (n ? ` (with ${n} manual edit${n === 1 ? '' : 's'} from the builder)` : '');
       const { rev } = await saveWeek({ slot: 'build', weekISO, meta: { label: wizard.week.label, num: wizard.week.num },
         report: r, expectRev: cur ? cur.meta.rev : 0, log: [{ text, kind: 'publish' }], publish: true });
+      for (const d of dupes) await deleteLiveWeek(d.week);
       setWizard((w) => ({ build: { ...w.build, published: { rev, edits: n, label: wizard.week.label } } }));
       setSt({ busy: false, err: '' });
       toast('Published to the Live board');
