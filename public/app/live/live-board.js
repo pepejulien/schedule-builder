@@ -49,6 +49,20 @@ function last7(dayHours, endISO) {
   for (let k = 0; k < 7; k++) t += Number((dayHours || {})[toISODate(addDays(pd(endISO), -k))] || 0);
   return Math.round(t * 100) / 100;
 }
+// Hours a driver can be on the clock on `iso` and keep every 7-day window that holds
+// that day within the max (2026-10-07): the max minus the busiest other 6 days.
+function roomOn(dayHours, iso, max) {
+  let worst = 0;
+  for (let s = -6; s <= 0; s++) {
+    let t = 0;
+    for (let k = 0; k < 7; k++) {
+      const d = toISODate(addDays(pd(iso), s + k));
+      if (d !== iso) t += Number((dayHours || {})[d] || 0);
+    }
+    worst = Math.max(worst, t);
+  }
+  return Math.max(0, Math.round((max - worst) * 10) / 10);
+}
 
 // A grid cell drawn the way Amazon's scheduling page does: a colored block,
 // the time on top, the role (Backup / Trainer / Trainee) under it.
@@ -695,6 +709,20 @@ function Board() {
   const endISO = today < view.days[0].date ? null : today > lastDay ? lastDay : today;
   const streakCls = (n) => (n > (lim.max_consecutive || 5) ? 'lv-bad' : n === (lim.max_consecutive || 5) ? 'lv-warn' : '');
   const daysCls = (n) => (n > (lim.max_worked_days || 5) ? 'lv-bad' : n === (lim.max_worked_days || 5) ? 'lv-warn' : '');
+  // "Room left": today and tomorrow (when in this week), how long each driver can still be on
+  // the clock that day without going over the 7-day max. Red = the shift already on that day
+  // is longer than the room; orange = not enough room for a full route.
+  const tmrw = toISODate(addDays(pd(today), 1));
+  const roomDays = [[today, 'Today'], [tmrw, 'Tmrw']].filter(([iso]) => view.days.some((x) => x.date === iso));
+  const nCols = view.days.length + 5 + (roomDays.length ? 1 : 0);
+  const roomCell = (x) => roomDays.map(([iso, lbl]) => {
+    const room = Math.min(roomOn(x.day_hours, iso, max7Lim), lim.max_day_hours || 12);   // 12h a day caps it anyway
+    const on = Number((x.day_hours || {})[iso] || 0);
+    const cls = on > room ? 'lv-bad' : room < (lim.primary_hours || 10) ? 'lv-warn' : '';
+    const tip = `${lbl === 'Today' ? 'Today' : 'Tomorrow'}: can be on the clock up to ${room}h and stay within ${max7Lim}h in 7 days`
+      + (on ? ` — scheduled ${on}h${on > room ? ', which goes OVER' : ''}` : '');
+    return html`<div class=${cls} title=${tip}>${lbl} ${room}h</div>`;
+  });
   const goFind = (day, role) => {
     setFinder({ day, role });
     setTimeout(() => { const el = document.getElementById('lv-finder'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }, 30);
@@ -764,11 +792,12 @@ function Board() {
           <th title=${`Most hours on the clock in any 7 days in a row, last week included (max ${max7Lim}h)`}>Max 7d</th>
           <th title=${`Days worked this week (usual max ${lim.max_worked_days || 5}; a 6th needs the pop-up)`}>Days</th>
           <th title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
+          ${roomDays.length ? html`<th title=${`Hours each driver can still work today / tomorrow and stay within ${max7Lim}h in any 7 days. Red = the shift already scheduled goes over; orange = not enough for a full route.`}>Room left</th>` : ''}
         </tr></thead>
-        <tbody>${!shown.length ? html`<tr><td colspan=${view.days.length + 5} class="muted" style="text-align:left">
+        <tbody>${!shown.length ? html`<tr><td colspan=${nCols} class="muted" style="text-align:left">
             No driver matches “${q}”.</td></tr>` : ''}
           ${groups.map((g) => html`
-            ${g.meta ? html`<tr class="tier-sep"><td colspan=${view.days.length + 5}><span class="chip ${g.meta.chip}">${g.meta.label}</span>
+            ${g.meta ? html`<tr class="tier-sep"><td colspan=${nCols}><span class="chip ${g.meta.chip}">${g.meta.label}</span>
               <span class="muted"> · ${g.rows.length}</span></td></tr>` : ''}
             ${g.rows.map((x) => {
               const nWorked = (x.worked_dates || []).length;
@@ -791,6 +820,7 @@ function Board() {
                 <td class=${max7Cls(x.max7 ?? 0)}>${x.max7 ?? '—'}${x.max7 != null ? 'h' : ''}</td>
                 <td class=${daysCls(nWorked)}>${nWorked}</td>
                 <td class=${streakCls(x.streak)}>${x.streak}</td>
+                ${roomDays.length ? html`<td class="lv-room">${roomCell(x)}</td>` : ''}
               </tr>`;
             })}`)}</tbody>
       </table></div>

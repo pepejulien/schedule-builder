@@ -384,6 +384,7 @@ table.lv-grid { font-size: 12.5px; }
 .k-disp, .k-meet { background: rgba(111,90,168,.12); color: #6f5aa8; }
 .lv-bad { color: var(--err) !important; font-weight: 700; }
 .lv-warn { color: #c0603a; font-weight: 700; }
+.lv-room { white-space: nowrap; font-size: 12.5px; text-align: left; line-height: 1.35; }
 .lv-warnc { color: var(--warn) !important; }
 .lv-open { color: var(--err); font-weight: 600; }
 .lv-legend { margin-top: 10px; }
