@@ -18,11 +18,11 @@ import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
 import {
   WaveEditor, SlotEditor, ConfirmOverride, LimitConfirm, runConfirmed, TIER_META, TIER_ORDER,
-  translateInfeasible, translateOverride,
+  translateInfeasible, translateOverride, RuleProblems,
 } from '../steps/step9-build.js';
 import {
   loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
-  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk, runRisk, riskCardHtml,
+  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk, runRisk, riskCardHtml, roomOn, clockOutBy,
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
@@ -146,6 +146,30 @@ const Act = ({ icon, title, sub, onClick, busy, tone }) => html`<button class=${
 const ampm = (t) => { const [h, m] = String(t || '13:00').split(':').map(Number);
   return `${((h + 11) % 12) + 1}:${String(m || 0).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`; };
 
+// Hours left on one day under the 7-day max (Jose 2026-10-07: he couldn't see how long a driver
+// could still work, to decide on a split route). Only for days not worked yet, and only when a
+// long day could reach the max. Clock-out time: the shift's wave (or the day's first) minus
+// 40 min to clock in, 30-min lunch, 30 minutes early — the same as the Vehicle Assigner.
+function HoursLeft({ d, info, v, lim, today }) {
+  if (info.date < today || (d.act_dates || []).includes(info.date)) return '';
+  const { room, max } = roomOn(d, info.date, lim);
+  const full = lim.primary_hours || 10, maxDay = lim.max_day_hours || 12;
+  if (room >= maxDay) return '';
+  const first = d.name.split(/\s+/)[0];
+  const wd = parseISODate(info.date).toLocaleDateString('en-US', { weekday: 'long' });
+  const wave = (String(v).match(/^\d{1,2}:\d{2} [AP]M/) || [])[0] || dayWaves(info)[0];
+  const by = clockOutBy(waveMins(wave) - 40, room).by;
+  const t = `${((Math.floor(by / 60) + 11) % 12) + 1}:${String(by % 60).padStart(2, '0')} ${by >= 720 ? 'PM' : 'AM'}`;
+  const h = Math.floor(room * 2) / 2;   // whole or half hours, rounded down
+  if (room <= 0.5) return html`<div class="dm-info warn"><b>No hours left on ${wd}.</b> Any work puts ${first} over ${max} hours in 7 days.</div>`;
+  return html`<div class=${'dm-info ' + (room < full ? 'warn' : '')}>
+    ${room < full
+      ? html`<b>${first} can only work about ${h} hours on ${wd}</b> before going over ${max} hours in 7 days — not enough
+          for a full route (${full}h). A split route works: back and clocked out by <b>${t}</b> (${wave} start).`
+      : html`<b>Up to ${h} hours on ${wd}.</b> A full route fits, but a long day could go over ${max} hours —
+          back and clocked out by <b>${t}</b> (${wave} start).`}</div>`;
+}
+
 // What one driver is doing on one day, and everything that can be done about it.
 function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk }) {
   const v = (d.cells || {})[day] || '';
@@ -183,6 +207,7 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
       </div>
 
       ${risk && risk.hot.includes(info.date) ? html`<div class="dm-info warn dm-over"><${RiskInfo} d=${d} risk=${risk} iso=${info.date} /></div>` : ''}
+      ${info.open && kind !== 'disp' && kind !== 'meet' && kind !== 'mark' ? html`<${HoursLeft} d=${d} info=${info} v=${v} lim=${lim} today=${todayISO()} />` : ''}
       ${kind === 'trainer' || kind === 'trainee' ? html`<div class="dm-info">${kind === 'trainer'
         ? html`<b>Trainer</b> — rides along with <b>${c.partner}</b> on the ${c.top} route.`
         : html`<b>Trainee</b> — drives the ${c.top} route with trainer <b>${c.partner}</b>.`}</div>` : ''}
@@ -738,8 +763,7 @@ function Board() {
         const slot = m ? { day: m[1], role: 'road' } : (m = l.match(/P2 SHORT (\w+)/)) ? { day: m[1], role: 'backup' } : null;
         return html`<li>${openText(l)}${slot ? html` <button class="small" onClick=${() => goFind(slot.day, slot.role)}>Find someone…</button>` : ''}</li>`;
       })}</ul><//>` : ''}
-    ${(view.errors || []).length ? html`<${Banner} kind="err"><b>Rule problems:</b>
-      <ul>${view.errors.map((l) => html`<li>${l}</li>`)}</ul><//>` : ''}
+    <${RuleProblems} lines=${view.errors || []} />
     ${(view.overridden || []).length ? html`<details class="banner warn"><summary><b>${view.overridden.length} approved override${view.overridden.length === 1 ? '' : 's'}</b></summary>
       <ul>${view.overridden.map((l) => html`<li>${translateOverride(l)}</li>`)}</ul></details>` : ''}
 

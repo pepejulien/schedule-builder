@@ -49,6 +49,62 @@ export function translateOverride(line) {
 }
 
 
+// The rules engine's problem lines ("OT: name road days over 40h", "DAYCAP: …") grouped into
+// plain-English headings, the hard limits first (Jose 2026-10-07: the raw list "seems like
+// machine language" and is too long to read). -> [{title, hard, people: [{name, detail}]}]
+const RULE_KINDS = [
+  { re: /^HOURS-7DAY: (.+?) ([\d.]+)h in 7 days from (\w{3} [\d/]+)/, title: 'Over 60 hours in 7 days', hard: true,
+    who: (m) => ({ name: m[1], detail: `${m[2]}h in the 7 days from ${m[3]}` }) },
+  { re: /^HOURS-DAY: (.+?) ([\d.]+)h on (\w{3} [\d/]+)/, title: 'Over 12 hours in one day', hard: true,
+    who: (m) => ({ name: m[1], detail: `${m[2]}h on ${m[3]}` }) },
+  { re: /^CONSEC>(\d+): (.+) run=(\d+)/, title: 'Too many days in a row', hard: true,
+    who: (m) => ({ name: m[2], detail: `${m[3]} days in a row` }) },
+  { re: /^UNAVAIL violated: (.+) (\w{3})$/, title: 'Working a day they marked Unavailable', hard: true,
+    who: (m) => ({ name: m[1], detail: m[2] }) },
+  { re: /^OT: (.+) road days over (\d+)h/, title: 'Overtime — over 40 hours of routes',
+    who: (m) => ({ name: m[1] }) },
+  { re: /^TOTDAYS: (.+) over (\d+) worked days/, title: 'Working 6 days this week',
+    who: (m) => ({ name: m[1] }) },
+  { re: /^DAYCAP: (.+) over (\d+) primary days/, title: 'More than 4 route days',
+    who: (m) => ({ name: m[1] }) },
+  { re: /^FAIR-SHAPE: (.+) roads\+backups over (\d+)/, title: 'Fair drivers over 4 days (routes + backups)',
+    who: (m) => ({ name: m[1] }) },
+  { re: /^TARGET (.+): want (\d+) got (\d+)/, title: 'Different number of route days than set',
+    who: (m) => ({ name: m[1], detail: `set to ${m[2]}, has ${m[3]}` }) },
+  { re: /^BACKUP-ONLY: (.+)$/, title: 'Backup days but no route days',
+    who: (m) => ({ name: m[1] }) },
+  { re: /^BACKUP<2PRIMARY: (.+)$/, title: 'A backup day with fewer than 2 route days',
+    who: (m) => ({ name: m[1] }) },
+];
+export function groupRuleLines(lines) {
+  const groups = new Map(), other = [];
+  for (const l of lines || []) {
+    const k = RULE_KINDS.find((x) => x.re.test(l));
+    if (!k) { other.push({ name: l }); continue; }
+    if (!groups.has(k)) groups.set(k, { title: k.title, hard: !!k.hard, people: [] });
+    groups.get(k).people.push(k.who(l.match(k.re)));
+  }
+  const out = RULE_KINDS.filter((k) => groups.has(k)).map((k) => groups.get(k));
+  if (other.length) out.push({ title: 'Other', hard: false, people: other });
+  return out;
+}
+// One short box: the hard limits open in red, everything else one line per kind.
+export function RuleProblems({ lines }) {
+  const groups = groupRuleLines(lines);
+  if (!groups.length) return '';
+  const hard = groups.filter((g) => g.hard), soft = groups.filter((g) => !g.hard);
+  const n = groups.reduce((a, g) => a + g.people.length, 0);
+  const who = (p) => html`<span class="rp-who">${p.name}${p.detail ? html` <span class="muted">(${p.detail})</span>` : ''}</span>`;
+  return html`<div class=${'banner ' + (hard.length ? 'err' : 'warn') + ' rule-problems'}>
+    <b>${n} rule ${n === 1 ? 'problem' : 'problems'} this week</b>
+    ${hard.map((g) => html`<div class="rp-hard"><b>${g.title}:</b> ${g.people.map(who)}</div>`)}
+    ${soft.length ? html`<details class="rp-soft" open=${!hard.length}>
+      <summary>${soft.length} smaller ${soft.length === 1 ? 'kind' : 'kinds'} — overtime, days, fairness (${soft.reduce((a, g) => a + g.people.length, 0)})</summary>
+      ${soft.map((g) => html`<div class="rp-row"><b>${g.title}</b> · ${g.people.length}: ${g.people.map(who)}</div>`)}
+    </details>` : ''}
+  </div>`;
+}
+
 const ROLE_WORDS = { road: 'a route', backup: 'a backup', trainer: 'a trainer day', meeting: 'a meeting', dispatch: 'dispatch' };
 
 // A deliberate speed bump before scheduling someone on a day they submitted
@@ -839,8 +895,7 @@ export function Step9Build() {
       ${(r.notes || []).length ? html`<${Banner} kind="info">
         <b>Notes:</b>
         <ul>${r.notes.map((l) => html`<li>${l}</li>`)}</ul><//>` : ''}
-      ${(chk.errors || []).length ? html`<${Banner} kind="err">
-        <b>Rule violations:</b><ul>${chk.errors.map((l) => html`<li>${l}</li>`)}</ul><//>` : ''}
+      <${RuleProblems} lines=${chk.errors || []} />
       ${overridden.length ? html`<${Banner} kind="warn">
         <b>Manual overrides you approved:</b>
         <ul>${overridden.map((l) => html`<li>${translateOverride(l)}</li>`)}</ul>

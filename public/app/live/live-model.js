@@ -12,7 +12,8 @@ import { liveWeek, saveLiveWeek, actualHoursOnce } from '../api.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 // the limit checks + actual-hours merge live in limits.js (no app imports), so the
 // Vehicle Assigner can load them too
-export { actualList, flKey, mergeActual, overRisk, runRisk, riskCardHtml } from './limits.js';
+import { actualList } from './limits.js';
+export { actualList, flKey, mergeActual, overRisk, runRisk, riskCardHtml, roomOn, clockOutBy } from './limits.js';
 
 export const prevISO = (iso) => toISODate(addDays(parseISODate(iso), -7));
 export const todayISO = () => toISODate(new Date());
