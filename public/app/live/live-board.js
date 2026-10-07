@@ -148,8 +148,9 @@ const ampm = (t) => { const [h, m] = String(t || '13:00').split(':').map(Number)
 
 // Hours left on one day under the 7-day max (Jose 2026-10-07: he couldn't see how long a driver
 // could still work, to decide on a split route). Only for days not worked yet, and only when a
-// long day could reach the max. Clock-out time: the shift's wave (or the day's first) minus
-// 40 min to clock in, 30-min lunch, 30 minutes early — the same as the Vehicle Assigner.
+// long day could reach the max. Clock-out time: the shift's time on the schedule IS the clock-in
+// (Jose 2026-10-07; Amazon's departure is 40 min later), 30-min lunch, 30 minutes early — the
+// same result as the Vehicle Assigner, which starts from the departure minus 40.
 function HoursLeft({ d, info, v, lim, today }) {
   if (info.date < today || (d.act_dates || []).includes(info.date)) return '';
   const { room, max } = roomOn(d, info.date, lim);
@@ -158,7 +159,7 @@ function HoursLeft({ d, info, v, lim, today }) {
   const first = d.name.split(/\s+/)[0];
   const wd = parseISODate(info.date).toLocaleDateString('en-US', { weekday: 'long' });
   const wave = (String(v).match(/^\d{1,2}:\d{2} [AP]M/) || [])[0] || dayWaves(info)[0];
-  const by = clockOutBy(waveMins(wave) - 40, room).by;
+  const by = clockOutBy(waveMins(wave), room).by;
   const t = `${((Math.floor(by / 60) + 11) % 12) + 1}:${String(by % 60).padStart(2, '0')} ${by >= 720 ? 'PM' : 'AM'}`;
   const h = Math.floor(room * 2) / 2;   // whole or half hours, rounded down
   if (room <= 0.5) return html`<div class="dm-info warn"><b>No hours left on ${wd}.</b> Any work puts ${first} over ${max} hours in 7 days.</div>`;
