@@ -22,7 +22,7 @@ import {
 } from '../steps/step9-build.js';
 import {
   loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
-  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk, runRisk,
+  WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk, runRisk, riskCardHtml,
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
@@ -49,55 +49,10 @@ function last7(dayHours, endISO) {
   for (let k = 0; k < 7; k++) t += Number((dayHours || {})[toISODate(addDays(pd(endISO), -k))] || 0);
   return Math.round(t * 100) / 100;
 }
-// The over-60 card (2026-10-07): what goes over, the hours behind it, and every fix.
-const mdy = (iso) => pd(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-const wkd = (iso) => pd(iso).toLocaleDateString('en-US', { weekday: 'long' });
-// both limits on one card: over the hours max and/or 7 days in a row
+// The over-the-limit card (hours in 7 days / days in a row): the same HTML the Vehicle
+// Assigner's alarm pop-up shows (limits.js riskCardHtml).
 function RiskInfo({ d, risk, iso }) {
-  return html`<div>${risk.hours ? html`<${OverInfo} d=${d} risk=${risk.hours} iso=${iso} />` : ''}
-    ${risk.hours && risk.run ? html`<hr class="ov-hr" />` : ''}
-    ${risk.run ? html`<${RunInfo} d=${d} risk=${risk.run} iso=${iso} />` : ''}
-    <div class="ov-foot">✓ = already worked. Click a day to change it.</div></div>`;
-}
-function RunInfo({ d, risk, iso }) {
-  const longest = Math.max(...risk.runs.map((r) => r.length));
-  const here = iso && risk.fixes.length && !risk.fixes.some((f) => f.dates.includes(iso));
-  return html`<div class="ov-card">
-    <div class="ov-title">${d.name} would work ${longest} days in a row (max ${risk.maxRun})</div>
-    ${risk.runs.map((r) => html`<div class="ov-win">${mdy(r[0])} → ${mdy(r[r.length - 1])}: <b>${r.length} days</b></div>`)}
-    <div class="ov-days">${risk.breakdown.map((x) => html`<span class=${'ov-day' + (x.hot ? ' hot' : '') + (x.done ? ' done' : '')}
-      >${mdy(x.date).replace(/,.*/, '')}${x.done ? ' ✓' : ''}</span>`)}</div>
-    ${risk.fixes.length ? html`<div class="ov-sub">Ways to fix it — any one of these works:</div>
-      <ul class="ov-fix">${risk.fixes.map((f) => html`<li>Take ${f.dates.map((x, i) => html`${i ? ' and ' : ''}<b>${wkd(x)}</b>`)} off
-        — give that shift to someone else (a backup counts as a day worked too)</li>`)}</ul>
-      ${here ? html`<div class="ov-note">Taking ${wkd(iso)} off alone doesn't break the run — use one of the days above.</div>` : ''}`
-      : risk.hot.length ? html`<div class="ov-note">No one or two days off fix it — this week needs a bigger rework.</div>`
-      : html`<div class="ov-note">These days are already worked — nothing left to change this week.</div>`}
-  </div>`;
-}
-function OverInfo({ d, risk, iso }) {
-  const first = d.name.split(/\s+/)[0];
-  const fixText = (f) => {
-    const [a, b] = f.dates;
-    if (f.kind === 'off') return html`Take <b>${wkd(a)}</b> off — give that shift to someone else`;
-    if (f.kind === 'backup') return html`Make <b>${wkd(a)}</b> a backup (${risk.backupH}h) instead of a route`;
-    if (f.kind === 'short') return html`Send ${first} home after <b>${f.hours}h</b> on <b>${wkd(a)}</b>`;
-    return html`Take <b>${wkd(a)}</b> and <b>${wkd(b)}</b> off`;
-  };
-  const here = iso && risk.fixes.length && !risk.fixes.some((f) => f.dates.includes(iso));
-  return html`<div class="ov-card">
-    <div class="ov-title">${d.name} goes over ${risk.max}h in 7 days</div>
-    ${risk.over.slice(0, 3).map((w) => html`<div class="ov-win">${mdy(w.start)} → ${mdy(w.end)}: <b>${w.total}h</b>
-      <span class="ov-by">${Math.round((w.total - risk.max) * 100) / 100}h over</span></div>`)}
-    <div class="ov-sub">The worst 7 days, day by day:</div>
-    <div class="ov-days">${risk.breakdown.map((x) => html`<span class=${'ov-day' + (x.hot ? ' hot' : '') + (x.done ? ' done' : '')}
-      >${mdy(x.date).replace(/,.*/, '')} ${x.h}h${x.done ? ' ✓' : ''}</span>`)}</div>
-    ${risk.fixes.length ? html`<div class="ov-sub">Ways to fix it — any one of these works:</div>
-      <ul class="ov-fix">${risk.fixes.map((f) => html`<li>${fixText(f)} <span class="muted">→ most in 7 days ${f.worst}h</span></li>`)}</ul>
-      ${here ? html`<div class="ov-note">Changing ${wkd(iso)} alone is not enough — use one of the days above.</div>` : ''}`
-      : risk.hot.length ? html`<div class="ov-note">No one or two changes fix it — this week needs a bigger rework.</div>`
-      : html`<div class="ov-note">These days are already worked — nothing left to change this week.</div>`}
-  </div>`;
+  return html`<div dangerouslySetInnerHTML=${{ __html: riskCardHtml(d, risk, iso) }} />`;
 }
 
 function Block({ v }) {

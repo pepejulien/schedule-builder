@@ -540,3 +540,22 @@ table.lv-grid { font-size: 12.5px; }
 .td-watch li.lvl2 { background: #fff1e6; }
 .td-watch li.lvl2 b { color: #c0603a; }
 @media (max-width: 900px) { .td-cols { grid-template-columns: 1fr; } }
+/* would break a limit (2026-10-07): the red box at the top, one fold-out card per driver */
+.td-risk { border-left: 5px solid #d62d20; background: #fffafa; }
+.td-risk-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.td-risk-head > div { flex: 1; min-width: 220px; }
+.td-risk-title { font-size: 18px; font-weight: 700; color: #b3261e; }
+.td-risk-one { border: 1px solid #f1c9c4; border-radius: 10px; background: #fff; margin-top: 10px; padding: 0 14px; }
+.td-risk-one summary { cursor: pointer; padding: 10px 0; font-size: 14px; }
+.td-risk-one[open] summary { border-bottom: 1px solid #f6dcd8; }
+.td-risk-days { display: inline-flex; gap: 4px; margin-left: 6px; flex-wrap: wrap; }
+.td-open.now { background: #d62d20; color: #fff; }
+.td-risk-body { padding: 10px 0 12px; font-size: 13.5px; }
+.today .stats { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.td-count { font-size: 14px; font-weight: 500; margin-left: 6px; }
+.td-bkrow { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.td-bkwave { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.td-bkhead { padding: 3px 9px; border-radius: 6px; font-weight: 700; font-size: 12.5px; min-width: 90px; text-align: center; color: #16191f; }
+.td-ot { margin-top: 8px; font-size: 13.5px; }
+.td-ot summary { cursor: pointer; color: var(--muted); }
+.td-otlist { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

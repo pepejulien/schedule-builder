@@ -9,7 +9,8 @@ import { setState } from '../store.js';
 import { Banner, Spinner, Icon } from '../ui.js';
 import { liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours } from '../api.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
-import { sundayOf, todayISO, cellInfo, WAVE_COLORS, SHIFT_COLORS, prevISO, actualList, mergeActual } from './live-model.js';
+import { sundayOf, todayISO, cellInfo, WAVE_COLORS, SHIFT_COLORS, prevISO, actualList, mergeActual,
+  overRisk, runRisk, riskCardHtml } from './live-model.js';
 
 const longDate = (iso) => parseISODate(iso).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 const when = (iso) => (iso ? new Date(iso).toLocaleString('en-US',
@@ -24,12 +25,12 @@ function last7(dayHours, endISO) {
   return Math.round(t * 100) / 100;
 }
 
-// Who to keep an eye on: close to (or past) a limit.
+// Who to keep an eye on: close to (or past) a limit — and, apart, those only in overtime.
 function watchList(sm, endISO) {
   const lim = sm.limits || {};
   const max7 = lim.max_7day_hours || 60, maxc = lim.max_consecutive || 5, maxd = lim.max_worked_days || 5;
   const cap = lim.weekly_hours_cap || 40;
-  const out = [];
+  const out = [], ot = [];
   for (const d of sm.drivers || []) {
     const why = [];
     let lvl = 0;
@@ -41,10 +42,11 @@ function watchList(sm, endISO) {
     const nd = (d.worked_dates || []).length;
     if (nd > maxd) { why.push(`${nd}-day week`); lvl = Math.max(lvl, 2); }
     const wk = d.clock_hours ?? d.hours ?? 0;
-    if (wk > cap) { why.push(`${wk}h this week — overtime`); lvl = Math.max(lvl, 2); }
+    if (why.length && wk > cap) why.push(`${wk}h this week — overtime`);
     if (why.length) out.push({ name: d.name, why, lvl, last7: endISO && d.day_hours ? last7(d.day_hours, endISO) : null });
+    else if (wk > cap) ot.push({ name: d.name, wk });
   }
-  return out.sort((a, b) => b.lvl - a.lvl || a.name.localeCompare(b.name));
+  return { near: out.sort((a, b) => b.lvl - a.lvl || a.name.localeCompare(b.name)), ot: ot.sort((a, b) => b.wk - a.wk) };
 }
 
 export function Today({ buildCard }) {
@@ -122,7 +124,21 @@ export function Today({ buildCard }) {
   const weekOpen = sm.days.filter((x) => x.open && x.date >= today)
     .map((x) => ({ day: x.day, date: x.date, r: Math.max(0, x.routes - x.routes_filled), b: Math.max(0, x.backup - x.backup_filled) }))
     .filter((x) => x.r || x.b);
-  const watch = watchList(sm, endISO);
+  const { near: watch, ot } = watchList(sm, endISO);
+  // who would break a hard limit (over the 7-day hours max / 7 days in a row) on a day still
+  // ahead — the same check and card as the Live board's shaking days
+  const lim = sm.limits || {};
+  const risky = sm.drivers.map((d) => {
+    const hours = overRisk(d, sm.days, today, lim), run = runRisk(d, sm.days, today, lim);
+    if (hours) hours.backupH = lim.backup_hours || 2;
+    const hot = [...new Set([...(hours ? hours.hot : []), ...(run ? run.hot : [])])].sort();
+    if (!hot.length) return null;
+    const what = [hours && hours.hot.length ? `over ${hours.max}h in 7 days (${Math.max(...hours.over.map((w) => w.total))}h)` : '',
+      run && run.hot.length ? `${Math.max(...run.runs.map((r) => r.length))} days in a row` : ''].filter(Boolean).join(' and ');
+    return { d, risk: { hours, run }, hot, what };
+  }).filter(Boolean).sort((a, b) => a.hot[0].localeCompare(b.hot[0]) || a.d.name.localeCompare(b.d.name));
+  const dayName = (iso) => (iso === today ? 'Today' : (sm.days.find((x) => x.date === iso) || {}).day || iso);
+  const nBk = Object.values(backups).reduce((a, l) => a + l.length, 0);
 
   return html`<div class="today">
     ${err ? html`<${Banner} kind="err">${err}<//>` : ''}
@@ -139,8 +155,25 @@ export function Today({ buildCard }) {
       <div class="stat"><div class=${'big' + (openR ? ' lv-bad' : '')}>${day.routes_filled}/${day.routes}</div><div class="muted">routes filled</div></div>
       <div class="stat"><div class=${'big' + (openB ? ' lv-warnc' : '')}>${day.backup_filled}/${day.backup}</div><div class="muted">backups</div></div>
       <div class="stat"><div class=${'big' + (marks.length ? ' lv-bad' : '')}>${marks.length}</div><div class="muted">called out / no-show</div></div>
-      <div class="stat"><div class=${'big' + (watch.some((w) => w.lvl >= 2) ? ' lv-warnc' : '')}>${watch.length}</div><div class="muted">drivers near a limit</div></div>
+      <div class="stat"><div class=${'big' + (risky.length ? ' lv-bad' : '')}>${risky.length}</div><div class="muted">would break a limit</div></div>
+      <div class="stat"><div class=${'big' + (watch.some((w) => w.lvl >= 2) ? ' lv-warnc' : '')}>${watch.length}</div><div class="muted">close to a limit</div></div>
     </div>`}
+
+    ${risky.length ? html`<div class="card td-risk">
+      <div class="td-risk-head">
+        <svg viewBox="0 0 100 90" width="44" height="40" aria-hidden="true"><polygon points="50,4 96,86 4,86" fill="#d62d20" stroke="#8f1b12" stroke-width="3" stroke-linejoin="round"/>
+          <rect x="45" y="30" width="10" height="32" rx="4" fill="#fff"/><circle cx="50" cy="73" r="6.5" fill="#fff"/></svg>
+        <div><div class="td-risk-title">${risky.length === 1 ? '1 driver would break a limit' : `${risky.length} drivers would break a limit`}</div>
+          <div class="muted">Over ${lim.max_7day_hours || 60}h in 7 days, or 7 days in a row. Fix it before they go out — each one shows how.</div></div>
+        <button class="primary" onClick=${openLive}>Fix it on the Live schedule ${Icon('arrow', 16)}</button>
+      </div>
+      ${risky.map((x, i) => html`<details class="td-risk-one" open=${i === 0}>
+        <summary><b>${x.d.name}</b> — would go ${x.what}
+          <span class="td-risk-days">${x.hot.map((iso) => html`<span class=${'td-open' + (iso === today ? ' now' : '')}>${dayName(iso)}</span>`)}</span></summary>
+        <div class="td-risk-body" dangerouslySetInnerHTML=${{ __html: riskCardHtml(x.d, x.risk, null,
+          '✓ = already worked. On the Live schedule these days shake — click one to change it.') }} />
+      </details>`)}
+    </div>` : ''}
 
     ${weekOpen.length ? html`<div class="card td-alert">
       <b>Open slots still to fill:</b>
@@ -149,16 +182,24 @@ export function Today({ buildCard }) {
     </div>` : ''}
 
     ${day.open ? html`<div class="card">
+      <h2>${inWeek ? 'Backups today' : `Backups ${day.day}`} <span class=${'muted td-count' + (openB ? ' lv-warnc' : '')}>${nBk} of ${day.backup}</span></h2>
+      ${!nBk ? html`<p class="muted" style="margin:0">Nobody is on backup${inWeek ? ' today' : ''}.</p>` : html`<div class="td-bkrow">
+        ${waveKeys.filter((w) => (backups[w] || []).length).map((w) => html`<div class="td-bkwave">
+          <span class="td-bkhead" style=${`background:${waveBg(w)}`}>${w}</span>
+          ${backups[w].map((n) => html`<span class="td-pill">${n}</span>`)}</div>`)}</div>`}
+    </div>` : ''}
+
+    ${day.open ? html`<div class="card">
       <h2>${inWeek ? 'On the road today' : `On the road ${day.day}`}</h2>
       <div class="td-waves">
         ${waveKeys.map((w) => {
           const list = waves[w] || [], want = (day.waves || {})[w] || 0;
+          if (!list.length && !want) return '';
           return html`<div class="td-wave">
             <div class="td-wavehead" style=${`background:${waveBg(w)}`}><b>${w}</b>
               <span class=${list.length < want ? 'lv-bad' : ''}>${list.length}/${want}</span></div>
             <ul>${list.map((p) => html`<li>${p.name}${p.trainee ? html` <span class="chip trainer-chip">trainee</span>` : ''}</li>`)}
-              ${(backups[w] || []).map((n) => html`<li class="td-bk">${n} <span class="muted">· backup</span></li>`)}
-              ${!list.length && !(backups[w] || []).length ? html`<li class="muted">—</li>` : ''}</ul>
+              ${!list.length ? html`<li class="muted">—</li>` : ''}</ul>
           </div>`;
         })}
       </div>
@@ -177,10 +218,13 @@ export function Today({ buildCard }) {
     <div class="td-cols">
       <div class="card">
         <h2>Watch list</h2>
-        <p class="hint">Drivers close to a limit this week: ${sm.limits?.max_7day_hours || 60}h in 7 days, days in a row, a 6-day week, overtime.</p>
+        <p class="hint">Close to a limit this week: ${sm.limits?.max_7day_hours || 60}h in 7 days, days in a row, a 6-day week.
+          Red = at or over it. Anyone who would break a limit is in the red box at the top.</p>
         ${!watch.length ? html`<p class="muted">Nobody is close to a limit.</p>` : html`<ul class="td-watch">
           ${watch.map((w) => html`<li class=${'lvl' + w.lvl}><b>${w.name}</b>
             <span>${w.why.join(' · ')}${w.last7 != null ? html` <span class="muted">· last 7 days ${w.last7}h</span>` : ''}</span></li>`)}</ul>`}
+        ${ot.length ? html`<details class="td-ot"><summary>${ot.length} more in overtime only (over ${sm.limits?.weekly_hours_cap || 40}h this week)</summary>
+          <div class="td-otlist">${ot.map((o) => html`<span class="td-pill">${o.name} · ${o.wk}h</span>`)}</div></details>` : ''}
       </div>
       <div class="card">
         <h2>Latest changes</h2>
