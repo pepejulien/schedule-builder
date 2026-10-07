@@ -27,7 +27,6 @@ cfg = json.load(open(os.path.join(HERE, 'fixtures', 'Week-40-config.json'), enco
 for k in ('extra_worked_days', 'reduced_days', 'backup_fallback', 'driver_tiers', 'driver_rates', 'backup_eligible_extra', 'exclude', 'backup_pct'):
     cfg.pop(k, None)
 tmp = tempfile.mkdtemp()
-first = next(c.value for c in ws[3] if c.value and re.match(r'\w{3}, \d{2}/\w{3}', str(c.value)))
 cfg.update(start_date='2026-10-04', avail_file=SRC, prev_week_file=None, prefs_csv=None, strict_names=False,
            out=os.path.join(tmp, 'o.xlsx'), exact_copy=True, waves={'Sun': {'10:25 AM': 1}}, training_pairs=[])
 p = os.path.join(tmp, 'c.json'); json.dump(cfg, open(p, 'w'))
