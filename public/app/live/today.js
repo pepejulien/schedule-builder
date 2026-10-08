@@ -5,9 +5,9 @@
 // latest changes, and a small card for next week's build.
 import { html } from '../preact-setup.js';
 import { useState, useEffect } from 'preact/hooks';
-import { setState } from '../store.js';
+import { setState, toast } from '../store.js';
 import { Banner, Spinner, Icon } from '../ui.js';
-import { liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveConfirms } from '../api.js';
+import { liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveConfirms, watchLiveLate, saveLiveLate } from '../api.js';
 import { MissingCheck } from './missing.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 import { sundayOf, todayISO, cellInfo, WAVE_COLORS, SHIFT_COLORS, prevISO, actualList, mergeActual,
@@ -52,11 +52,42 @@ function watchList(sm, endISO) {
   return { near: out.sort((a, b) => b.lvl - a.lvl || a.name.localeCompare(b.name)), ot: ot.sort((a, b) => b.wk - a.wk) };
 }
 
+// Late arrivals today (2026-10-08): the same marks as the Live board's shift menu — each goes on
+// the next dispatch report's Late section (notify-only for discipline).
+function LateCard({ week, today, people, lates }) {
+  const [who, setWho] = useState('');
+  const [t, setT] = useState('');
+  const [busy, setBusy] = useState(false);
+  const mine = Object.values(lates || {}).filter((x) => x.day === today).sort((a, b) => a.name.localeCompare(b.name));
+  const fmt = (v) => { const m = /^(\d{1,2}):(\d{2})$/.exec(v || ''); if (!m) return v; const h = +m[1]; return `${(h % 12) || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`; };
+  const save = async (name, time) => {
+    setBusy(true);
+    try { await saveLiveLate(week, name, today, time); toast(time ? `${name} marked late (${time}) — it goes on the dispatch report` : `Late arrival removed for ${name}`); setWho(''); setT(''); }
+    catch (e) { toast('Could not save: ' + (e.message || e), 'err'); }
+    finally { setBusy(false); }
+  };
+  return html`<div class="card">
+    <h2>Late arrivals today <span class="muted td-count">${mine.length}</span></h2>
+    ${mine.length ? html`<div class="td-bkrow" style="margin-bottom:8px">${mine.map((x) => html`<span class="td-pill">⏰ ${x.name} · ${x.time}
+      <button class="link" disabled=${busy} title="Remove" onClick=${() => save(x.name, '')}>✕</button></span>`)}</div>` : ''}
+    <div class="row" style="gap:6px;flex-wrap:wrap">
+      <select value=${who} onChange=${(e) => setWho(e.target.value)}>
+        <option value="">Who was late?</option>
+        ${people.filter((n) => !mine.some((x) => x.name === n)).map((n) => html`<option value=${n}>${n}</option>`)}
+      </select>
+      <input type="time" value=${t} onInput=${(e) => setT(e.target.value)} />
+      <button class="small" disabled=${busy || !who || !t} onClick=${() => save(who, fmt(t))}>Mark late</button>
+    </div>
+    <p class="hint" style="margin:6px 0 0">It goes on the next dispatch report's Late section by itself. Taking it back before that report posts = it never counts.</p>
+  </div>`;
+}
+
 export function Today({ buildCard }) {
   const [week, setWeek] = useState(undefined);   // the published week to show (meta) | null
   const [smRaw, setSm] = useState(null);         // its saved summary
   const [act, setAct] = useState({});            // Route Tracker's actual hours {cur, prev}
   const [confirms, setConfirms] = useState({});  // "not in Route Tracker" answers
+  const [lates, setLates] = useState({});          // late arrivals {"<ISO day>|<name>": {time, by}}
   const [log, setLog] = useState([]);
   const [rev, setRev] = useState(null);
   const [err, setErr] = useState('');
@@ -83,7 +114,8 @@ export function Today({ buildCard }) {
     const un1 = watchActualHours(week.week, (d) => setAct((a) => ({ ...a, cur: d })));
     const un2 = watchActualHours(prevISO(week.week), (d) => setAct((a) => ({ ...a, prev: d })));
     const un3 = watchLiveConfirms(week.week, (c) => setConfirms(c || {}));
-    return () => { un1(); un2(); un3(); };
+    const un4 = watchLiveLate(week.week, (l) => setLates(l || {}));
+    return () => { un1(); un2(); un3(); un4(); };
   }, [week && week.week]);
   const actList = actualList(act.prev, act.cur);
   const missing = smRaw ? missingDays(smRaw, actList, confirms) : [];
@@ -197,6 +229,10 @@ export function Today({ buildCard }) {
           <span class="td-bkhead" style=${`background:${waveBg(w)}`}>${w}</span>
           ${backups[w].map((n) => html`<span class="td-pill">${n}</span>`)}</div>`)}</div>`}
     </div>` : ''}
+
+    ${inWeek && day.open ? html`<${LateCard} week=${week.week} today=${today} lates=${lates}
+      people=${[...new Set([...Object.values(waves).flat().map((p) => p.name), ...Object.values(backups).flat(),
+        ...trainers.map((x) => x.name)])].sort()} />` : ''}
 
     ${day.open ? html`<div class="card">
       <h2>${inWeek ? 'On the road today' : `On the road ${day.day}`}</h2>
