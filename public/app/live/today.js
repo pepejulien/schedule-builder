@@ -39,7 +39,7 @@ function watchList(sm, endISO) {
     const m7 = d.max7 ?? 0;
     if (m7 > max7) { why.push(`${m7}h in 7 days — over ${max7}h`); lvl = 3; }
     else if (m7 >= max7 - 6) { why.push(`${m7}h in 7 days (max ${max7})`); lvl = Math.max(lvl, 2); }
-    if ((d.max_days7 ?? 0) > maxd7) { why.push(`${d.max_days7} days worked in 7 — over ${maxd7}`); lvl = 3; }
+    if ((d.max_days7 ?? 0) > maxd7) { why.push(`${d.max_days7} days worked in 7 (usual max ${maxd7})`); lvl = Math.max(lvl, 2); }
     if (d.streak > maxc) { why.push(`${d.streak} days in a row`); lvl = Math.max(lvl, 3); }
     else if (d.streak === maxc) { why.push(`${d.streak} days in a row`); lvl = Math.max(lvl, 1); }
     const nd = (d.worked_dates || []).length;

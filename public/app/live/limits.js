@@ -145,12 +145,14 @@ export function overRisk(d, days, today, lim) {
 }
 
 // 6 worked days in any 7 (Jose 2026-10-07; this used to be "7 days in a row", which it covers):
-// locked by the rules, so on a schedule made since then it only shows when a real shift nobody
-// scheduled (a Route Tracker clock-out) or last week's extra days push someone over. Worked days =
+// the builder locks it; the Live board lets a 6th day through after a pop-up, and those days
+// then shake until dispatch fixes it. Worked days =
 // any day with hours or on the worked list (last week's tail included). Flags 7-day stretches
 // with more than lim.max_days_in_7 (5) worked days that still reach today or later; their
-// upcoming days shake, and each fix is a day off that brings every such stretch back to the max
-// (two days off if one isn't enough). runs = the worked days of each bad stretch. null = fine.
+// upcoming days shake. Fixes: a day off that brings every such stretch back to the max (two days
+// off if one isn't enough) -- or, keeping the 6 days, ways to stay under the 7-day hours max
+// (Jose 2026-10-07): make a route day a backup, or keep every route day ahead under N hours
+// (clock-out time per day from its wave). runs = the worked days of each bad stretch. null = fine.
 export function runRisk(d, days, today, lim) {
   const maxDays = (lim && lim.max_days_in_7) || 5;
   const dh = d.day_hours || {};
@@ -178,13 +180,52 @@ export function runRisk(d, days, today, lim) {
       }
     }
   }
+  // keeping the 6 days: stay under the hours max in every 7-day stretch that still reaches today
+  const maxH = (lim && lim.max_7day_hours) || 60, bkH = (lim && lim.backup_hours) || 2;
+  const maxDay = (lim && lim.max_day_hours) || 12;
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const dayOf = (iso) => (days.find((x) => x.date === iso) || {}).day;
+  const cellOf = (iso) => String((d.cells || {})[dayOf(iso)] || '');
+  const worstH = (h) => Math.max(0, ...starts.map((s) => {
+    let t = 0;
+    for (let k = 0; k < 7; k++) t += Number(h[sh(s, k)] || 0);
+    return r2(t);
+  }));
+  const drive = hot.filter((iso) => isDrive(cellOf(iso)));
+  for (const iso of drive) fixes.push({ kind: 'backup', dates: [iso], worst: worstH({ ...dh, [iso]: bkH }) });
+  let hoursOk = false;            // even max-length days stay under the hours max
+  if (drive.length) {
+    let cap = Infinity;
+    for (const s of starts) {
+      let fixed = 0, n = 0;
+      for (let k = 0; k < 7; k++) {
+        const iso = sh(s, k);
+        if (drive.includes(iso)) n++;
+        else fixed += Number(dh[iso] || 0);
+      }
+      if (n) cap = Math.min(cap, (maxH - fixed) / n);
+    }
+    cap = Math.floor(cap * 2) / 2;               // whole or half hours, rounded down
+    hoursOk = cap >= maxDay;
+    if (cap >= 1 && cap < maxDay) {
+      const capped = { ...dh };
+      drive.forEach((iso) => { capped[iso] = Math.min(Number(dh[iso] || 0) || cap, cap); });
+      const outs = drive.map((iso) => {
+        const m = cellOf(iso).match(/^(\d{1,2}):(\d{2}) ([AP]M)/);
+        if (!m) return { date: iso, by: null };
+        const mins = ((+m[1] % 12) + (m[3] === 'PM' ? 12 : 0)) * 60 + +m[2];
+        return { date: iso, by: clockOutBy(mins, cap).by };
+      });
+      fixes.push({ kind: 'cap', dates: drive, hours: cap, outs, worst: worstH({ ...dh, ...Object.fromEntries(drive.map((x) => [x, cap])) }) });
+    }
+  }
   const top = bad.reduce((a, x) => (x.got.length > a.got.length ? x : a));
   const breakdown = [];
   for (let k = 0; k < 7; k++) {
     const iso = sh(top.start, k);
     if (worked.has(iso)) breakdown.push({ date: iso, done: iso < today || act.has(iso), hot: hot.includes(iso) });
   }
-  return { maxDays, maxRun: maxDays, wins: bad, runs: bad.map((x) => x.got), hot, fixes, breakdown };
+  return { maxDays, maxRun: maxDays, maxH, bkH, maxDay, hoursOk, wins: bad, runs: bad.map((x) => x.got), hot, fixes, breakdown };
 }
 
 // The card (2026-10-07): what goes over, the hours behind it, and every fix — as HTML, so the
@@ -223,13 +264,25 @@ export function riskCardHtml(d, risk, iso, foot = '✓ = already worked. Click a
   const r = risk.run;
   if (r) {
     const longest = Math.max(...r.runs.map((x) => x.length));
-    const fixLi = (f) => `<li>Take ${f.dates.map((x) => `<b>${wkd(x)}</b>`).join(' and ')} off — give that shift to someone else`
+    const hm = (m) => `${((Math.floor(m / 60) + 11) % 12) + 1}:${String(m % 60).padStart(2, '0')} ${m >= 720 ? 'PM' : 'AM'}`;
+    const off = r.fixes.filter((f) => f.kind === 'off' || f.kind === 'off2');
+    const safe = r.fixes.filter((f) => f.kind === 'backup' || f.kind === 'cap');
+    const offLi = (f) => `<li>Take ${f.dates.map((x) => `<b>${wkd(x)}</b>`).join(' and ')} off — give that shift to someone else`
       + ' <span class="muted">(a backup counts as a day worked too)</span></li>';
+    const safeLi = (f) => (f.kind === 'backup'
+      ? `<li>Make <b>${wkd(f.dates[0])}</b> a backup (${r.bkH || 2}h) instead of a route <span class="muted">→ most in 7 days ${f.worst}h</span></li>`
+      : `<li>Keep every route day to <b>${f.hours}h or less</b> — ${f.outs.map((o) => `${short(o.date).replace(/ .*/, '')}${o.by != null ? ` clock out by <b>${hm(o.by)}</b>` : ''}`).join(', ')}`
+        + ` <span class="muted">→ most in 7 days ${f.worst}h</span></li>`);
     const wins = (r.wins || []).filter((w, i, a) => a.findIndex((v) => v.got.join() === w.got.join()) === i);
-    parts.push(`<div class="ov-card"><div class="ov-title">${esc(d.name)} would work ${longest} days in 7 (max ${r.maxDays})</div>`
+    parts.push(`<div class="ov-card"><div class="ov-title">${esc(d.name)} works ${longest} days in 7 (usual max ${r.maxDays})</div>`
       + wins.slice(0, 3).map((w) => `<div class="ov-win">${mdy(w.start)} → ${mdy(w.end)}: <b>${w.got.length} days</b></div>`).join('')
       + '<div class="ov-sub">The worst 7 days — the days worked:</div>' + chips(r.breakdown, false)
-      + tail(r, fixLi, `Taking ${iso ? wkd(iso) : 'that day'} off alone isn't enough — use one of the days above.`) + '</div>');
+      + (!r.hot.length ? '<div class="ov-note">These days are already worked — nothing left to change this week.</div>'
+        : (off.length ? `<div class="ov-sub">Back to ${r.maxDays} days — any one of these:</div><ul class="ov-fix">${off.map(offLi).join('')}</ul>` : '')
+          + (safe.length ? `<div class="ov-sub">${off.length ? 'Or keep' : 'Keep'} the ${longest} days under ${r.maxH || 60}h in 7 days — any one of these:</div><ul class="ov-fix">${safe.map(safeLi).join('')}</ul>` : '')
+          + (r.hoursOk ? `<div class="ov-note">Hours are safe: even ${r.maxDay}-hour days keep ${first} under ${r.maxH || 60}h in 7 days.</div>` : '')
+          + (!off.length && !safe.length ? '<div class="ov-note">No one or two changes fix it — this week needs a bigger rework.</div>' : ''))
+      + '</div>');
   }
   return parts.join('<hr class="ov-hr">') + (foot ? `<div class="ov-foot">${esc(foot)}</div>` : '');
 }

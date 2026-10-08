@@ -127,8 +127,8 @@ ok(sc['status'] == 'blocked' and any('in a row' in r for r in sc['reasons']),
 print('6-days, overtime and on-the-clock hours (2026-10-06)')
 ok(not any(e.startswith('HOURS') for e in built['check']['errors']), 'the built week breaks no hour limit')
 ok(all('max7' in d and 'day_hours' in d for d in built['drivers']), 'hours per day + max 7-day in the report')
-# 6 worked days in any 7 (Jose 2026-10-07): locked everywhere -- the Live board's
-# old 6-day pop-up is gone; a 6th day in a row or a 6th day this week is blocked
+# 6 worked days in any 7 (Jose 2026-10-07): locked by the builder; on the Live board
+# a 6th day in 7 goes through after the pop-up (and is reported as an approved override)
 runner.use_slot('live3')
 r3 = J(runner.load_state, {'state': st['state']})
 days_open = [x['day'] for x in r3['days'] if x['open']]
@@ -137,21 +137,28 @@ for d in r3['drivers']:
     for day in days_open:
         c = J(runner.candidates, {'day': day, 'role': 'backup'})
         me = next(x for x in c['candidates'] if x['name'] == d['name'])
-        if any('days in 7' in l for l in me['reasons']):
+        if me['status'] == 'confirm' and any('days in 7' in l for l in me['limits']):
             pick = (d['name'], day, me)
             break
     if pick:
         break
-ok(pick is not None, 'some driver would hit 6 days in 7')
-ok(not any(x['status'] == 'confirm' and any(l.startswith('6-day') for l in x['limits'])
-           for day in days_open for x in J(runner.candidates, {'day': day, 'role': 'backup'})['candidates']),
-   'no 6-day is offered as a pop-up any more')
+ok(pick is not None, 'the live board offers a 6th day in 7 as a pop-up (status confirm)')
 if pick:
     nm, day, me = pick
-    ok(me['status'] == 'blocked', f'{nm} {day}: 6 days in 7 is locked')
-    e = J(runner.apply_add, {'name': nm, 'day': day, 'role': 'backup', 'confirm_limits': True})
-    ok(not e.get('ok') and e.get('kind') == 'compliance', 'refused even with the pop-up OK')
-# last week Thu-Sat + this week Sun-Tue (not 6 in a row): the 6th day in those 7 is locked
+    ok(sum(l.startswith('6-day') for l in me['limits']) == 1, f"one 6-day line in the pop-up: {me['limits']}")
+    e = J(runner.apply_add, {'name': nm, 'day': day, 'role': 'backup'})
+    ok(e.get('kind') == 'needs_limits' and e.get('limits'), f'{nm} {day}: refused without the pop-up OK')
+    a = J(runner.apply_add, {'name': nm, 'day': day, 'role': 'backup', 'confirm_limits': True})
+    ok(a['ok'], 'allowed with the pop-up OK')
+    ok(any("OK'D" in x for x in a['edits']), "the change log says it was OK'd")
+    ok(not any(nm in x for x in a['check']['errors']), "no rule error for the OK'd 6 days in 7")
+    ok(any(nm in x and x.startswith('DAYS7') for x in a['check']['overridden']), 'listed as an approved override')
+    ok(next(x for x in a['drivers'] if x['name'] == nm)['max_days7'] == 6, 'the report shows 6 in 7')
+    runner.use_slot('build')
+    b = J(runner.candidates, {'day': day, 'role': 'backup'})
+    bm = next(x for x in b['candidates'] if x['name'] == nm)
+    ok(bm['status'] == 'blocked', 'the builder still locks 6 days in 7')
+# last week Wed-Sat + this week Mon-Tue (not 6 in a row): the 6th day in those 7 needs the pop-up
 runner.use_slot('live3b')
 dates = {x['day']: x['date'] for x in r3['days']}
 sun = datetime.date.fromisoformat(dates['Sun'])
@@ -164,8 +171,8 @@ ok(me['status'] != 'blocked', f"{who['name']}: Wed-Sat last week + Mon is 5 in 7
 J(runner.apply_add, {'name': who['name'], 'day': 'Mon', 'role': 'backup', 'confirm_unavailable': True, 'confirm_limits': True})
 c = J(runner.candidates, {'day': 'Tue', 'role': 'backup'})
 me = next(x for x in c['candidates'] if x['name'] == who['name'])
-ok(me['status'] == 'blocked' and any('days in 7' in l for l in me['reasons']),
-   f"...and Tue would be 6 in 7 - locked ({'; '.join(me['reasons'])})")
+ok(me['status'] == 'confirm' and any('days in 7' in l for l in me['limits']),
+   f"...and Tue would be 6 in 7 - a pop-up ({'; '.join(me['reasons'])})")
 # 60h in 7 days, counting last week's real hours
 runner.use_slot('live4')
 s0 = runner._dec(json.loads(st['state'])['res'])['DATEALL']['Sun']

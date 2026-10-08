@@ -142,9 +142,9 @@ export function ConfirmOverride({ req, onCancel, onConfirm }) {
   </div>`;
 }
 
-// The Live board's pop-up (Jose 2026-10-06): overtime is allowed there, but only
-// after this. 12h in a day, 60h in any 7 days and 6 worked days in any 7 (Jose
-// 2026-10-07 -- the 6-day used to come here too) never get here — they're locked.
+// The Live board's pop-up (Jose 2026-10-06): a 6-day (a 6th worked day in any 7,
+// last week counting -- Jose 2026-10-07) and overtime are allowed there, but only
+// after this. 12h in a day, 60h in any 7 days and 7 days in 7 never get here.
 export function LimitConfirm({ req, onCancel, onConfirm }) {
   const first = req.name.trim().split(/\s+/)[0];
   const six = req.limits.some((l) => /^6-day/.test(l));
@@ -154,8 +154,11 @@ export function LimitConfirm({ req, onCancel, onConfirm }) {
       <h3>⚠ ${six ? `${req.name} will be scheduled for a 6-day` : `${req.name} goes over the usual limits`}</h3>
       <p>Giving ${first} ${what} on <b>${req.day}</b> means:</p>
       <ul>${req.limits.map((l) => html`<li><b>${l.replace(/^(6-day|overtime): /, '')}</b></li>`)}</ul>
+      ${six ? html`<p class="hint">${first}'s days will <b>shake on the Live board</b> (and alarm on the Vehicle Assigner) until
+        it's fixed — the alarm shows how: a day off, a day made a backup, or every route day kept under a set
+        number of hours (with clock-out times), so ${first} stays under 60h in 7 days.</p>` : ''}
       <p class="hint">Still locked, no matter what: more than 12h on the clock in a day, more than 60h in any
-        7 days, and 6 worked days in any 7 (last week counts). This will be logged as approved.</p>
+        7 days, and 7 days worked in 7. This will be logged as approved.</p>
       <div class="row" style="margin-top:14px">
         <button onClick=${onCancel}>Cancel</button>
         <button class="danger" onClick=${onConfirm}>${six ? `Yes — schedule ${first} for a 6-day` : `Yes — schedule ${first}`}</button>
@@ -262,7 +265,7 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
   const GROUPS = [
     ['ok', 'Safe — no rule would break'],
     ['warn', 'Allowed, but will be flagged'],
-    ['confirm', 'Overtime — allowed after a pop-up'],
+    ['confirm', '6 days in 7 / overtime — allowed after a pop-up'],
     ['unavail', 'Day off — needs a confirmed override'],
     ['blocked', 'Locked — compliance rule'],
   ];

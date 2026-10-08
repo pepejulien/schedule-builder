@@ -726,13 +726,19 @@ def _assess(res, dr, day, role):
             else:
                 blocks.append(f"would work {rl} days in a row (max "
                               f"{res.MAXC + 1 if live else res.MAXC})")
-        # never 6 worked days in any 7 in a row, last week included (Jose 2026-10-07:
-        # a hard rule everywhere -- no pop-up on the Live board either)
+        # never 6 worked days in any 7 in a row, last week included (Jose 2026-10-07).
+        # Builder: locked. Live board: the 6th day goes through after the pop-up (Jose
+        # 2026-10-07, same day: "I want to be allowed to bypass this rule manually") and
+        # that driver's days then shake until it's fixed; 7 days in 7 stays locked.
         s7 = _all_worked(res, dr) | {res.DATEALL[day]}
         n7, a7 = days7_worst(s7, [res.DATEALL[day]])
         if n7 > _max7d(res):
-            blocks.append(f"would work {n7} days in 7 ({a7:%a %m/%d}-{a7 + 6 * ONE:%a %m/%d}; "
-                          f"max {_max7d(res)})")
+            span = f"{a7:%a %m/%d}-{a7 + 6 * ONE:%a %m/%d}"
+            if live and n7 == _max7d(res) + 1:
+                limits.append(f"6-day: would work {n7} days in 7 ({span}; usual max {_max7d(res)})")
+            else:
+                blocks.append(f"would work {n7} days in 7 ({span}; max "
+                              f"{_max7d(res) + 1 if live else _max7d(res)})")
         blocks += _hour_limits(res, dr, day, role)
 
     # total worked-days caps
@@ -783,6 +789,9 @@ def _assess(res, dr, day, role):
     if day in dr.get("soft", []):
         notes.append("usually has this day off")
 
+    # one 6-day line is enough: 6 in a row / a 6th day this week are 6 in 7 too
+    if any(x.startswith("6-day: would work") and " days in 7 " in x for x in limits):
+        limits = [x for x in limits if not x.startswith("6-day:") or " days in 7 " in x]
     status = ("blocked" if blocks else "unavail" if unav
               else "confirm" if limits else "warn" if warns else "ok")
     return status, blocks + unav + limits + warns, notes, (limits if not blocks else [])
@@ -839,6 +848,7 @@ _OVR_RES = (
     (re.compile(r"^BACKUP<2PRIMARY: (.+)$"), "policy"),
     (re.compile(r"^BACKUP-ONLY: (.+)$"), "policy"),
     (re.compile(r"^CONSEC>\d+: (.+) run=(\d+)$"), "limits"),
+    (re.compile(r"^DAYS7>\d+: (.+?) (\d+) days in 7"), "limits"),
     (re.compile(r"^OT: (.+) road days over"), "limits"),
     (re.compile(r"^DAYCAP: (.+) over"), "limits"),
     (re.compile(r"^TOTDAYS: (.+) over"), "limits"),
@@ -870,7 +880,8 @@ def _verify(res):
             elif kind == "limits":
                 # an OK'd 6-day; 7 in a row is never OK
                 hit = nm in _STATE.get("ovr_limits", set()) and not (
-                    e.startswith("CONSEC") and int(m.group(2)) > res.MAXC + 1)
+                    e.startswith("CONSEC") and int(m.group(2)) > res.MAXC + 1) and not (
+                    e.startswith("DAYS7") and int(m.group(2)) > _max7d(res) + 1)
             else:
                 hit = nm in _STATE["ovr_policy"]
             break
