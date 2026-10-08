@@ -213,6 +213,11 @@ export const saveLiveNote = (weekISO, name, day, text) => window.JAJB.saveSchedu
 const canConfirm = () => onFirebase() && typeof window.JAJB.watchScheduleConfirms === 'function';
 export const watchLiveConfirms = (weekISO, cb) => (canConfirm() ? window.JAJB.watchScheduleConfirms(weekISO, cb) : (cb({}), () => {}));
 export const saveLiveConfirm = (weekISO, name, day, answer) => window.JAJB.saveScheduleConfirm(weekISO, name, day, answer);
+// attendance records (2026-10-08): one per driver per day — [{id, date, week, name, kind: ncns|callout,
+// origin: schedule|routes|dispatch, by, reportId}] (null reportId = not on a dispatch report yet).
+// Written only by the cloud; dispatch's own NCNS / call-offs get marked on the Live board.
+export const watchLiveAttendance = (weekISO, cb) => (onFirebase() && typeof window.JAJB.watchAttendance === 'function'
+  ? window.JAJB.watchAttendance(weekISO, (l) => cb((l || []).filter((r) => r.week === weekISO))) : (cb([]), () => {}));
 export function confirmsOnce(weekISO, ms = 6000) {
   if (!canConfirm()) return Promise.resolve({});
   return new Promise((resolve) => {

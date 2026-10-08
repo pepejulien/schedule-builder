@@ -13,7 +13,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest } from '../solver-client.js';
-import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms } from '../api.js';
+import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, watchLiveAttendance } from '../api.js';
 import { MissingCheck } from './missing.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
@@ -28,6 +28,8 @@ import {
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+// the discipline engine's driver key: first|last, letters only (attendance records use it)
+const nameKey = (s) => { const t = String(s || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean); return t.length ? t[0] + '|' + t[t.length - 1] : ''; };
 const MUT = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'set_role', 'set_duty', 'clear_duty']);
 const KIND = { apply: 'edit', apply_add: 'extra', apply_wave: 'wave', undo: 'undo', apply_mark: 'mark', clear_mark: 'mark',
   set_role: 'edit', set_duty: 'duty', clear_duty: 'duty' };
@@ -502,6 +504,8 @@ function Board() {
   const [notes, setNotes] = useState({});           // comments on shifts: {"<ISO day>|<name>": {text, by, at}}
   const [confirms, setConfirms] = useState({});     // "not in Route Tracker" answers
   const [actDocs, setActDocs] = useState({});       // Route Tracker's actual_hours docs {cur, prev}
+  const [att, setAtt] = useState([]);               // attendance records of the week (call-offs / no-shows)
+  const autoTried = useRef(new Set());              // dispatch's records already marked (or tried) here
 
   // async work reads the newest values through refs
   const R = useRef({});
@@ -545,7 +549,8 @@ function Board() {
     openWeek(sel);
     const un1 = watchLiveWeek(sel, (m) => setMetaLive(m));
     const un2 = watchLiveLog(sel, (l) => setLog(l));
-    setNotes({}); setConfirms({}); setActDocs({});
+    setNotes({}); setConfirms({}); setActDocs({}); setAtt([]);
+    const unAtt = watchLiveAttendance(sel, (l) => setAtt(l || []));
     const unNotes = watchLiveNotes(sel, (n) => setNotes(n || {}));
     const unConf = watchLiveConfirms(sel, (c) => {
       setConfirms(c || {});
@@ -569,8 +574,33 @@ function Board() {
     const un4 = watchActualHours(prevISO(sel), onActual('prev'));
     const unA = watchActualHours(sel, (doc) => setActDocs((x) => ({ ...x, cur: doc })));
     const unB = watchActualHours(prevISO(sel), (doc) => setActDocs((x) => ({ ...x, prev: doc })));
-    return () => { unNotes(); unConf(); unA(); unB(); un1(); un2(); un3(); un4(); };
+    return () => { unNotes(); unConf(); unAtt(); unA(); unB(); un1(); un2(); un3(); un4(); };
   }, [sel]);
+
+  // A No-call-no-show / call-off dispatch put on the report (2026-10-08): mark that day here too —
+  // the same "isn't coming" mark, so the slot shows open and the hours drop. One at a time, once.
+  useEffect(() => {
+    if (!data || eng.status !== 'ready' || busy || saving.current) return;
+    const s = data.summary;
+    for (const r of att) {
+      if (r.origin !== 'dispatch' || autoTried.current.has(r.id)) continue;
+      const di = (s.days || []).find((x) => x.date === r.date);
+      const drv = (s.drivers || []).find((x) => nameKey(x.name) === nameKey(r.name));
+      if (!di || !drv) { autoTried.current.add(r.id); continue; }
+      const cellTxt = String((drv.cells || {})[di.day] || '');
+      const marked = (s.marks || []).some((m) => m.name === drv.name && m.day === di.day);
+      if (marked || !cellTxt || /^(Called out|No-show|Day off|Unavailable|Dispatch)$/.test(cellTxt) || /TRAIN/.test(cellTxt)) {
+        autoTried.current.add(r.id); continue;
+      }
+      autoTried.current.add(r.id);
+      run('apply_mark', { name: drv.name, day: di.day, kind: r.kind === 'ncns' ? 'noshow' : 'callout',
+        note: 'from the dispatch report' + (r.by ? ' (' + r.by + ')' : '') }).then((m) => {
+        if (m && !m.ok && m.error && m.error.kind !== 'busy') toast(`${drv.name} (${di.day}): ${m.error.message}`, 'warn');
+        if (m && !m.ok && m.error && m.error.kind === 'busy') autoTried.current.delete(r.id);
+      });
+      return;
+    }
+  }, [data && data.rev, eng.status, busy, att]);
 
   // someone else saved this week: pull it in
   useEffect(() => {
@@ -735,6 +765,12 @@ function Board() {
       const m = await run('apply', { day: p.day, role: p.role, from_name: p.fromName });
       if (!m.ok) toast(m.error.message, 'err');
     } else if (what === 'clear') {
+      // already on a dispatch report (2026-10-08): clearing here doesn't take it off their record
+      const di = (R.current.data.summary.days || []).find((x) => x.day === p.day);
+      const rec = di && att.find((r) => r.date === di.date && nameKey(r.name) === nameKey(p.name));
+      if (rec && rec.reportId && !window.confirm(`${p.name}'s ${rec.kind === 'ncns' ? 'no-call-no-show' : 'call-off'} on ${p.day} `
+        + 'already went out with the dispatch report, so it stays on their discipline record. Only the Discipline app '
+        + '(or Jose on the Driver Dashboard) can take it off.\n\nOK = clear the mark on the schedule anyway.')) return;
       const m = await run('clear_mark', p);
       if (!m.ok) toast(m.error.message, 'err');
     }
