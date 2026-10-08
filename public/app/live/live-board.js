@@ -13,7 +13,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest } from '../solver-client.js';
-import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, watchLiveAttendance } from '../api.js';
+import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, watchLiveAttendance, watchLiveLate, saveLiveLate } from '../api.js';
 import { MissingCheck } from './missing.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
@@ -235,8 +235,32 @@ function NoteBox({ note, busy, onSave }) {
   </div>`;
 }
 
+// Late arrival (2026-10-08): the time they got in. It goes on the dispatch report's Late section
+// (notify-only for discipline); once a report carried it, removing it here doesn't take it off.
+function LateBox({ late, rec, busy, onSave }) {
+  const [t, setT] = useState(late ? late.time : '');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setT(late ? late.time : ''); }, [late && late.time]);
+  const save = async (v) => { setSaving(true); try { await onSave(v); } finally { setSaving(false); } };
+  const sent = rec && rec.kind === 'late' && rec.reportId;
+  return html`<div class="dm-note">
+    ${late ? html`<div class="dm-note-old">⏰ Late — got in at <b>${late.time}</b> <span class="muted">— ${late.by || '—'}${sent ? ' · on the dispatch report' : ' · goes on the next dispatch report'}</span></div>` : ''}
+    <div class="row">
+      <input type="time" value=${t} onInput=${(e) => setT(e.target.value)} />
+      <button class="small" disabled=${busy || saving || !t || t === (late ? late.time : '')} onClick=${() => save(fmtTime(t))}>
+        ${saving ? 'Saving…' : late ? 'Change time' : 'Mark late'}</button>
+      ${late ? html`<button class="link" disabled=${saving} onClick=${() => {
+        if (sent && !window.confirm('This late arrival already went out with the dispatch report — removing it here won\u2019t take it off their record (that\u2019s the Discipline app). Remove it from the schedule anyway?')) return;
+        save('');
+      }}>Remove</button>` : ''}
+    </div>
+  </div>`;
+}
+// "13:05" → "1:05 PM"; anything else as typed
+const fmtTime = (v) => { const m = /^(\d{1,2}):(\d{2})$/.exec(v || ''); if (!m) return v; const h = +m[1]; return `${(h % 12) || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`; };
+
 // What one driver is doing on one day, and everything that can be done about it.
-function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk, note, onSaveNote }) {
+function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk, note, onSaveNote, late, rec, onSaveLate }) {
   const v = (d.cells || {})[day] || '';
   const c = cellInfo(v);
   const kind = c.kind;
@@ -281,6 +305,9 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
       ${!info.open ? html`<div class="dm-info">The station is closed this day.</div>` : ''}
       <div class="dm-sec">Comment</div>
       <${NoteBox} note=${note} busy=${busy} onSave=${onSaveNote} />
+      ${(role || kind === 'trainer' || kind === 'trainee' || late) && info.date <= todayISO() ? html`
+        <div class="dm-sec">Late arrival</div>
+        <${LateBox} late=${late} rec=${rec} busy=${busy} onSave=${onSaveLate} />` : ''}
 
       ${role ? html`
         <div class="dm-sec">Change this shift</div>
@@ -505,6 +532,7 @@ function Board() {
   const [confirms, setConfirms] = useState({});     // "not in Route Tracker" answers
   const [actDocs, setActDocs] = useState({});       // Route Tracker's actual_hours docs {cur, prev}
   const [att, setAtt] = useState([]);               // attendance records of the week (call-offs / no-shows)
+  const [lates, setLates] = useState({});           // late arrivals: {"<ISO day>|<name>": {time, by, at}}
   const autoTried = useRef(new Set());              // dispatch's records already marked (or tried) here
 
   // async work reads the newest values through refs
@@ -549,8 +577,9 @@ function Board() {
     openWeek(sel);
     const un1 = watchLiveWeek(sel, (m) => setMetaLive(m));
     const un2 = watchLiveLog(sel, (l) => setLog(l));
-    setNotes({}); setConfirms({}); setActDocs({}); setAtt([]);
+    setNotes({}); setConfirms({}); setActDocs({}); setAtt([]); setLates({});
     const unAtt = watchLiveAttendance(sel, (l) => setAtt(l || []));
+    const unLate = watchLiveLate(sel, (l) => setLates(l || {}));
     const unNotes = watchLiveNotes(sel, (n) => setNotes(n || {}));
     const unConf = watchLiveConfirms(sel, (c) => {
       setConfirms(c || {});
@@ -574,7 +603,7 @@ function Board() {
     const un4 = watchActualHours(prevISO(sel), onActual('prev'));
     const unA = watchActualHours(sel, (doc) => setActDocs((x) => ({ ...x, cur: doc })));
     const unB = watchActualHours(prevISO(sel), (doc) => setActDocs((x) => ({ ...x, prev: doc })));
-    return () => { unNotes(); unConf(); unAtt(); unA(); unB(); un1(); un2(); un3(); un4(); };
+    return () => { unNotes(); unConf(); unAtt(); unLate(); unA(); unB(); un1(); un2(); un3(); un4(); };
   }, [sel]);
 
   // A No-call-no-show / call-off dispatch put on the report (2026-10-08): mark that day here too —
@@ -946,12 +975,14 @@ function Board() {
                   const c = cellInfo(v);
                   const hot = risks[x.name] && risks[x.name].hot.includes(dd.date);
                   const note = notes[dd.date + '|' + x.name];
+                  const late = lates[dd.date + '|' + x.name];
                   return html`<td class=${'lv-cell k-' + c.kind + (dd.date === today ? ' today' : '') + (dd.open ? '' : ' closed') + (hot ? ' lv-over' : '')}
                     title=${hot ? undefined : (note ? `💬 ${note.text} — ${note.by || ''}\n` : '') + (c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed'))}
                     onMouseEnter=${hot ? (e) => showPop(e, x.name, dd.date) : undefined}
                     onMouseLeave=${hot ? () => setPop(null) : undefined}
                     onClick=${dd.open || note ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} />${
-                      note ? html`<span class="lv-notedot" aria-label="Has a comment">💬</span>` : ''}</td>`;
+                      note ? html`<span class="lv-notedot" aria-label="Has a comment">💬</span>` : ''}${
+                      late ? html`<span class="lv-notedot" style="right:auto;left:2px" title=${'Late — ' + late.time} aria-label="Late arrival">⏰</span>` : ''}</td>`;
                 })}
                 <td class=${hoursCls(x.clock_hours ?? x.hours)}>${x.clock_hours ?? x.hours}h</td>
                 <td class=${max7Cls(x.max7 ?? 0)}>${x.max7 ?? '—'}${x.max7 != null ? 'h' : ''}${(() => {
@@ -999,6 +1030,12 @@ function Board() {
       opt=${opts && opts.data && opts.data.name === cell.name ? (opts.data.days.find((x) => x.day === cell.day) || null) : null}
       fills=${waveFills(view, cell.day)} view=${view} risk=${risks[cell.name]}
       note=${notes[(view.days.find((x) => x.day === cell.day) || {}).date + '|' + cell.name]}
+      late=${lates[(view.days.find((x) => x.day === cell.day) || {}).date + '|' + cell.name]}
+      rec=${att.find((r) => r.date === (view.days.find((x) => x.day === cell.day) || {}).date && nameKey(r.name) === nameKey(cell.name))}
+      onSaveLate=${async (t) => {
+        try { await saveLiveLate(sel, cell.name, view.days.find((x) => x.day === cell.day).date, t); toast(t ? `Late arrival saved (${t}) — it goes on the dispatch report` : 'Late arrival removed'); }
+        catch (e) { toast('Could not save the late arrival: ' + (e.message || e), 'err'); }
+      }}
       onSaveNote=${async (t) => {
         try { await saveLiveNote(sel, cell.name, view.days.find((x) => x.day === cell.day).date, t); toast(t.trim() ? 'Comment saved' : 'Comment deleted'); }
         catch (e) { toast('Could not save the comment: ' + (e.message || e), 'err'); }

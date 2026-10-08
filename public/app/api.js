@@ -213,6 +213,10 @@ export const saveLiveNote = (weekISO, name, day, text) => window.JAJB.saveSchedu
 const canConfirm = () => onFirebase() && typeof window.JAJB.watchScheduleConfirms === 'function';
 export const watchLiveConfirms = (weekISO, cb) => (canConfirm() ? window.JAJB.watchScheduleConfirms(weekISO, cb) : (cb({}), () => {}));
 export const saveLiveConfirm = (weekISO, name, day, answer) => window.JAJB.saveScheduleConfirm(weekISO, name, day, answer);
+// late arrivals (2026-10-08): {"<ISO day>|<name>": {name, day, time, by, at}} — the dispatch report carries them
+const canLate = () => onFirebase() && typeof window.JAJB.watchScheduleLate === 'function';
+export const watchLiveLate = (weekISO, cb) => (canLate() ? window.JAJB.watchScheduleLate(weekISO, cb) : (cb({}), () => {}));
+export const saveLiveLate = (weekISO, name, day, time) => window.JAJB.saveScheduleLate(weekISO, name, day, time);
 // attendance records (2026-10-08): one per driver per day — [{id, date, week, name, kind: ncns|callout,
 // origin: schedule|routes|dispatch, by, reportId}] (null reportId = not on a dispatch report yet).
 // Written only by the cloud; dispatch's own NCNS / call-offs get marked on the Live board.
