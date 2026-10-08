@@ -14,7 +14,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest } from '../solver-client.js';
-import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, watchLiveAttendance, watchLiveLate, saveLiveLate } from '../api.js';
+import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, saveLiveConfirm, watchLiveAttendance, watchLiveLate, saveLiveLate } from '../api.js';
 import { MissingCheck } from './missing.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
@@ -614,11 +614,20 @@ function Board() {
 
   // A No-call-no-show / call-off dispatch put on the report (2026-10-08): mark that day here too —
   // the same "isn't coming" mark, so the slot shows open and the hours drop. One at a time, once.
+  // Same for a "Called off" / "No-show" answer to "what happened?" (Route Tracker or this board's
+  // own question, 2026-10-08) — before, that answer only zeroed the day's hours.
   useEffect(() => {
     if (!data || eng.status !== 'ready' || busy || saving.current) return;
     const s = data.summary;
-    for (const r of att) {
-      if (r.origin !== 'dispatch' || autoTried.current.has(r.id)) continue;
+    const want = [
+      ...att.filter((r) => r.origin === 'dispatch').map((r) => ({ id: r.id, date: r.date, name: r.name,
+        kind: r.kind === 'ncns' ? 'noshow' : 'callout', note: 'from the dispatch report' + (r.by ? ' (' + r.by + ')' : '') })),
+      ...Object.values(confirms).filter((c) => c.answer === 'callout' || c.answer === 'noshow').map((c) => ({
+        id: `confirm|${c.day}|${c.name}`, date: c.day, name: c.name, kind: c.answer,
+        note: 'answered "what happened?"' + (c.by ? ' (' + c.by + ')' : '') })),
+    ];
+    for (const r of want) {
+      if (autoTried.current.has(r.id)) continue;
       const di = (s.days || []).find((x) => x.date === r.date);
       const drv = (s.drivers || []).find((x) => nameKey(x.name) === nameKey(r.name));
       if (!di || !drv) { autoTried.current.add(r.id); continue; }
@@ -628,14 +637,13 @@ function Board() {
         autoTried.current.add(r.id); continue;
       }
       autoTried.current.add(r.id);
-      run('apply_mark', { name: drv.name, day: di.day, kind: r.kind === 'ncns' ? 'noshow' : 'callout',
-        note: 'from the dispatch report' + (r.by ? ' (' + r.by + ')' : '') }).then((m) => {
+      run('apply_mark', { name: drv.name, day: di.day, kind: r.kind, note: r.note }).then((m) => {
         if (m && !m.ok && m.error && m.error.kind !== 'busy') toast(`${drv.name} (${di.day}): ${m.error.message}`, 'warn');
         if (m && !m.ok && m.error && m.error.kind === 'busy') autoTried.current.delete(r.id);
       });
       return;
     }
-  }, [data && data.rev, eng.status, busy, att]);
+  }, [data && data.rev, eng.status, busy, att, confirms]);
 
   // someone else saved this week: pull it in
   useEffect(() => {
@@ -807,7 +815,15 @@ function Board() {
         + 'already went out with the dispatch report, so it stays on their discipline record. Only the Discipline app '
         + '(or Jose on the Driver Dashboard) can take it off.\n\nOK = clear the mark on the schedule anyway.')) return;
       const m = await run('clear_mark', p);
-      if (!m.ok) toast(m.error.message, 'err');
+      if (!m.ok) { toast(m.error.message, 'err'); return; }
+      // a "Called off" / "No-show" answer for that day would only put the mark back: take it back too
+      // (Route Tracker then asks "what happened?" again unless they get a route there)
+      const c = di && Object.values(confirms).find((x) => x.day === di.date && nameKey(x.name) === nameKey(p.name)
+        && (x.answer === 'callout' || x.answer === 'noshow'));
+      if (c) {
+        try { await saveLiveConfirm(R.current.sel, c.name, c.day, ''); }
+        catch (e) { toast('The "what happened?" answer could not be cleared: ' + (e.message || e), 'warn'); }
+      }
     }
   }
 
