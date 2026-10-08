@@ -421,6 +421,7 @@ function WeekShifts({ d, view, opts, busy, onClose, onPick }) {
 function MarkDialog({ req, busy, onClose, onSave }) {
   const [kind, setKind] = useState(req.kind);
   const [note, setNote] = useState('');
+  const [excused, setExcused] = useState(false);   // 2026-10-08: on the report, no attendance points
   return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="edit-modal card">
       <h3>${req.name} — ${req.day}</h3>
@@ -429,12 +430,15 @@ function MarkDialog({ req, busy, onClose, onSave }) {
       ${MARKS.map(([k, label, sub]) => html`<label class="row lv-radio">
         <input type="radio" name="mk" checked=${kind === k} onChange=${() => setKind(k)} />
         <span><b>${label}</b> <span class="muted">${sub}</span></span></label>`)}
+      ${kind === 'callout' ? html`<label class="row lv-radio" style="margin-left:24px">
+        <input type="checkbox" checked=${excused} onChange=${(e) => setExcused(e.target.checked)} />
+        <span><b>Excused</b> <span class="muted">Still goes on the dispatch report, with no attendance points.</span></span></label>` : ''}
       <label class="fld" style="margin-top:10px"><span>Note (optional)</span>
         <input type="text" maxlength="200" value=${note} onInput=${(e) => setNote(e.target.value)}
           placeholder="e.g. sick, family emergency" style="width:100%" /></label>
       <div class="row" style="margin-top:12px">
         <button disabled=${busy} onClick=${onClose}>Cancel</button>
-        <button class="primary" disabled=${busy} onClick=${() => onSave(kind, note)}>Save</button>
+        <button class="primary" disabled=${busy} onClick=${() => onSave(kind, note, kind === 'callout' && excused)}>Save</button>
         ${busy ? html`<span><${Spinner}/> Saving…</span>` : ''}
       </div>
     </div>
@@ -624,7 +628,7 @@ function Board() {
         kind: r.kind === 'ncns' ? 'noshow' : 'callout', note: 'from the dispatch report' + (r.by ? ' (' + r.by + ')' : '') })),
       ...Object.values(confirms).filter((c) => c.answer === 'callout' || c.answer === 'noshow').map((c) => ({
         id: `confirm|${c.day}|${c.name}`, date: c.day, name: c.name, kind: c.answer,
-        note: 'answered "what happened?"' + (c.by ? ' (' + c.by + ')' : '') })),
+        note: (c.excused ? 'excused - ' : '') + 'answered "what happened?"' + (c.by ? ' (' + c.by + ')' : '') })),
     ];
     for (const r of want) {
       if (autoTried.current.has(r.id)) continue;
@@ -1080,7 +1084,18 @@ function Board() {
       }}
       onClose=${() => setCell(null)} act=${cellAct} />` : ''}
     ${marker ? html`<${MarkDialog} req=${marker} busy=${busy} onClose=${() => setMarker(null)}
-      onSave=${async (kind, note) => { const m = await run('apply_mark', { ...marker, kind, note }); if (m.ok) setMarker(null); else toast(m.error.message, 'err'); }} />` : ''}
+      onSave=${async (kind, note, excused) => {
+        const m = await run('apply_mark', { ...marker, kind, note: excused ? ('excused' + (note ? ' - ' + note : '')) : note });
+        if (!m.ok) { toast(m.error.message, 'err'); return; }
+        setMarker(null);
+        // excused (2026-10-08): the "what happened?" answer carries it — that's what the report and
+        // Route Tracker read (an answer beats a mark), so the call-off counts no points
+        if (excused) {
+          const di = (R.current.data.summary.days || []).find((x) => x.day === marker.day);
+          if (di) try { await saveLiveConfirm(R.current.sel, marker.name, di.date, 'callout', true); }
+            catch (e) { toast('Marked, but "excused" could not be saved: ' + (e.message || e), 'warn'); }
+        }
+      }} />` : ''}
     ${mover ? html`<${SlotEditor} editor=${mover} cands=${moverCands} busy=${busy}
       onPick=${(n) => moveTo(n)} onClose=${() => setMover(null)}
       onRemove=${async () => { const m = await run('apply', { day: mover.day, role: mover.role, from_name: mover.fromName }); if (m.ok) setMover(null); }} />` : ''}

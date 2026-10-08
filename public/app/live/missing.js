@@ -19,11 +19,11 @@ export function MissingCheck({ week, missing }) {
   const open = (missing || []).filter((m) => !m.answer);
   const worked = (missing || []).filter((m) => m.answer === 'worked');
   if (!open.length && !worked.length) return '';
-  const answer = async (m, a) => {
+  const answer = async (m, a, excused) => {
     setBusy(m.date + m.name);
     try {
-      await saveLiveConfirm(week, m.name, m.date, a);
-      toast(a ? `${m.name.split(/\s+/)[0]}: ${ANSWERS[a].toLowerCase()} — saved` : 'Asking again');
+      await saveLiveConfirm(week, m.name, m.date, a, excused);
+      toast(a ? `${m.name.split(/\s+/)[0]}: ${ANSWERS[a].toLowerCase()}${excused ? ' (excused)' : ''} — saved` : 'Asking again');
     } catch (e) { toast('Could not save: ' + (e.message || e), 'err'); }
     setBusy('');
   };
@@ -36,6 +36,8 @@ export function MissingCheck({ week, missing }) {
       <div class="ms-who"><b>${m.name}</b> <span class="muted">· ${dayName(m.date)} · ${shift(m.cell)}</span></div>
       <div class="ms-btns">
         ${['callout', 'noshow', 'senthome'].map((a) => html`<button class="small" disabled=${!!busy} onClick=${() => answer(m, a)}>${ANSWERS[a]}</button>`)}
+        <button class="small" disabled=${!!busy} title="Still goes on the dispatch report, with no attendance points"
+          onClick=${() => answer(m, 'callout', true)}>Excused call-off</button>
         <button class="small ms-worked" disabled=${!!busy} onClick=${() => answer(m, 'worked')}>They worked</button>
       </div>
     </div>`)}` : ''}

@@ -212,7 +212,7 @@ export const saveLiveNote = (weekISO, name, day, text) => window.JAJB.saveSchedu
 // "not in Route Tracker - what happened?" answers: {"<ISO day>|<name>": {name, day, answer, by, at}}
 const canConfirm = () => onFirebase() && typeof window.JAJB.watchScheduleConfirms === 'function';
 export const watchLiveConfirms = (weekISO, cb) => (canConfirm() ? window.JAJB.watchScheduleConfirms(weekISO, cb) : (cb({}), () => {}));
-export const saveLiveConfirm = (weekISO, name, day, answer) => window.JAJB.saveScheduleConfirm(weekISO, name, day, answer);
+export const saveLiveConfirm = (weekISO, name, day, answer, excused) => window.JAJB.saveScheduleConfirm(weekISO, name, day, answer, excused);
 // late arrivals (2026-10-08): {"<ISO day>|<name>": {name, day, time, by, at}} — the dispatch report carries them
 const canLate = () => onFirebase() && typeof window.JAJB.watchScheduleLate === 'function';
 export const watchLiveLate = (weekISO, cb) => (canLate() ? window.JAJB.watchScheduleLate(weekISO, cb) : (cb({}), () => {}));

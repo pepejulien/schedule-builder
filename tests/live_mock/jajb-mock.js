@@ -106,9 +106,9 @@
       listeners.add(f); setTimeout(f, 0);
       return () => listeners.delete(f);
     },
-    saveScheduleConfirm: async (week, nm, day, answer) => {
+    saveScheduleConfirm: async (week, nm, day, answer, excused) => {
       const all = get('confirm/' + week) || {}, k = day + '|' + nm;
-      if (answer) all[k] = { name: nm, day, answer, by: name, at: now() }; else delete all[k];
+      if (answer) all[k] = { name: nm, day, answer, by: name, at: now(), ...(answer === 'callout' && excused ? { excused: true } : {}) }; else delete all[k];
       put('confirm/' + week, all); fire();
     },
     deleteScheduleWeek: async (week) => {
