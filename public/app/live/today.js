@@ -30,6 +30,7 @@ function last7(dayHours, endISO) {
 function watchList(sm, endISO) {
   const lim = sm.limits || {};
   const max7 = lim.max_7day_hours || 60, maxc = lim.max_consecutive || 5, maxd = lim.max_worked_days || 5;
+  const maxd7 = lim.max_days_in_7 || 5;
   const cap = lim.weekly_hours_cap || 40;
   const out = [], ot = [];
   for (const d of sm.drivers || []) {
@@ -38,8 +39,9 @@ function watchList(sm, endISO) {
     const m7 = d.max7 ?? 0;
     if (m7 > max7) { why.push(`${m7}h in 7 days — over ${max7}h`); lvl = 3; }
     else if (m7 >= max7 - 6) { why.push(`${m7}h in 7 days (max ${max7})`); lvl = Math.max(lvl, 2); }
+    if ((d.max_days7 ?? 0) > maxd7) { why.push(`${d.max_days7} days worked in 7 — over ${maxd7}`); lvl = 3; }
     if (d.streak > maxc) { why.push(`${d.streak} days in a row`); lvl = Math.max(lvl, 3); }
-    else if (d.streak === maxc) { why.push(`${d.streak} days in a row — a 6th needs the pop-up`); lvl = Math.max(lvl, 1); }
+    else if (d.streak === maxc) { why.push(`${d.streak} days in a row`); lvl = Math.max(lvl, 1); }
     const nd = (d.worked_dates || []).length;
     if (nd > maxd) { why.push(`${nd}-day week`); lvl = Math.max(lvl, 2); }
     const wk = d.clock_hours ?? d.hours ?? 0;
@@ -130,7 +132,7 @@ export function Today({ buildCard }) {
     .map((x) => ({ day: x.day, date: x.date, r: Math.max(0, x.routes - x.routes_filled), b: Math.max(0, x.backup - x.backup_filled) }))
     .filter((x) => x.r || x.b);
   const { near: watch, ot } = watchList(sm, endISO);
-  // who would break a hard limit (over the 7-day hours max / 7 days in a row) on a day still
+  // who would break a hard limit (over the 7-day hours max / 6 days in 7) on a day still
   // ahead — the same check and card as the Live board's shaking days
   const lim = sm.limits || {};
   const risky = sm.drivers.map((d) => {
@@ -139,7 +141,7 @@ export function Today({ buildCard }) {
     const hot = [...new Set([...(hours ? hours.hot : []), ...(run ? run.hot : [])])].sort();
     if (!hot.length) return null;
     const what = [hours && hours.hot.length ? `over ${hours.max}h in 7 days (${Math.max(...hours.over.map((w) => w.total))}h)` : '',
-      run && run.hot.length ? `${Math.max(...run.runs.map((r) => r.length))} days in a row` : ''].filter(Boolean).join(' and ');
+      run && run.hot.length ? `${Math.max(...run.runs.map((r) => r.length))} days worked in 7` : ''].filter(Boolean).join(' and ');
     return { d, risk: { hours, run }, hot, what };
   }).filter(Boolean).sort((a, b) => a.hot[0].localeCompare(b.hot[0]) || a.d.name.localeCompare(b.d.name));
   const dayName = (iso) => (iso === today ? 'Today' : (sm.days.find((x) => x.date === iso) || {}).day || iso);
@@ -169,7 +171,7 @@ export function Today({ buildCard }) {
         <svg viewBox="0 0 100 90" width="44" height="40" aria-hidden="true"><polygon points="50,4 96,86 4,86" fill="#d62d20" stroke="#8f1b12" stroke-width="3" stroke-linejoin="round"/>
           <rect x="45" y="30" width="10" height="32" rx="4" fill="#fff"/><circle cx="50" cy="73" r="6.5" fill="#fff"/></svg>
         <div><div class="td-risk-title">${risky.length === 1 ? '1 driver would break a limit' : `${risky.length} drivers would break a limit`}</div>
-          <div class="muted">Over ${lim.max_7day_hours || 60}h in 7 days, or 7 days in a row. Fix it before they go out — each one shows how.</div></div>
+          <div class="muted">Over ${lim.max_7day_hours || 60}h in 7 days, or 6 days worked in 7. Fix it before they go out — each one shows how.</div></div>
         <button class="primary" onClick=${openLive}>Fix it on the Live schedule ${Icon('arrow', 16)}</button>
       </div>
       ${risky.map((x, i) => html`<details class="td-risk-one" open=${i === 0}>
@@ -225,7 +227,7 @@ export function Today({ buildCard }) {
     <div class="td-cols">
       <div class="card">
         <h2>Watch list</h2>
-        <p class="hint">Close to a limit this week: ${sm.limits?.max_7day_hours || 60}h in 7 days, days in a row, a 6-day week.
+        <p class="hint">Close to a limit this week: ${sm.limits?.max_7day_hours || 60}h in 7 days, days in a row, 6 days in 7.
           Red = at or over it. Anyone who would break a limit is in the red box at the top.</p>
         ${!watch.length ? html`<p class="muted">Nobody is close to a limit.</p>` : html`<ul class="td-watch">
           ${watch.map((w) => html`<li class=${'lvl' + w.lvl}><b>${w.name}</b>

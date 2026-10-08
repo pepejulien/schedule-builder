@@ -450,7 +450,26 @@ class Result:
 
 
 # ------------------------------------------------------------- the solver ----
-def build_schedule(cfg):
+def days7(s, dt):
+    """Most worked days (dates in `s`) in any 7 days in a row that hold `dt`."""
+    one = datetime.timedelta(days=1)
+    return max(sum(1 for j in range(7) if dt - k * one + j * one in s) for k in range(7))
+
+
+def days7_worst(s, dates):
+    """(count, first day) of the busiest 7-day stretch holding any of `dates`."""
+    one = datetime.timedelta(days=1)
+    best, at = 0, None
+    for dt in dates:
+        for k in range(7):
+            s0 = dt - k * one
+            n = sum(1 for j in range(7) if s0 + j * one in s)
+            if n > best:
+                best, at = n, s0
+    return best, at
+
+
+def build_schedule(cfg, prev_hook=None):
     start = datetime.date.fromisoformat(cfg['start_date'])           # a Sunday
     DATEALL = {ALL[j]: start + datetime.timedelta(days=j) for j in range(7)}
     closed = set(cfg.get('closed_days', []))
@@ -466,6 +485,9 @@ def build_schedule(cfg):
     # (otherwise the wave-labeling step divides by an empty wave list)
     backup = {d: (backup[d] if waves[d] else 0) for d in DAYS}
     MAXC = cfg.get('max_consecutive', 5)
+    # Jose 2026-10-07: never more than 5 worked days in ANY 7 days in a row, last
+    # week included (a Thu-Sat + Sun-Wed six-day stretch put drivers over 60h).
+    MAX7D = cfg.get('max_days_in_7', 5)
     PH = cfg.get('primary_hours', 10)
     BH = cfg.get('backup_hours', 2)
     FREECAP = cfg.get('free_primary_cap', 4)
@@ -508,6 +530,22 @@ def build_schedule(cfg):
             hits = [k for k in prev if resolve(dr['name'], [k])]
             pw = prev[hits[0]] if len(hits) == 1 else set()
         dr['w_prev'] = set(pw)
+
+    # last week's REAL worked days from its Live board (midweek changes included)
+    # win over the uploaded sheet's tail -- same as runner.load_state.
+    pwk = cfg.get('prev_worked') or {}
+    if pwk:
+        lo = start - datetime.timedelta(days=7)
+        byn = {norm(k): {datetime.date.fromisoformat(x) for x in v} for k, v in pwk.items()}
+        for dr in roster:
+            got = byn.get(norm(dr['name']))
+            if got is None:
+                hits = [k for k in byn if resolve(dr['name'], [k])]
+                got = byn[hits[0]] if len(hits) == 1 else None
+            if got is not None:
+                dr['w_prev'] = {x for x in got if lo <= x < start}
+    if prev_hook:                    # runner: Route Tracker's clock-outs for last week
+        prev_hook(roster, DATEALL, PH)
 
     EXCLUDE, TARGET, MOST, BKX, FBACK, notes = _resolve_named_lists(cfg, roster, rnames)
     roster = [dr for dr in roster if norm(dr['name']) not in EXCLUDE]
@@ -571,7 +609,7 @@ def build_schedule(cfg):
         f = dt + ONE
         while f in s:
             n += 1; f += ONE
-        return n <= MAXC
+        return n <= MAXC and days7(s, dt) <= MAX7D
 
     # CAPX: per-driver EXTRA road-day allowance granted by the emergency
     # route-coverage pass (Jose 2026-07-20: routes must be covered -- a short
@@ -915,6 +953,8 @@ def build_schedule(cfg):
     # then to bring every working Fair up to the 3-road target.
     def _runs_ok(dv):
         s = worked(dv)
+        if any(days7(s, DATEALL[d]) > MAX7D for d in ALL if DATEALL[d] in s):
+            return False
         for dt0 in s:
             if dt0 - ONE not in s:
                 run = 0; c = dt0
@@ -1309,7 +1349,7 @@ def build_schedule(cfg):
     return Result(cfg=cfg, roster=roster, cell=cell, waves=waves, routes=routes,
                   backup=backup, DAYS=DAYS, DATEALL=DATEALL, closed=closed,
                   TARGET=TARGET, MOST=MOST, EXCLUDE=EXCLUDE, prev=prev, idx=idx,
-                  MAXC=MAXC, PH=PH, BH=BH, MAXPRIM=MAXPRIM, HCAP=HCAP,
+                  MAXC=MAXC, MAX7D=MAX7D, PH=PH, BH=BH, MAXPRIM=MAXPRIM, HCAP=HCAP,
                   MAXTOT=MAXTOT, FREETOT=FREETOT, FBACK=FBACK,
                   fallback_used=fallback_used, WSPREAD=WSPREAD, USESEED=USESEED,
                   PAIRLOG=PAIRLOG, REDS=REDS, REDPREF=REDPREF, RATE=RATE,
@@ -1616,6 +1656,12 @@ def check_invariants(res):
                 mx = max(mx, n)
                 if n > MAXC:
                     errs.append(f'CONSEC>{MAXC}: {dr["name"]} run={n}')
+        # inv 2b: never more than MAX7D worked days in any 7 days in a row
+        # (last week counts) -- only stretches holding a day worked THIS week
+        m7 = getattr(res, 'MAX7D', 5)
+        n7, s7 = days7_worst(wd, [DATEALL[d] for d in ALL if DATEALL[d] in wd])
+        if n7 > m7:
+            errs.append(f'DAYS7>{m7}: {dr["name"]} {n7} days in 7 from {s7:%a %m/%d}')
         overlaps = (set(dr['prim']) & set(dr['bk'])) | (set(dr['prim']) & set(dr['helper'])) \
             | (set(dr['bk']) & set(dr['helper']))
         if overlaps:

@@ -8,6 +8,7 @@ const NUM_FIELDS = [
   { key: 'max_total_days', label: 'Max total worked days', def: 5 },
   { key: 'free_total_days', label: 'Fair roads+backups cap', def: 4 },
   { key: 'max_consecutive', label: 'Max consecutive days', def: 5 },
+  { key: 'max_days_in_7', label: 'Max worked days in any 7 (last week counts)', def: 5 },
   { key: 'primary_hours', label: 'Hours per road day', def: 10 },
   { key: 'backup_hours', label: 'Hours per backup day', def: 2 },
 ];

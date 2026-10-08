@@ -5,9 +5,9 @@
 // Rules are the builder's own (runner.py _assess): green = safe, yellow =
 // policy (allowed, flagged), red = they asked the day off (typed confirm),
 // grey = compliance (locked). Hours are SCHEDULED hours on the clock (route
-// 10h, backup 2h, meeting 2h, dispatch 12h). Here only, a 6-day and overtime
-// go through after a pop-up (orange); 12h a day / 60h in 7 days / 7 in a row
-// stay locked. Cells use Amazon's own shift colors (2026-10-06).
+// 10h, backup 2h, meeting 2h, dispatch 12h). Here only, overtime goes through
+// after a pop-up (orange); 12h a day / 60h in 7 days / 6 days worked in any 7
+// (Jose 2026-10-07 -- the old 6-day pop-up is gone) stay locked. Cells use Amazon's own shift colors (2026-10-06).
 import { html } from '../preact-setup.js';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, setWizard, toast } from '../store.js';
@@ -120,7 +120,7 @@ function waveFills(view, day) {
 // wave from the color key (a full wave, or one the day has no routes in yet,
 // just gets one more route: Amazon may have handed out routes the app
 // doesn't know yet), plus trainer / meeting / dispatch. Rule results show up
-// front; the day-off and 6-day pop-ups still come where they're needed.
+// front; the day-off and overtime pop-ups still come where they're needed.
 const ALL_WAVES = Object.keys(WAVE_COLORS).map((w) => `${w} AM`);
 const dayWaves = (info) => [...new Set([...ALL_WAVES, ...Object.keys(info.waves || {})])]
   .sort((a, b) => waveMins(a) - waveMins(b));
@@ -426,9 +426,9 @@ function Finder({ view, finder, setFinder, ready, rev, busy, onPick }) {
   const open = info ? (finder.role === 'road' ? info.routes - info.routes_filled : info.backup - info.backup_filled) : 0;
   const list = (st && st.list) || [];
   const groups = [['ok', 'Can work — no rule breaks'], ['warn', 'Can work — breaks a company policy (flagged)'],
-    ['confirm', '6-day / overtime — can work after a pop-up'],
+    ['confirm', 'Overtime — can work after a pop-up'],
     ['unavail', 'Asked for the day off — needs your confirmation'],
-    ['blocked', 'Can\'t — compliance rule (12h a day, 60h in 7 days, 7 in a row, clashes)']];
+    ['blocked', 'Can\'t — compliance rule (12h a day, 60h in 7 days, 6 days in 7, clashes)']];
   const [showBlocked, setShowBlocked] = useState(false);
   return html`<div class="card" id="lv-finder">
     <h2>Who can work extra?</h2>
@@ -492,7 +492,7 @@ function Board() {
   const [moverCands, setMoverCands] = useState(null);
   const [marker, setMarker] = useState(null);  // {name, day, kind}
   const [confirm, setConfirm] = useState(null);
-  const [limit, setLimit] = useState(null);     // the 6-day / overtime pop-up
+  const [limit, setLimit] = useState(null);     // the overtime pop-up
   const [opts, setOpts] = useState(null);       // add_options for the driver whose day/week is open
   const [finder, setFinder] = useState({ day: null, role: 'road' });
   const [showLog, setShowLog] = useState(false);
@@ -807,9 +807,10 @@ function Board() {
   const endISO = today < view.days[0].date ? null : today > lastDay ? lastDay : today;
   const streakCls = (n) => (n > (lim.max_consecutive || 5) ? 'lv-bad' : n === (lim.max_consecutive || 5) ? 'lv-warn' : '');
   const daysCls = (n) => (n > (lim.max_worked_days || 5) ? 'lv-bad' : n === (lim.max_worked_days || 5) ? 'lv-warn' : '');
+  const maxD7 = lim.max_days_in_7 || 5;
   const nCols = view.days.length + 5;
   // over the 7-day max: the upcoming days that cause it shake; hover one for what and how to fix
-  // and the days that would make 7 in a row (a safeguard: the rules lock that)
+  // and the days that would make 6 worked days in 7 (a safeguard: the rules lock that)
   const risks = Object.fromEntries(view.drivers.map((x) => {
     const hours = overRisk(x, view.days, today, lim), run = runRisk(x, view.days, today, lim);
     if (hours) hours.backupH = lim.backup_hours || 2;
@@ -887,7 +888,7 @@ function Board() {
               : html`<div class="lv-fill">closed</div>`}</th>`)}
           <th title="On the clock this week (scheduled)">Week</th>
           <th title=${`Most hours on the clock in any 7 days in a row, last week included (max ${max7Lim}h). A backup counts 2h; "if sent out" counts each backup day still ahead as a full route.`}>Max 7d</th>
-          <th title=${`Days worked this week (usual max ${lim.max_worked_days || 5}; a 6th needs the pop-up)`}>Days</th>
+          <th title=${`Days worked this week. Never more than ${maxD7} in any 7 days in a row — last week counts ("in 7d" shows it when last week adds to it).`}>Days</th>
           <th title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
         </tr></thead>
         <tbody>${!shown.length ? html`<tr><td colspan=${nCols} class="muted" style="text-align:left">
@@ -923,7 +924,8 @@ function Board() {
                   return ifs == null ? '' : html`<div class=${'lv-ifsent ' + max7Cls(ifs)}
                     title="If every backup day still ahead becomes a full route">if sent out: ${ifs}h</div>`;
                 })()}</td>
-                <td class=${daysCls(nWorked)}>${nWorked}</td>
+                <td class=${daysCls(nWorked)}>${nWorked}${(x.max_days7 ?? 0) > nWorked ? html`<div class=${'lv-ifsent' + (x.max_days7 > maxD7 ? ' lv-bad' : '')}
+                  title="Most days worked in any 7 days in a row, last week included">${x.max_days7} in 7d</div>` : ''}</td>
                 <td class=${streakCls(x.streak)}>${x.streak}</td>
               </tr>`;
             })}`)}</tbody>
@@ -939,9 +941,9 @@ function Board() {
       </div>
       ${pop && risks[pop.name] && byName[pop.name] ? html`<div class="lv-pop" style=${`left:${pop.left}px;` + (pop.up != null
         ? `top:${pop.up}px;transform:translateY(-100%)` : `top:${pop.top}px`)}><${RiskInfo} d=${byName[pop.name]} risk=${risks[pop.name]} iso=${pop.iso} /></div>` : ''}
-      <p class="hint">A shaking day would put that driver over ${max7Lim}h in 7 days or at 7 days in a row — hover it to see why and how to fix it.
+      <p class="hint">A shaking day would put that driver over ${max7Lim}h in 7 days or at ${maxD7 + 1} days worked in 7 — hover it to see why and how to fix it.
         Hours are scheduled on-the-clock hours. Orange = at or near a limit, red = over it.
-        Locked: 12h in a day, ${max7Lim}h in any 7 days (last week counts), 7 days in a row. A 6-day or overtime
+        Locked: 12h in a day, ${max7Lim}h in any 7 days, ${maxD7 + 1} days worked in any 7 (last week counts). Overtime
         goes through after a pop-up.</p>
     </div>
 

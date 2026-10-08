@@ -232,6 +232,7 @@ export function assembleConfig(state) {
     start_date: state.week?.startISO,
     closed_days: closed,
     max_consecutive: adv.max_consecutive ?? 5,
+    max_days_in_7: adv.max_days_in_7 ?? 5,
     primary_hours: adv.primary_hours ?? 10,
     backup_hours: adv.backup_hours ?? 2,
     free_primary_cap: adv.free_primary_cap ?? 4,

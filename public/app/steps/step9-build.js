@@ -8,7 +8,7 @@ import { Banner, Spinner, download } from '../ui.js';
 import { assembleFromWizard } from '../build-inputs.js';
 import { build, editRequest } from '../solver-client.js';
 import { storeGet, loadTrainingHistory, saveTrainingWeek, canLive, liveWeek, liveWeeks, deleteLiveWeek, actualHoursOnce } from '../api.js';
-import { saveWeek, actualList, prevISO } from '../live/live-model.js';
+import { saveWeek, actualList, prevISO, prevWorkedFrom } from '../live/live-model.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate as pd } from '../lib/weeks.js';
 import { GROUP_OPTIONS } from '../lib/config-assemble.js';
@@ -57,6 +57,8 @@ const RULE_KINDS = [
     who: (m) => ({ name: m[1], detail: `${m[2]}h in the 7 days from ${m[3]}` }) },
   { re: /^HOURS-DAY: (.+?) ([\d.]+)h on (\w{3} [\d/]+)/, title: 'Over 12 hours in one day', hard: true,
     who: (m) => ({ name: m[1], detail: `${m[2]}h on ${m[3]}` }) },
+  { re: /^DAYS7>(\d+): (.+?) (\d+) days in 7 from (\w{3} [\d/]+)/, title: '6 or more days worked in 7 days', hard: true,
+    who: (m) => ({ name: m[2], detail: `${m[3]} days in the 7 days from ${m[4]}` }) },
   { re: /^CONSEC>(\d+): (.+) run=(\d+)/, title: 'Too many days in a row', hard: true,
     who: (m) => ({ name: m[2], detail: `${m[3]} days in a row` }) },
   { re: /^UNAVAIL violated: (.+) (\w{3})$/, title: 'Working a day they marked Unavailable', hard: true,
@@ -140,9 +142,9 @@ export function ConfirmOverride({ req, onCancel, onConfirm }) {
   </div>`;
 }
 
-// The Live board's pop-up (Jose 2026-10-06): a 6-day (6 in a row, or a 6th
-// worked day) and overtime are allowed there, but only after this. 12h in a
-// day, 60h in any 7 days and 7 in a row never get here — they're locked.
+// The Live board's pop-up (Jose 2026-10-06): overtime is allowed there, but only
+// after this. 12h in a day, 60h in any 7 days and 6 worked days in any 7 (Jose
+// 2026-10-07 -- the 6-day used to come here too) never get here — they're locked.
 export function LimitConfirm({ req, onCancel, onConfirm }) {
   const first = req.name.trim().split(/\s+/)[0];
   const six = req.limits.some((l) => /^6-day/.test(l));
@@ -153,7 +155,7 @@ export function LimitConfirm({ req, onCancel, onConfirm }) {
       <p>Giving ${first} ${what} on <b>${req.day}</b> means:</p>
       <ul>${req.limits.map((l) => html`<li><b>${l.replace(/^(6-day|overtime): /, '')}</b></li>`)}</ul>
       <p class="hint">Still locked, no matter what: more than 12h on the clock in a day, more than 60h in any
-        7 days (last week counts), and 7 days in a row. This will be logged as approved.</p>
+        7 days, and 6 worked days in any 7 (last week counts). This will be logged as approved.</p>
       <div class="row" style="margin-top:14px">
         <button onClick=${onCancel}>Cancel</button>
         <button class="danger" onClick=${onConfirm}>${six ? `Yes — schedule ${first} for a 6-day` : `Yes — schedule ${first}`}</button>
@@ -260,7 +262,7 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
   const GROUPS = [
     ['ok', 'Safe — no rule would break'],
     ['warn', 'Allowed, but will be flagged'],
-    ['confirm', '6-day / overtime — allowed after a pop-up'],
+    ['confirm', 'Overtime — allowed after a pop-up'],
     ['unavail', 'Day off — needs a confirmed override'],
     ['blocked', 'Locked — compliance rule'],
   ];
@@ -772,6 +774,12 @@ export function Step9Build() {
         const list = actualList(act);
         if (list.length) config.actual = list;
       } catch { /* no actual hours: last week counts as planned */ }
+      // last week's worked days from its Live board (midweek changes included), so the
+      // days-in-a-row and 6-in-7 rules see Thu-Sat even without the prior-week upload
+      try {
+        const p = await liveWeek(prevISO(wizard.week.startISO));
+        if (p) config.prev_worked = prevWorkedFrom(JSON.parse(p.summary));
+      } catch { /* not published: the uploaded prior week (if any) is used */ }
     }
 
     let prefsText = null;
@@ -911,7 +919,7 @@ export function Step9Build() {
       <h3>Per-driver</h3>
       <p class="hint">Click any day to move that shift — the table lights up green on everyone who can safely
         take it, and the bar above offers <b>Change wave…</b> for that same shift. The <b>+</b> next to a name
-        adds an extra route or backup. Compliance rules (5 days in a row, overtime, worked-day caps) are
+        adds an extra route or backup. Compliance rules (5 days in a row, never 6 days in any 7, overtime, worked-day caps) are
         locked; a driver's day off can only be overridden after you confirm it.</p>
       ${editor && editor.view === 'table' ? html`<${MoveBar} editor=${editor} cands=${cands} busy=${applying}
         onPick=${pickSlot} onClose=${() => setEditor(null)}

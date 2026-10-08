@@ -60,7 +60,7 @@ import re
 from build_weekly_schedule import (
     load_config, build_schedule, write_xlsx, check_invariants, print_summary,
     ScheduleConfigError, FREE_name, norm, ALL as ALL_DAYS, Result,
-    _open_shifts_sheet, _layout, _is_data_name, fmt_wave_time,
+    _open_shifts_sheet, _layout, _is_data_name, fmt_wave_time, days7, days7_worst,
 )
 
 WEEKEND = {'Sat', 'Sun'}
@@ -146,6 +146,7 @@ def _driver_rows(res):
             cells=cells,
             worked_dates=sorted(x.isoformat() for x in _worked_dates(res, dr)),
             streak=_streak(res, dr),
+            max_days7=_days7_row(res, dr),
             day_hours={k.isoformat(): v for k, v in sorted(_day_hours(res, dr).items())},
             # rounded: real hours (11.37 + 9.65 …) would otherwise show as 51.0199999
             clock_hours=_num(sum(v for k, v in _day_hours(res, dr).items()
@@ -182,6 +183,22 @@ def _worked_dates(res, dr):
     (an extra shift nobody put on the schedule still counts toward days in a row),
     minus scheduled days Route Tracker shows they didn't work."""
     return (_sched_dates(res, dr) - _missed_dates(dr)) | _act_dates(dr)
+
+
+def _max7d(res):
+    """Most worked days allowed in any 7 days in a row (Jose 2026-10-07: 5)."""
+    return getattr(res, "MAX7D", None) or 5
+
+
+def _all_worked(res, dr):
+    """Last week's tail + this week's worked dates (real clock-outs included)."""
+    return set(dr["w_prev"]) | _worked_dates(res, dr)
+
+
+def _days7_row(res, dr):
+    """Most days worked in any 7 days in a row holding a day worked this week."""
+    s = _all_worked(res, dr)
+    return days7_worst(s, [res.DATEALL[d] for d in ALL_DAYS if res.DATEALL[d] in s])[0]
 
 
 def _streak(res, dr):
@@ -232,6 +249,7 @@ def _report(cfg, res, chk):
                     backup_hours=res.BH, max_road_days=res.MAXPRIM,
                     weekly_hours_cap=res.HCAP, max_worked_days=res.MAXTOT,
                     max_day_hours=MAX_DAY_H, max_7day_hours=MAX_7DAY_H,
+                    max_days_in_7=_max7d(res),
                     dispatch_hours=DISPATCH_H, live=bool(_STATE.get("live"))),
         marks=[dict(day=d, **m) for d in ALL_DAYS
                for m in _STATE["marks"].get(d, {}).values()],
@@ -256,8 +274,9 @@ def _build_with_auto_trainers(cfg):
     share a feasible day with the trainee is swapped for the next trainer and
     the week is rebuilt (bounded). Returns (cfg_used, res, notes)."""
     auto = [a for a in (cfg.get("auto_training") or []) if a.get("trainee")]
+    hook = _prev_hook(cfg.get("actual"))
     if not auto:
-        return cfg, build_schedule(cfg), []
+        return cfg, build_schedule(cfg, hook), []
 
     queue = []
     for a in auto:
@@ -290,7 +309,7 @@ def _build_with_auto_trainers(cfg):
         c["training_pairs"] = list(cfg.get("training_pairs", [])) + [
             dict(trainer=pick[k], trainee=a["trainee"])
             for k, a in enumerate(auto) if pick[k]]
-        res = build_schedule(c)
+        res = build_schedule(c, hook)
         placed = {norm(t[1]) for t in res.PAIRLOG}
         failed = [k for k, a in enumerate(auto)
                   if pick[k] and norm(a["trainee"]) not in placed]
@@ -317,6 +336,18 @@ def _build_with_auto_trainers(cfg):
             notes.append(f"Auto-picked trainer for {a['trainee']}: {pick[k]} "
                          "(rotation)")
     return c, res, notes
+
+
+def _prev_hook(actual):
+    """Hand build_schedule last week's REAL worked days (Route Tracker clock-outs)
+    BEFORE it places anyone, so the days-in-a-row and 6-in-7 rules see them while
+    building, not only in the check afterwards."""
+    if not actual:
+        return None
+
+    def hook(roster, dateall, ph):
+        _apply_actual(Result(roster=roster, DATEALL=dateall, PH=ph), actual)
+    return hook
 
 
 def run(config_path):
@@ -695,6 +726,13 @@ def _assess(res, dr, day, role):
             else:
                 blocks.append(f"would work {rl} days in a row (max "
                               f"{res.MAXC + 1 if live else res.MAXC})")
+        # never 6 worked days in any 7 in a row, last week included (Jose 2026-10-07:
+        # a hard rule everywhere -- no pop-up on the Live board either)
+        s7 = _all_worked(res, dr) | {res.DATEALL[day]}
+        n7, a7 = days7_worst(s7, [res.DATEALL[day]])
+        if n7 > _max7d(res):
+            blocks.append(f"would work {n7} days in 7 ({a7:%a %m/%d}-{a7 + 6 * ONE:%a %m/%d}; "
+                          f"max {_max7d(res)})")
         blocks += _hour_limits(res, dr, day, role)
 
     # total worked-days caps

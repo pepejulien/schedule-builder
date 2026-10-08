@@ -9,6 +9,7 @@ Run:  python tests/gen_fixtures.py   (once)  then  python tests/live_state_test.
 import copy
 import json
 import os
+import datetime
 import sys
 import tempfile
 
@@ -126,7 +127,8 @@ ok(sc['status'] == 'blocked' and any('in a row' in r for r in sc['reasons']),
 print('6-days, overtime and on-the-clock hours (2026-10-06)')
 ok(not any(e.startswith('HOURS') for e in built['check']['errors']), 'the built week breaks no hour limit')
 ok(all('max7' in d and 'day_hours' in d for d in built['drivers']), 'hours per day + max 7-day in the report')
-# a driver whose 5th straight day is Thu -> Fri would be day 6
+# 6 worked days in any 7 (Jose 2026-10-07): locked everywhere -- the Live board's
+# old 6-day pop-up is gone; a 6th day in a row or a 6th day this week is blocked
 runner.use_slot('live3')
 r3 = J(runner.load_state, {'state': st['state']})
 days_open = [x['day'] for x in r3['days'] if x['open']]
@@ -135,27 +137,35 @@ for d in r3['drivers']:
     for day in days_open:
         c = J(runner.candidates, {'day': day, 'role': 'backup'})
         me = next(x for x in c['candidates'] if x['name'] == d['name'])
-        if me['status'] == 'confirm' and any(l.startswith('6-day') for l in me['limits']):
+        if any('days in 7' in l for l in me['reasons']):
             pick = (d['name'], day, me)
             break
     if pick:
         break
-ok(pick is not None, 'the live board offers some 6-day as a pop-up (status confirm)')
+ok(pick is not None, 'some driver would hit 6 days in 7')
+ok(not any(x['status'] == 'confirm' and any(l.startswith('6-day') for l in x['limits'])
+           for day in days_open for x in J(runner.candidates, {'day': day, 'role': 'backup'})['candidates']),
+   'no 6-day is offered as a pop-up any more')
 if pick:
     nm, day, me = pick
-    e = J(runner.apply_add, {'name': nm, 'day': day, 'role': 'backup'})
-    ok(e.get('kind') == 'needs_limits' and e.get('limits'), f'{nm} {day}: refused without the pop-up OK')
-    a = J(runner.apply_add, {'name': nm, 'day': day, 'role': 'backup', 'confirm_limits': True})
-    ok(a['ok'], 'allowed with the pop-up OK')
-    ok(any("OK'D" in x for x in a['edits']), "the change log says it was OK'd")
-    ok(not any(nm in x for x in a['check']['errors']), "no rule error for the OK'd 6-day")
-    ok(any(nm in x for x in a['check']['overridden']), 'listed as an approved override')
-    st6 = J(runner.export_state)['state']
-    runner.use_slot('build')
-    b = J(runner.candidates, {'day': day, 'role': 'backup'})
-    bm = next(x for x in b['candidates'] if x['name'] == nm)
-    ok(bm['status'] == 'blocked', 'the builder still locks that 6-day')
-    runner.use_slot('live3')
+    ok(me['status'] == 'blocked', f'{nm} {day}: 6 days in 7 is locked')
+    e = J(runner.apply_add, {'name': nm, 'day': day, 'role': 'backup', 'confirm_limits': True})
+    ok(not e.get('ok') and e.get('kind') == 'compliance', 'refused even with the pop-up OK')
+# last week Thu-Sat + this week Sun-Tue (not 6 in a row): the 6th day in those 7 is locked
+runner.use_slot('live3b')
+dates = {x['day']: x['date'] for x in r3['days']}
+sun = datetime.date.fromisoformat(dates['Sun'])
+who = next(d for d in r3['drivers'] if all(d['cells'].get(x) in ('', 'Unavailable') for x in ('Sun', 'Mon', 'Tue')))
+prev = {who['name']: [(sun - datetime.timedelta(days=k)).isoformat() for k in (1, 2, 3, 4)]}   # Wed-Sat last week
+r3b = J(runner.load_state, {'state': st['state'], 'prev_worked': prev})
+c = J(runner.candidates, {'day': 'Mon', 'role': 'backup'})
+me = next(x for x in c['candidates'] if x['name'] == who['name'])
+ok(me['status'] != 'blocked', f"{who['name']}: Wed-Sat last week + Mon is 5 in 7 - allowed")
+J(runner.apply_add, {'name': who['name'], 'day': 'Mon', 'role': 'backup', 'confirm_unavailable': True, 'confirm_limits': True})
+c = J(runner.candidates, {'day': 'Tue', 'role': 'backup'})
+me = next(x for x in c['candidates'] if x['name'] == who['name'])
+ok(me['status'] == 'blocked' and any('days in 7' in l for l in me['reasons']),
+   f"...and Tue would be 6 in 7 - locked ({'; '.join(me['reasons'])})")
 # 60h in 7 days, counting last week's real hours
 runner.use_slot('live4')
 s0 = runner._dec(json.loads(st['state'])['res'])['DATEALL']['Sun']
@@ -207,7 +217,8 @@ runner.use_slot('live6')
 r6 = J(runner.load_state, {'state': st['state']})
 ok(all(d['cells'][x] != 'Unavailable' for d in r6['drivers'] for x in d['dispatch_days']),
    'a dispatch day shows as Dispatch, not Unavailable')
-free = lambda rep, day: [d for d in rep['drivers'] if d['cells'].get(day) == '' and len(d['worked_dates']) < 4]
+free = lambda rep, day: [d for d in rep['drivers'] if d['cells'].get(day) == '' and len(d['worked_dates']) < 4
+                          and d['max_days7'] <= 3]
 day = next(x['day'] for x in r6['days'] if x['open'] and len(free(r6, x['day'])) >= 3)
 a, b, c = [d['name'] for d in free(r6, day)[:3]]
 m = J(runner.set_duty, {'name': a, 'day': day, 'kind': 'dispatch'})

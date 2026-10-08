@@ -1,5 +1,5 @@
 // The two hard limits a schedule must never break, checked the same way everywhere
-// (2026-10-07): over the 7-day hours max, and 7 days in a row. Used by the Live board and
+// (2026-10-07): over the 7-day hours max, and 6 worked days in any 7 (was: 7 in a row). Used by the Live board and
 // by the Vehicle Assigner (it imports this file from /schedule/app/live/limits.js), so this
 // file must not import anything but ../lib/weeks.js.
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
@@ -67,8 +67,18 @@ export function mergeActual(summary, list) {
       .filter((x) => !(x in missed)).sort();
     let run = 0, best = 0;
     for (const x of dates) { run = worked.includes(x) ? run + 1 : 0; best = Math.max(best, run); }
+    // most days worked in any 7 holding a day worked this week (last week's tail from day_hours)
+    const all = new Set([...worked, ...Object.keys(day_hours).filter((x) => x < start && Number(day_hours[x]) > 0)]);
+    let days7 = 0;
+    for (const x of worked) {
+      for (let s = -6; s <= 0; s++) {
+        let n = 0;
+        for (let k = 0; k < 7; k++) if (all.has(toISODate(addDays(parseISODate(x), s + k)))) n++;
+        days7 = Math.max(days7, n);
+      }
+    }
     return { ...d, day_hours, clock_hours: Math.round(clock_hours * 100) / 100, max7: Math.round(max7 * 100) / 100,
-      act_dates, worked_dates: worked, streak: Math.max(d.streak || 0, best) };
+      act_dates, worked_dates: worked, streak: Math.max(d.streak || 0, best), max_days7: days7 };
   });
   return { ...summary, drivers };
 }
@@ -134,44 +144,47 @@ export function overRisk(d, days, today, lim) {
   return { max, over, hot, fixes, breakdown };
 }
 
-// 7 days in a row (2026-10-07): locked by the rules, so this should never show — a safeguard.
-// Worked days = any day with hours or on the worked list (last week's tail included). Flags
-// runs of 7+ that still reach today or later; the upcoming days in them shake, and each fix is
-// a day off that breaks every such run (two days off if one isn't enough). null = fine.
-export function runRisk(d, days, today, lim, maxRun = 6) {
+// 6 worked days in any 7 (Jose 2026-10-07; this used to be "7 days in a row", which it covers):
+// locked by the rules, so on a schedule made since then it only shows when a real shift nobody
+// scheduled (a Route Tracker clock-out) or last week's extra days push someone over. Worked days =
+// any day with hours or on the worked list (last week's tail included). Flags 7-day stretches
+// with more than lim.max_days_in_7 (5) worked days that still reach today or later; their
+// upcoming days shake, and each fix is a day off that brings every such stretch back to the max
+// (two days off if one isn't enough). runs = the worked days of each bad stretch. null = fine.
+export function runRisk(d, days, today, lim) {
+  const maxDays = (lim && lim.max_days_in_7) || 5;
   const dh = d.day_hours || {};
   const sh = (iso, n) => toISODate(addDays(parseISODate(iso), n));
   const first = days[0].date, last = days[days.length - 1].date;
-  const span = [];
-  for (let i = -maxRun; sh(first, i) <= last; i++) span.push(sh(first, i));
-  const runsOf = (w) => {
-    const out = [];
-    let cur = [];
-    for (const iso of span) {
-      if (w.has(iso)) cur.push(iso);
-      else { if (cur.length) out.push(cur); cur = []; }
-    }
-    if (cur.length) out.push(cur);
-    return out.filter((r) => r.length > maxRun && r[r.length - 1] >= today);
-  };
+  const starts = [];
+  for (let i = -6; sh(first, i) <= last; i++) if (sh(first, i + 6) >= today) starts.push(sh(first, i));
+  const badOf = (w) => starts.map((s) => {
+    const got = [];
+    for (let k = 0; k < 7; k++) if (w.has(sh(s, k))) got.push(sh(s, k));
+    return { start: s, end: sh(s, 6), got };
+  }).filter((x) => x.got.length > maxDays);
   const worked = new Set([...Object.keys(dh).filter((k) => Number(dh[k]) > 0), ...(d.worked_dates || [])]);
-  const bad = runsOf(worked);
+  const bad = badOf(worked);
   if (!bad.length) return null;
   const act = new Set(d.act_dates || []);
   const inWeek = new Set(days.map((x) => x.date));
-  const hot = bad.flat().filter((iso) => inWeek.has(iso) && iso >= today && !act.has(iso));
+  const hot = [...new Set(bad.flatMap((x) => x.got))].filter((iso) => inWeek.has(iso) && iso >= today && !act.has(iso)).sort();
   const without = (...isos) => { const w = new Set(worked); isos.forEach((x) => w.delete(x)); return w; };
-  let fixes = hot.filter((iso) => !runsOf(without(iso)).length).map((iso) => ({ kind: 'off', dates: [iso] }));
+  let fixes = hot.filter((iso) => !badOf(without(iso)).length).map((iso) => ({ kind: 'off', dates: [iso] }));
   if (!fixes.length) {
     for (let i = 0; i < hot.length; i++) {
       for (let j = i + 1; j < hot.length; j++) {
-        if (!runsOf(without(hot[i], hot[j])).length) fixes.push({ kind: 'off2', dates: [hot[i], hot[j]] });
+        if (!badOf(without(hot[i], hot[j])).length) fixes.push({ kind: 'off2', dates: [hot[i], hot[j]] });
       }
     }
   }
-  const top = bad.reduce((a, r) => (r.length > a.length ? r : a));
-  return { maxRun, runs: bad, hot, fixes,
-    breakdown: top.map((iso) => ({ date: iso, done: iso < today || act.has(iso), hot: hot.includes(iso) })) };
+  const top = bad.reduce((a, x) => (x.got.length > a.got.length ? x : a));
+  const breakdown = [];
+  for (let k = 0; k < 7; k++) {
+    const iso = sh(top.start, k);
+    if (worked.has(iso)) breakdown.push({ date: iso, done: iso < today || act.has(iso), hot: hot.includes(iso) });
+  }
+  return { maxDays, maxRun: maxDays, wins: bad, runs: bad.map((x) => x.got), hot, fixes, breakdown };
 }
 
 // The card (2026-10-07): what goes over, the hours behind it, and every fix — as HTML, so the
@@ -212,10 +225,11 @@ export function riskCardHtml(d, risk, iso, foot = '✓ = already worked. Click a
     const longest = Math.max(...r.runs.map((x) => x.length));
     const fixLi = (f) => `<li>Take ${f.dates.map((x) => `<b>${wkd(x)}</b>`).join(' and ')} off — give that shift to someone else`
       + ' <span class="muted">(a backup counts as a day worked too)</span></li>';
-    parts.push(`<div class="ov-card"><div class="ov-title">${esc(d.name)} would work ${longest} days in a row (max ${r.maxRun})</div>`
-      + r.runs.map((x) => `<div class="ov-win">${mdy(x[0])} → ${mdy(x[x.length - 1])}: <b>${x.length} days</b></div>`).join('')
-      + chips(r.breakdown, false)
-      + tail(r, fixLi, `Taking ${iso ? wkd(iso) : 'that day'} off alone doesn't break the run — use one of the days above.`) + '</div>');
+    const wins = (r.wins || []).filter((w, i, a) => a.findIndex((v) => v.got.join() === w.got.join()) === i);
+    parts.push(`<div class="ov-card"><div class="ov-title">${esc(d.name)} would work ${longest} days in 7 (max ${r.maxDays})</div>`
+      + wins.slice(0, 3).map((w) => `<div class="ov-win">${mdy(w.start)} → ${mdy(w.end)}: <b>${w.got.length} days</b></div>`).join('')
+      + '<div class="ov-sub">The worst 7 days — the days worked:</div>' + chips(r.breakdown, false)
+      + tail(r, fixLi, `Taking ${iso ? wkd(iso) : 'that day'} off alone isn't enough — use one of the days above.`) + '</div>');
   }
   return parts.join('<hr class="ov-hr">') + (foot ? `<div class="ov-foot">${esc(foot)}</div>` : '');
 }
