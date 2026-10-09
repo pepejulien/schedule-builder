@@ -246,3 +246,20 @@ export function actualHoursOnce(weekISO, ms = 6000) {
     un = window.JAJB.watch('actual_hours/' + weekISO, finish);
   });
 }
+
+// A published week's summary doc on its own, kept current (2026-10-08): {json, rev} | null. Another
+// dispatcher's save reaches the Live board's grid through this — no need to read the week (and its
+// big engine state) again before showing it. Same generic watch as actual_hours.
+export const canWatchSummary = canActual;
+export const watchLiveSummary = (weekISO, cb) => (canActual()
+  ? window.JAJB.watch(`schedule_weeks/${weekISO}/data/summary`, cb) : () => {});
+// Once: the first snapshot `accept` takes (a cached copy can come first). undefined = no answer in time.
+export function liveSummaryOnce(weekISO, accept = () => true, ms = 6000) {
+  if (!canActual()) return Promise.resolve(undefined);
+  return new Promise((resolve) => {
+    let done = false, un = null;
+    const finish = (d) => { if (done) return; done = true; clearTimeout(t); setTimeout(() => un && un(), 0); resolve(d); };
+    const t = setTimeout(() => finish(undefined), ms);
+    un = window.JAJB.watch(`schedule_weeks/${weekISO}/data/summary`, (d) => { if (accept(d)) finish(d); });
+  });
+}
