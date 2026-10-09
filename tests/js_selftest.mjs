@@ -10,6 +10,7 @@ import { weekLabel, isSunday } from '../public/app/lib/weeks.js';
 import { driverCsv } from '../public/app/lib/driver-csv.js';
 import { readiness } from '../public/app/readiness.js';
 import { joinChunks } from '../public/app/lib/board-fetch.js';
+import { runRisk, riskCardHtml } from '../public/app/live/limits.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -183,6 +184,41 @@ eq('joinChunks skips blank rows', joinChunks('"enc1:AA"\n""\n\n"BB"'),
 eq('joinChunks CRLF', joinChunks('"enc1:AA"\r\n"BB"'), { payload: 'enc1:AABB', count: 2 });
 eq('joinChunks unescapes doubled quotes', joinChunks('"a""b"'), { payload: 'a"b', count: 1 });
 eq('joinChunks unquoted cell', joinChunks('enc1:AAAA'), { payload: 'enc1:AAAA', count: 1 });
+
+// limits.js runRisk (2026-10-08): the 'cap' fix's clock-out times cover backup days too
+// ("if sent out"); a backup day never gets the "make it a backup" fix; route-only weeks unchanged.
+{
+  const DN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const days = DN.map((day, i) => ({ day, date: `2026-10-${11 + i}` }));
+  const lim = { max_days_in_7: 5, max_7day_hours: 60, backup_hours: 2, max_day_hours: 12 };
+  const mk = (cells) => { const dh = {}; for (const x of days) if (cells[x.day]) dh[x.date] = /Backup/.test(cells[x.day]) ? 2 : 10;
+    return { name: 'Ana Test', cells, day_hours: dh }; };
+  const six = (f) => Object.fromEntries(DN.slice(0, 6).map((d, i) => [d, f(i)]));
+  const W = ['10:25 AM', '10:25 AM', '10:45 AM', '10:25 AM', '11:05 AM', '10:25 AM'];
+  const cap = (r) => (r.fixes || []).find((f) => f.kind === 'cap');
+  const BY = [1225, 1225, 1245, 1225, 1265, 1225];
+  // route only: exactly what it gave before the change
+  const r1 = runRisk(mk(six((i) => W[i])), days, '2026-10-08', lim);
+  eq('runRisk routes: cap fix unchanged', cap(r1), { kind: 'cap', dates: days.slice(0, 6).map((x) => x.date), hours: 10,
+    outs: days.slice(0, 6).map((x, i) => ({ date: x.date, by: BY[i] })), worst: 60 });
+  eq('runRisk routes: a backup fix per route day', r1.fixes.filter((f) => f.kind === 'backup').length, 6);
+  // backup on 6 days in 7: a cap fix whose outs are those backup days, with times and bk
+  const r2 = runRisk(mk(six((i) => `${W[i]} Backup`)), days, '2026-10-08', lim);
+  const c2 = cap(r2);
+  ok('runRisk backups: cap fix', c2 && c2.hours === 10 && c2.outs.length === 6, JSON.stringify(r2.fixes));
+  ok('runRisk backups: outs bk + clock-out', c2 && c2.outs.every((o, i) => o.bk === true && o.by === BY[i]), JSON.stringify(c2));
+  eq('runRisk backups: no "make it a backup" fix', r2.fixes.filter((f) => f.kind === 'backup').length, 0);
+  ok('riskCardHtml backups: clock-out shown', /sent out on a backup day.*clock out by <b>8:25 PM<\/b>/.test(riskCardHtml(mk(six((i) => `${W[i]} Backup`)), { run: r2 }, null, '')));
+  // a mix: Tue + Thu backups, the rest routes
+  const r3 = runRisk(mk(six((i) => (i === 2 || i === 4 ? `${W[i]} Backup` : W[i]))), days, '2026-10-08', lim);
+  const c3 = cap(r3);
+  ok('runRisk mix: cap counts all 6 days', c3 && c3.hours === 10 && c3.outs.length === 6 && c3.worst === 60, JSON.stringify(c3));
+  eq('runRisk mix: bk only on the backup days', c3 && c3.outs.map((o) => !!o.bk), [false, false, true, false, true, false]);
+  eq('runRisk mix: backup fixes only on route days', r3.fixes.filter((f) => f.kind === 'backup').map((f) => f.dates[0]),
+    ['2026-10-11', '2026-10-12', '2026-10-14', '2026-10-16']);
+  ok('riskCardHtml mix: backup day tagged', /Tue <i>\(backup, if sent out\)<\/i> clock out by <b>8:45 PM<\/b>/
+    .test(riskCardHtml(mk(six((i) => (i === 2 || i === 4 ? `${W[i]} Backup` : W[i]))), { run: r3 }, null, '')));
+}
 
 console.log(`\n${pass}/${pass + fail} passed`);
 if (fail) {

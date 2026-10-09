@@ -50,6 +50,8 @@ const saveSort = (v) => { try { localStorage.setItem(SORT_KEY, v); } catch { /* 
 // trainer / trainee, dispatch, meeting. Not: blank, Unavailable, called out / no-show.
 const WORKING = new Set(['road', 'bk', 'trainee', 'trainer', 'disp', 'meet']);
 const worksOn = (x, day) => WORKING.has(cellInfo((x.cells || {})[day]).kind);
+// "Backups only" (Jose 2026-10-08): a backup shift that day, with or without a wave time
+const bkOn = (x, day) => cellInfo((x.cells || {})[day]).kind === 'bk';
 
 // Sum of on-the-clock hours over the 7 days ending `endISO`.
 function last7(dayHours, endISO) {
@@ -537,6 +539,7 @@ function Board() {
   const [sortBy, setSortBy] = useState(readSort);   // 'tier' | 'name'
   const [q, setQ] = useState('');                   // name search
   const [dayF, setDayF] = useState([]);             // day filter: only drivers working every picked day
+  const [bkOnly, setBkOnly] = useState(false);      // "Backups only": on backup every picked day (no day: any day)
   const [pop, setPop] = useState(null);             // the over-60 card: {name, iso, left, top, up}
   const [notes, setNotes] = useState({});           // comments on shifts: {"<ISO day>|<name>": {text, by, at}}
   const [confirms, setConfirms] = useState({});     // "not in Route Tracker" answers
@@ -880,8 +883,12 @@ function Board() {
   const markOf = (name, day) => (view.marks || []).find((x) => x.name === name && x.day === day);
   // search + sort: by tier (Top/Solid first, as the builder groups them) or A-Z
   const shown = view.drivers.filter((x) => (!q.trim() || fold(x.name).includes(fold(q.trim())))
-    && dayF.every((day) => worksOn(x, day)));
-  const filtered = q.trim() || dayF.length;
+    && (!bkOnly ? dayF.every((day) => worksOn(x, day))
+      : dayF.length ? dayF.every((day) => bkOn(x, day)) : view.days.some((y) => bkOn(x, y.day))));
+  const filtered = q.trim() || dayF.length || bkOnly;
+  const nobody = !bkOnly ? `${q.trim() ? `No driver matches “${q}”` : 'Nobody'}${dayF.length ? ` working ${dayF.join(' + ')}` : ''}.`
+    : !q.trim() && !dayF.length ? 'No backups this week.'
+    : `${q.trim() ? `No driver matches “${q}” on backup` : 'Nobody on backup'} ${dayF.length ? dayF.join(' + ') : 'this week'}.`;
   const toggleDay = (day) => setDayF((f) => (f.includes(day) ? f.filter((y) => y !== day)
     : view.days.map((y) => y.day).filter((y) => y === day || f.includes(y))));
   const groups = sortBy === 'name'
@@ -976,10 +983,14 @@ function Board() {
         <div class="seg" role="group" aria-label="Show only drivers working on these days">
           <button class=${dayF.length ? '' : 'on'} onClick=${() => setDayF([])}>All days</button>
           ${view.days.filter((x) => x.open).map((x) => html`<button class=${dayF.includes(x.day) ? 'on' : ''}
-            aria-pressed=${dayF.includes(x.day)} title=${`Only drivers with a shift on ${x.day} ${shortDate(x.date)}`}
+            aria-pressed=${dayF.includes(x.day)} title=${`Only drivers ${bkOnly ? 'on backup' : 'with a shift'} on ${x.day} ${shortDate(x.date)}`}
             onClick=${() => toggleDay(x.day)}>${x.day}</button>`)}
         </div>
-        ${dayF.length > 1 ? html`<span class="muted">working all ${dayF.length} days</span>` : ''}
+        <div class="seg" role="group" aria-label="Show only drivers on backup">
+          <button class=${bkOnly ? 'on' : ''} aria-pressed=${bkOnly} onClick=${() => setBkOnly((b) => !b)}
+            title=${dayF.length ? 'Only drivers on backup every picked day' : 'Only drivers with a backup day this week'}>Backups only</button>
+        </div>
+        ${dayF.length > 1 ? html`<span class="muted">${bkOnly ? 'on backup' : 'working'} all ${dayF.length} days</span>` : ''}
       </div>
 
       <div class="scroll-x lv-wrap"><table class="lv-grid">
@@ -997,7 +1008,7 @@ function Board() {
           <th title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
         </tr></thead>
         <tbody>${!shown.length ? html`<tr><td colspan=${nCols} class="muted" style="text-align:left">
-            ${q.trim() ? `No driver matches “${q}”` : 'Nobody'}${dayF.length ? ` working ${dayF.join(' + ')}` : ''}.</td></tr>` : ''}
+            ${nobody}</td></tr>` : ''}
           ${groups.map((g) => html`
             ${g.meta ? html`<tr class="tier-sep"><td colspan=${nCols}><span class="chip ${g.meta.chip}">${g.meta.label}</span>
               <span class="muted"> · ${g.rows.length}</span></td></tr>` : ''}

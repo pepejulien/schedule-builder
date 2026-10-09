@@ -152,7 +152,8 @@ export function overRisk(d, days, today, lim) {
 // upcoming days shake. Fixes: a day off that brings every such stretch back to the max (two days
 // off if one isn't enough) -- or, keeping the 6 days, ways to stay under the 7-day hours max
 // (Jose 2026-10-07): make a route day a backup, or keep every route day ahead under N hours
-// (clock-out time per day from its wave). runs = the worked days of each bad stretch. null = fine.
+// (clock-out time per day from its wave; a backup day with a wave counts too, "if sent out" --
+// outs[].bk, 2026-10-08). runs = the worked days of each bad stretch. null = fine.
 export function runRisk(d, days, today, lim) {
   const maxDays = (lim && lim.max_days_in_7) || 5;
   const dh = d.day_hours || {};
@@ -193,14 +194,18 @@ export function runRisk(d, days, today, lim) {
   }));
   const drive = hot.filter((iso) => isDrive(cellOf(iso)));
   for (const iso of drive) fixes.push({ kind: 'backup', dates: [iso], worst: worstH({ ...dh, [iso]: bkH }) });
+  // the cap counts every day that could turn into a route: route days, and backup days with a
+  // wave time ("10:25 AM Backup") in case they're sent out (Jose 2026-10-08) -- each as a full day
+  const isBk = (v) => /^\d{1,2}:\d{2} [AP]M/.test(v) && /Backup/.test(v) && !/meeting/i.test(v);
+  const sendable = hot.filter((iso) => isDrive(cellOf(iso)) || isBk(cellOf(iso)));
   let hoursOk = false;            // even max-length days stay under the hours max
-  if (drive.length) {
+  if (sendable.length) {
     let cap = Infinity;
     for (const s of starts) {
       let fixed = 0, n = 0;
       for (let k = 0; k < 7; k++) {
         const iso = sh(s, k);
-        if (drive.includes(iso)) n++;
+        if (sendable.includes(iso)) n++;
         else fixed += Number(dh[iso] || 0);
       }
       if (n) cap = Math.min(cap, (maxH - fixed) / n);
@@ -208,15 +213,14 @@ export function runRisk(d, days, today, lim) {
     cap = Math.floor(cap * 2) / 2;               // whole or half hours, rounded down
     hoursOk = cap >= maxDay;
     if (cap >= 1 && cap < maxDay) {
-      const capped = { ...dh };
-      drive.forEach((iso) => { capped[iso] = Math.min(Number(dh[iso] || 0) || cap, cap); });
-      const outs = drive.map((iso) => {
+      const outs = sendable.map((iso) => {
+        const bk = isBk(cellOf(iso)) ? { bk: true } : {};
         const m = cellOf(iso).match(/^(\d{1,2}):(\d{2}) ([AP]M)/);
-        if (!m) return { date: iso, by: null };
+        if (!m) return { date: iso, by: null, ...bk };
         const mins = ((+m[1] % 12) + (m[3] === 'PM' ? 12 : 0)) * 60 + +m[2];
-        return { date: iso, by: clockOutBy(mins, cap).by };
+        return { date: iso, by: clockOutBy(mins, cap).by, ...bk };
       });
-      fixes.push({ kind: 'cap', dates: drive, hours: cap, outs, worst: worstH({ ...dh, ...Object.fromEntries(drive.map((x) => [x, cap])) }) });
+      fixes.push({ kind: 'cap', dates: sendable, hours: cap, outs, worst: worstH({ ...dh, ...Object.fromEntries(sendable.map((x) => [x, cap])) }) });
     }
   }
   const top = bad.reduce((a, x) => (x.got.length > a.got.length ? x : a));
@@ -269,9 +273,14 @@ export function riskCardHtml(d, risk, iso, foot = '✓ = already worked. Click a
     const safe = r.fixes.filter((f) => f.kind === 'backup' || f.kind === 'cap');
     const offLi = (f) => `<li>Take ${f.dates.map((x) => `<b>${wkd(x)}</b>`).join(' and ')} off — give that shift to someone else`
       + ' <span class="muted">(a backup counts as a day worked too)</span></li>';
+    // backup days are in the cap too, "if sent out" (Jose 2026-10-08)
+    const capIntro = (f) => { const nb = f.outs.filter((o) => o.bk).length;
+      return !nb ? `Keep every route day to <b>${f.hours}h or less</b>`
+        : nb === f.outs.length ? `If ${first} is sent out on a backup day, keep it to <b>${f.hours}h or less</b>`
+        : `Keep every route day, and any backup day ${first} is sent out, to <b>${f.hours}h or less</b>`; };
     const safeLi = (f) => (f.kind === 'backup'
       ? `<li>Make <b>${wkd(f.dates[0])}</b> a backup (${r.bkH || 2}h) instead of a route <span class="muted">→ most in 7 days ${f.worst}h</span></li>`
-      : `<li>Keep every route day to <b>${f.hours}h or less</b> — ${f.outs.map((o) => `${short(o.date).replace(/ .*/, '')}${o.by != null ? ` clock out by <b>${hm(o.by)}</b>` : ''}`).join(', ')}`
+      : `<li>${capIntro(f)} — ${f.outs.map((o) => `${short(o.date).replace(/ .*/, '')}${o.bk && !f.outs.every((x) => x.bk) ? ' <i>(backup, if sent out)</i>' : ''}${o.by != null ? ` clock out by <b>${hm(o.by)}</b>` : ''}`).join(', ')}`
         + ` <span class="muted">→ most in 7 days ${f.worst}h</span></li>`);
     const wins = (r.wins || []).filter((w, i, a) => a.findIndex((v) => v.got.join() === w.got.join()) === i);
     parts.push(`<div class="ov-card"><div class="ov-title">${esc(d.name)} works ${longest} days in 7 (usual max ${r.maxDays})</div>`
