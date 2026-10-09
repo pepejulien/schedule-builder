@@ -87,7 +87,7 @@ const eq = (name, a, b) => ok(name, JSON.stringify(a) === JSON.stringify(b), `${
 // empty prefs / no prefs -> no keys at all
 for (const [label, extra] of [['none', {}], ['empty doc', { driverPrefs: { v: 1, drivers: {} }, weekTimeoff: {} }]]) {
   const c = assembleConfig({ ...state, ...extra }).config;
-  for (const k of ['extra_unavailable', 'driver_max_days', 'driver_max_row', 'keep_together', 'prefer_days']) {
+  for (const k of ['extra_unavailable', 'driver_max_days', 'driver_max_row', 'keep_together', 'prefer_days', 'like_days']) {
     ok(`${label}: ${k} absent`, !(k in c));
   }
 }
@@ -128,6 +128,22 @@ eq('info.limits Daniel', out.prefsInfo.limits['Daniel Lynch'], { maxDays: 4 });
 eq('info.off note kept', out.prefsInfo.off['Daniel Lynch'].Wed, { why: 'timeoff', note: 'dentist' });
 eq('info.limits Grace (together)', out.prefsInfo.limits['Grace Nolan'], { maxRow: 2, together: true });
 eq('info.limits Cara (weekend on Sat)', out.prefsInfo.limits['Cara Amos'], { weekend: { on: ['Sat'] } });
+// like_days (very soft): roster-matched, closed Fri + this week's days off dropped, excluded skipped
+const lk = assembleConfig({ ...state, weekTimeoff, driverPrefs: { v: 1, drivers: {
+  'Daniel Lynch': { days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], likeDays: ['Sun', 'Wed', 'Thu', 'Fri'] },  // Sun can't, Wed asked off, Fri closed
+  'grace nolan': { likeDays: ['Sat', 'Mon', 'Tue'] },
+  'Colin Drake': { likeDays: ['Fri'] },                                              // only a closed day -> nothing
+  'Zackary McDonald': { likeDays: ['Mon'] },                                         // excluded
+  'Nobody Here': { likeDays: ['Tue'] },                                              // not on the roster
+} } });
+eq('like_days', lk.config.like_days, { 'Daniel Lynch': ['Thu'], 'Grace Nolan': ['Mon', 'Tue', 'Sat'], 'Nobody Here': ['Tue'] });
+eq('like_days info.limits', lk.prefsInfo.limits['Grace Nolan'], { likes: ['Mon', 'Tue', 'Sat'] });
+eq('like_days info.limits Daniel', lk.prefsInfo.limits['Daniel Lynch'], { likes: ['Thu'] });
+ok('like_days: closed-only driver has no entry', !lk.prefsInfo.limits['Colin Drake']);
+ok('like_days: unmatched listed', lk.prefsInfo.unmatched.includes('Nobody Here'));
+ok('like_days absent when none', !('like_days' in out.config));
+const lkAll = assembleConfig({ ...state, driverPrefs: { v: 1, drivers: { 'Daniel Lynch': { likeDays: ['Fri'] } } } });
+ok('like_days: only closed days -> key absent', !('like_days' in lkAll.config));
 const PREFS_W = "Couldn't read driver preferences — this build doesn't use them.";
 const TIME_W = "Couldn't read the days off asked for this week — check the connection, then build again.";
 ok('ok reads: no failure warnings', !out.warnings.includes(PREFS_W) && !out.warnings.includes(TIME_W));
@@ -135,7 +151,7 @@ ok('ok reads: no failure warnings', !out.warnings.includes(PREFS_W) && !out.warn
 const pf = assembleConfig({ ...state, driverPrefs: null, weekTimeoff, driverPrefsFailed: true });
 eq('prefs failed: only time off', pf.config.extra_unavailable,
   { 'Daniel Lynch': { Wed: 'timeoff' }, 'Bianca Cole': { Sun: 'timeoff' }, 'Someone Else': { Tue: 'timeoff' } });
-ok('prefs failed: no prefs keys', ['driver_max_days', 'driver_max_row', 'keep_together', 'prefer_days'].every((k) => !(k in pf.config)));
+ok('prefs failed: no prefs keys', ['driver_max_days', 'driver_max_row', 'keep_together', 'prefer_days', 'like_days'].every((k) => !(k in pf.config)));
 ok('prefs failed: prefs warning only', pf.warnings.includes(PREFS_W) && !pf.warnings.includes(TIME_W));
 // time-off read failed, prefs fine -> prefs still apply, no 'timeoff' days
 const tf = assembleConfig({ ...state, driverPrefs, weekTimeoff: null, timeoffFailed: true });

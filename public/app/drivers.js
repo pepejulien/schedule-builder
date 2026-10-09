@@ -1,4 +1,4 @@
-// Drivers page (2026-10-09): each driver's standing preferences — days they can work, most days a
+// Drivers page (2026-10-09): each driver's standing preferences — days they can work (and would like to), most days a
 // week / in a row, every other weekend, keep days together, a note. The weekly build reads these;
 // the Live board deep-links here with setState({ route: 'drivers', driversOpen: '<name>' }).
 import { html } from './preact-setup.js';
@@ -122,6 +122,7 @@ function formFrom(pref) {
   if (p.weekends) on = sats.find((s) => weekendOn(p, s) === true) || sats[0];
   return {
     days: p.days ? [...p.days] : [...DAYS],
+    likeDays: p.likeDays ? [...p.likeDays] : [],
     maxDays: p.maxDays ? String(p.maxDays) : '',
     maxRow: p.maxRow ? String(p.maxRow) : '',
     alternate: !!p.weekends,
@@ -134,6 +135,7 @@ function formFrom(pref) {
 function prefFrom(f) {
   return {
     days: f.days,
+    likeDays: f.likeDays.filter((d) => f.days.includes(d)),
     maxDays: f.maxDays ? Number(f.maxDays) : null,
     maxRow: f.maxRow ? Number(f.maxRow) : null,
     together: f.together || undefined,
@@ -146,7 +148,13 @@ function Editor({ name, pref, onSaved, onClose }) {
   const [f, setF] = useState(() => formFrom(pref));
   const [busy, setBusy] = useState(false);
   const set = (patch) => setF((x) => ({ ...x, ...patch }));
-  const toggleDay = (d) => set({ days: f.days.includes(d) ? f.days.filter((x) => x !== d) : DAYS.filter((x) => x === d || f.days.includes(x)) });
+  const toggleDay = (d) => (f.days.includes(d)
+    ? set({ days: f.days.filter((x) => x !== d), likeDays: f.likeDays.filter((x) => x !== d) })
+    : set({ days: DAYS.filter((x) => x === d || f.days.includes(x)) }));
+  const toggleLike = (d) => {
+    if (!f.days.includes(d)) return;
+    set({ likeDays: f.likeDays.includes(d) ? f.likeDays.filter((x) => x !== d) : DAYS.filter((x) => x === d || f.likeDays.includes(x)) });
+  };
   const saved = normPref(pref);
 
   const write = async (p, msg) => {
@@ -180,6 +188,17 @@ function Editor({ name, pref, onSaved, onClose }) {
             <input type="checkbox" class="dv-sr" checked=${on} onChange=${() => toggleDay(d)} />${d}</label>`;
         })}</div>
         <div class="hint dv-h">Leave all on if any day is fine.</div>
+      </div>
+
+      <div class="dv-lab">Days they'd like to work</div>
+      <div>
+        <div class="row dv-days">${DAYS.map((d) => {
+          const can = f.days.includes(d);
+          const on = can && f.likeDays.includes(d);
+          return html`<label class=${'chip ' + (on ? 'blue' : 'gray') + (can ? '' : ' dv-dis')}>
+            <input type="checkbox" class="dv-sr" checked=${on} disabled=${!can} onChange=${() => toggleLike(d)} />${d}</label>`;
+        })}</div>
+        <div class="hint dv-h">A light nudge only. Everything else comes first.</div>
       </div>
 
       <label class="dv-lab" for="dv-md">Most days a week</label>

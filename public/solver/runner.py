@@ -1812,7 +1812,7 @@ def load_state(payload_json):
             dr.setdefault("unav_why", {})
             dr.setdefault("max_days", None)
             dr.setdefault("max_row", None)
-        for k, v in (("prefs_unmatched", []), ("KEEPT", set()), ("PREFD", {})):
+        for k, v in (("prefs_unmatched", []), ("KEEPT", set()), ("PREFD", {}), ("LIKED", {})):
             if not hasattr(res, k):
                 setattr(res, k, v)
         res.cfg["out"] = p.get("out") or res.cfg.get("out") or "/work/live.xlsx"

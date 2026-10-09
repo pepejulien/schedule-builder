@@ -37,6 +37,12 @@ eq('weekend Sun snaps to Sat before', normPref({ weekends: { mode: 'alternate', 
 eq('weekend Wed snaps to its Sat', normPref({ weekends: { mode: 'alternate', on: '2026-10-14' } }).weekends.on, '2026-10-17');
 eq('note trimmed', normPref({ note: '  school  ' }), { note: 'school' });
 eq('blank note dropped', normPref({ note: '   ' }), null);
+eq('likeDays sorted + deduped + bad dropped', normPref({ likeDays: ['Fri', 'mon', 'Mon', 'Funday'] }), { likeDays: ['Mon', 'Fri'] });
+eq('likeDays empty dropped', normPref({ likeDays: [] }), null);
+eq('likeDays all 7 dropped', normPref({ likeDays: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] }), null);
+eq('likeDays outside days dropped', normPref({ days: ['Mon', 'Tue', 'Wed'], likeDays: ['Tue', 'Sat'] }), { days: ['Mon', 'Tue', 'Wed'], likeDays: ['Tue'] });
+eq('likeDays all outside days', normPref({ days: ['Mon', 'Tue'], likeDays: ['Sat'] }), { days: ['Mon', 'Tue'] });
+eq('likeDays not array', normPref({ likeDays: 'Mon' }), null);
 eq('by/at kept with content', normPref({ maxDays: 3, by: 'J', at: 'T' }), { maxDays: 3, by: 'J', at: 'T' });
 
 // weekendOn — alternates both ways from `on`
@@ -94,6 +100,10 @@ eq('sum few days', prefSummary({ days: ['Mon', 'Thu'] }), ['Mon, Thu only']);
 eq('sum one day', prefSummary({ days: ['Sat'] }), ['Sat only']);
 eq('sum all', prefSummary({ days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], maxDays: 4, maxRow: 2, together: true, weekends: alt.weekends }),
   ['Mon–Fri only', '4 days max', '2 in a row max', 'Days together', 'Every other weekend']);
+eq('sum likes few', prefSummary({ likeDays: ['Mon', 'Tue'] }), ['Likes Mon, Tue']);
+eq('sum likes run', prefSummary({ likeDays: ['Mon', 'Tue', 'Wed', 'Thu'] }), ['Likes Mon–Thu']);
+eq('sum likes gap', prefSummary({ likeDays: ['Mon', 'Wed', 'Thu'] }), ['Likes Mon, Wed, Thu']);
+eq('sum likes last', prefSummary({ likeDays: ['Sat'], maxDays: 3, weekends: alt.weekends }), ['3 days max', 'Every other weekend', 'Likes Sat']);
 eq('sum 1 day max', prefSummary({ maxDays: 1 }), ['1 day max']);
 eq('sum null', prefSummary(null), []);
 

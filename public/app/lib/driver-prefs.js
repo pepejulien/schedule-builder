@@ -10,6 +10,8 @@
 //   maxRow?: 1..5         most days in a row (1 = every other day, 2 = 2 on 1 off)
 //   together?: true       soft: keep their days next to each other
 //   weekends?: { mode: 'alternate', on: 'YYYY-MM-DD' }   `on` = a Saturday of one of their ON weekends
+//   likeDays?: ['Mon', ...]   very soft: days they'd LIKE to work (only days inside `days`; all 7 = no
+//                             preference, so dropped). A light placement nudge only; every other rule wins.
 //   note?: string
 //   by?: string, at?: ISO string   who/when last changed (set by saveDriverPref)
 // }
@@ -52,6 +54,11 @@ export function normPref(p) {
   const w = p.weekends;
   if (w && typeof w === 'object' && w.mode === 'alternate' && isISO(w.on)) {
     out.weekends = { mode: 'alternate', on: satOf(w.on) };   // a non-Saturday snaps to its weekend's Saturday
+  }
+  if (Array.isArray(p.likeDays)) {
+    const set = new Set(p.likeDays.map((d) => String(d).trim().slice(0, 3).toLowerCase()));
+    const like = DAYS.filter((d) => set.has(d.toLowerCase()) && (!out.days || out.days.includes(d)));
+    if (like.length > 0 && like.length < 7) out.likeDays = like;
   }
   const note = typeof p.note === 'string' ? p.note.trim().slice(0, 300) : '';
   if (note) out.note = note;
@@ -141,6 +148,13 @@ export function prefSummary(pref) {
   if (p.maxRow) out.push(`${p.maxRow} in a row max`);
   if (p.together) out.push('Days together');
   if (p.weekends) out.push('Every other weekend');
+  if (p.likeDays) {
+    const idx = p.likeDays.map((d) => DAYS.indexOf(d));
+    const run = idx[idx.length - 1] - idx[0] + 1 === idx.length;
+    out.push(run && p.likeDays.length >= 3
+      ? `Likes ${p.likeDays[0]}–${p.likeDays[p.likeDays.length - 1]}`
+      : `Likes ${p.likeDays.join(', ')}`);
+  }
   return out;
 }
 
