@@ -25,6 +25,13 @@
 > only, a 6-day and overtime go through after a pop-up (`confirm_limits`). Cells use Amazon's
 > own scheduling colors; trainers show as Trainer (Amazon's Helper color).
 
+> **Roster bookmark (2026-10-09, Firebase only):** the Live board's **🧾 Roster to Amazon** link is a
+> bookmark (drag it to the bookmarks bar) that loads `roster.js` into Amazon's Dispatch → *Edit route
+> assignment* page and fills each route's Select DA box with that day's route drivers + trainees
+> (`app/roster-send.js`, the app opened as `#roster=YYYY-MM-DD`, hands them over by postMessage to
+> logistics.amazon.com only). It never presses Save. Spec: `docs/roster-bookmarklet.md`; test:
+> `node tests/roster_send_test.mjs`.
+
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's
 inputs, click **Build**, download the finished `Week-NN-Schedule.xlsx`.

@@ -1,0 +1,257 @@
+<!doctype html>
+<!--
+  TEST ONLY — a stand-in for Amazon's Dispatch "Edit assignments" screen, built from
+  docs/amazon-roster-dom.md, so public/roster.js can be run end to end on this PC.
+
+  Serve it on its own port (a different origin from the app), e.g.
+      python -m http.server 8791 --directory tests/roster_mock
+  and the app with the mock JAJB:
+      python tests/live_mock/serve.py            (http://localhost:8777)
+  Then open http://localhost:8791/dispatch.html?date=2026-10-10 , click "Edit assignments",
+  and press "Run the bookmark (test)". The app origin needs
+  localStorage['jajb-roster-test-origin'] = 'http://localhost:8791' and a Live board week
+  (see tests/roster_mock/README.md).
+
+  Options: ?legacy=1 (Legacy view on), ?search=x (search box not empty),
+  ?app=http://localhost:8777/ (where roster.js is loaded from).
+  window.__jajbRosterTest = true tells roster.js to skip the logistics.amazon.com check.
+  window.__mock.log lists every toolbar click (Save changes / Auto-roster Vehicle / Cancel).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dispatch (mock)</title>
+<script>window.__jajbRosterTest = true;</script>
+<style>
+  body{font:14px/1.4 system-ui,sans-serif;margin:0;background:#f4f5f7;color:#16191f}
+  .mockbar{background:#7a1f1f;color:#fff;padding:6px 12px;font-weight:600}
+  .mockbar button{margin-left:10px}
+  header{display:flex;gap:16px;align-items:center;padding:10px 16px;background:#fff;border-bottom:1px solid #ddd}
+  header .date{display:flex;gap:6px;align-items:center}
+  header .date p{margin:0;font-weight:600}
+  .toolbar{display:flex;gap:8px;padding:10px 16px}
+  .banner{margin:0 16px 8px;padding:8px 12px;background:#dbeafe;border-radius:6px;display:flex;gap:12px;align-items:center}
+  .cycle{margin:0 16px;padding:8px;background:#fff;border:1px solid #ddd;display:flex;gap:12px}
+  .cycle p{margin:0}
+  .wavehead{margin:8px 16px 0;padding:6px 8px;background:#eef;cursor:pointer}
+  .wavehead p{display:inline;margin:0 8px 0 0}
+  table{margin:0 16px 8px;border-collapse:collapse;background:#fff;width:calc(100% - 32px)}
+  td,th{border:1px solid #e3e3e3;padding:4px 6px;text-align:left;vertical-align:top}
+  [mdn-input-box]{position:relative;display:flex;gap:4px;align-items:center;border:1px solid #999;border-radius:4px;padding:2px 4px;width:260px}
+  [mdn-input-box] input{width:70px;border:0;outline:0}
+  [mdn-select-value]{flex:1;color:#333}
+  [role=alert]{color:#b00020;font-size:12px}
+  [role=listbox]{position:absolute;background:#fff;border:1px solid #888;max-height:260px;overflow:auto;width:280px;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+  [role=listbox] [role=presentation]{display:block;font-size:11px;font-weight:700;color:#555;padding:4px 6px;background:#f0f0f0}
+  [role=option]{display:block;width:100%;text-align:left;border:0;background:#fff;padding:3px 6px;cursor:pointer}
+  [role=option] p{margin:0}
+  [role=option]:hover{background:#eef}
+  .saved{background:#b00020;color:#fff;padding:8px 16px;font-weight:700}
+</style>
+</head>
+<body>
+<div class="mockbar">MOCK of Amazon Dispatch (test page) <button id="runbm">Run the bookmark (test)</button> <span id="mocklog"></span></div>
+<header>
+  <label><input type="checkbox" role="switch" id="legacy"> Legacy view</label>
+  <input id="search-field-1" placeholder="Search associates, routes">
+  <div class="date"><button aria-label="Previous day">‹</button><p>Saturday, October 10, 2026</p><button aria-label="Next day">›</button></div>
+  <div role="button" aria-controls="menu--r9-" aria-expanded="false">Help</div><div id="menu--r9-" hidden>help menu (no table)</div>
+</header>
+<div class="toolbar" id="toolbar"></div>
+<div id="bannerslot"></div>
+<div class="cycle"><p>CYCLE 1</p><p>3 waves</p><span>Routes pending</span><p id="totalroutes"></p></div>
+<div id="waves"></div>
+
+<script>
+(function () {
+  "use strict";
+  const params = new URLSearchParams(location.search);
+  const APP = params.get("app") || "http://localhost:8777/";
+  const log = [];
+  window.__mock = { log };
+  const note = (s) => { log.push(s); document.getElementById("mocklog").textContent = "toolbar clicks: " + log.join(", "); };
+
+  // Amazon's eligible list for the day (aria-label names, raw — some with double spaces)
+  const PEOPLE = [
+    ["Adam James Scott", "A-ADAM", "29.1h/60h"], ["Amy  Early", "A-AMY", "12.0h/60h"], ["Barry Len Hughes", "A-BARRY", "30.3h/60h"],
+    ["Bea Ready", "A-BEA", "20.0h/60h"], ["Cara Amos", "A-CARA", "31.0h/60h"], ["Carl  Dee Fox", "A-CARL", "18.5h/60h"],
+    ["Dora Moss", "A-DORA", "22.2h/60h"], ["Eli  Grant", "A-ELI", "40.0h/60h"], ["Hank Hours", "A-HANK", "58.9h/60h"],
+    ["José Núñez", "A-JOSE", "10.0h/60h"], ["Michael  Rowe", "T-MIKE", "33.0h/60h"], ["Olga  Pre", "A-OLGA", "9.0h/60h"],
+    ["Pat Quinn", "A-PAT", "28.0h/60h"], ["Sam K Lee", "A-SAMK", "15.0h/60h"], ["Sam Lee", "A-SAM", "16.0h/60h"],
+    ["Steven  Dale Heilmann", "A-STEVE", "30.3h/60h"], ["Tina Trainee", "A-TINA", "8.0h/60h"],
+  ].sort((a, b) => a[0].localeCompare(b[0]));
+  const POOL = PEOPLE.map(([name, tid, h]) => ({ transporterId: tid, name, complianceHours: 60, actualHours: parseFloat(h),
+    currentlyRosteredTo: [], serviceAreaId: "mock", stationTag: "WWV9" }));
+  const HOURS = Object.fromEntries(PEOPLE.map((p) => [p[0], p[2]]));
+
+  // saved state (what Amazon has before Edit): two waves with pre-assigned rows
+  const SAVED = [
+    { label: "10:25 AM", das: ["Olga  Pre", "Pat Quinn", null, null, null] },
+    { label: "10:45 AM", das: [null, null, "Steven  Dale Heilmann", null, null, null, null, null] },
+    { label: "11:05 AM", das: [null, null] },
+  ];
+  let waves = SAVED.map((w) => ({ label: w.label, rows: w.das.map((da) => ({ da })) }));
+  let editing = false, idn = 100;
+  const uid = (p) => `${p}--r${(idn++).toString(36)}-`;
+  const later = (fn) => setTimeout(fn, 25);              // React-like async commit
+
+  // ?frame=1: for browsers without pop-ups (the built-in preview turns window.open into a same-tab
+  // navigation). An iframe named "jajbRoster" is where roster.js's own
+  // window.open(APP + "#roster=…", "jajbRoster", …) lands instead of a new window.
+  if (params.get("frame") === "1") {
+    const f = document.createElement("iframe");
+    f.name = "jajbRoster"; f.title = "app window (test)";
+    f.style.cssText = "position:fixed;left:8px;bottom:8px;width:440px;height:260px;border:2px dashed #7a1f1f;background:#fff;z-index:5";
+    document.body.appendChild(f);
+  }
+  // the date picker shows the URL's day, like Amazon's
+  if (/^\d{4}-\d{2}-\d{2}$/.test(params.get("date") || "")) {
+    const [y, m, d] = params.get("date").split("-").map(Number);
+    document.querySelector('button[aria-label="Previous day"]').parentElement.querySelector("p").textContent =
+      new Date(y, m - 1, d).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  }
+  if (params.get("legacy") === "1") document.getElementById("legacy").checked = true;
+  if (params.get("search")) document.getElementById("search-field-1").value = params.get("search");
+  document.getElementById("runbm").onclick = () => {
+    const s = document.createElement("script");
+    s.src = APP + "roster.js?" + Date.now();
+    document.body.appendChild(s);
+  };
+
+  /* ---------- toolbar ---------- */
+  function toolbar() {
+    const tb = document.getElementById("toolbar"); tb.innerHTML = "";
+    const bslot = document.getElementById("bannerslot"); bslot.innerHTML = "";
+    const b = (t, fn, dis) => { const e = document.createElement("button"); e.textContent = t; e.onclick = fn; if (dis) e.disabled = true; tb.appendChild(e); return e; };
+    if (!editing) { b("Edit assignments", () => { editing = true; build(); }); return; }
+    b("Cancel", () => { note("Cancel"); editing = false; waves = SAVED.map((w) => ({ label: w.label, rows: w.das.map((da) => ({ da })) })); closeAll(); build(); });
+    const save = b("Save changes", () => { note("SAVE CHANGES"); const d = document.createElement("div"); d.className = "saved"; d.textContent = "SAVED (mock) — roster.js must never do this"; document.body.prepend(d); });
+    save.id = "savebtn";
+    const ban = document.createElement("div"); ban.className = "banner";
+    ban.innerHTML = 'Editing assignments — changes are saved when you click "Save changes" ';
+    const ar = document.createElement("button"); ar.textContent = "Auto-roster Vehicle"; ar.onclick = () => note("AUTO-ROSTER");
+    ban.appendChild(ar); bslot.appendChild(ban);
+    refreshSave();
+  }
+  function refreshSave() {
+    const s = document.getElementById("savebtn"); if (!s) return;
+    const changed = waves.some((w, i) => w.rows.some((r, j) => r.da !== SAVED[i].das[j]));
+    const alerts = waves.some((w) => w.rows.some((r) => r.alert));
+    s.disabled = !changed || alerts;
+  }
+
+  /* ---------- waves + rows ---------- */
+  function build() {
+    closeAll();
+    const root = document.getElementById("waves"); root.innerHTML = "";
+    let total = 0;
+    waves.forEach((w) => {
+      total += w.rows.length;
+      const exId = uid("expandable");
+      const head = document.createElement("div");
+      head.className = "wavehead";
+      head.setAttribute("role", "button"); head.setAttribute("aria-expanded", "true");
+      head.setAttribute("aria-controls", exId); head.setAttribute("aria-label", `${w.label}  - ${w.rows.length} routes`);
+      head.innerHTML = `<span mdn-expander-title><div><div><p>${w.label}</p><p></p><p>${w.rows.length} routes</p></div></div></span>`;
+      const hid = document.createElement("div"); hid.setAttribute("aria-hidden", "false");
+      hid.innerHTML = `<div id="${exId}"><div><table data-mdn-table aria-label="Dispatch routes"><thead><tr><th>Route</th><th>Service Type</th><th>Duration</th><th>DA</th><th>Staging</th><th>Vehicle</th><th>Asset</th><th></th></tr></thead><tbody></tbody></table></div></div>`;
+      head.onclick = () => { const ex = head.getAttribute("aria-expanded") === "true"; head.setAttribute("aria-expanded", String(!ex)); hid.querySelector("table").style.display = ex ? "none" : ""; };
+      const tb = hid.querySelector("tbody");
+      w.rows.forEach((r) => {
+        const tr = document.createElement("tr");
+        tr.setAttribute("role", "row"); tr.setAttribute("data-mdn-table-row", ""); tr.setAttribute("aria-level", "1");
+        tr.innerHTML = `<td><div><div><div><p><span>—</span></p></div></div></div></td><td>Standard Parcel - Extra Large Van - US</td><td>10h</td><td class="da"></td><td>—</td><td>—</td><td>—</td><td>⋮</td>`;
+        r.tr = tr; tb.appendChild(tr);
+        drawDA(r);
+      });
+      root.append(head, hid);
+    });
+    document.getElementById("totalroutes").textContent = total + " routes";
+    toolbar();
+  }
+
+  function drawDA(r) {
+    const td = r.tr.querySelector("td.da");
+    if (!editing) { td.innerHTML = `<div data-tour-anchor="da-hours"><div><p mdn-text>${r.da || "—"}</p></div></div>`; r.inp = null; return; }
+    if (!r.inp) {
+      const sid = uid("select");
+      td.innerHTML = `<div data-tour-anchor="da-hours"><div mdn-input-box id="${sid}"><input role="combobox" aria-label="Select DA" aria-haspopup="listbox" aria-expanded="false" aria-autocomplete="list" placeholder="Select DA" value=""><div mdn-select-value id="${sid}-value">Select DA</div></div><div class="alertslot"></div></div>`;
+      const inp = r.inp = td.querySelector("input");
+      inp["__reactFiber$mock1"] = { memoizedProps: { "aria-label": "Select DA" }, return: { memoizedProps: { daPool: POOL, rosterId: "NEW_0", currentDriver: null, assignedTransporterIds: new Set() } } };
+      inp.addEventListener("input", () => later(() => openList(r, inp.value)));
+      inp.addEventListener("click", () => later(() => openList(r, inp.value)));
+      inp.addEventListener("keydown", (e) => { if (e.key === "Escape") later(() => { closeList(r); inp.value = ""; }); });
+    }
+    const box = td.querySelector("[mdn-input-box]");
+    box.querySelector("[mdn-select-value]").textContent = r.da || "Select DA";
+    let clr = box.querySelector("button[data-clear-btn]");
+    if (r.da && !clr) {
+      clr = document.createElement("button");
+      clr.setAttribute("data-clear-btn", ""); clr.setAttribute("aria-label", "Clear DA assignment"); clr.textContent = "×";
+      clr.onclick = (e) => { e.stopPropagation(); later(() => { r.da = null; recompute(); }); };
+      box.appendChild(clr);
+    } else if (!r.da && clr) clr.remove();
+    td.querySelector(".alertslot").innerHTML = r.alert ? `<div role="alert">${r.alert}</div>` : "";
+  }
+
+  const allRows = () => waves.flatMap((w) => w.rows);
+  function recompute() {
+    const count = {};
+    for (const r of allRows()) if (r.da) count[r.da] = (count[r.da] || 0) + 1;
+    for (const r of allRows()) {
+      r.alert = r.da && count[r.da] > 1 ? "Assigned to an overlapping block"
+        : r.da === "Hank Hours" && SAVED.every((w) => !w.das.includes("Hank Hours")) ? "Over the weekly hours limit" : null;
+      if (r.tr) drawDA(r);
+    }
+    refreshSave();
+  }
+
+  /* ---------- the portaled list ---------- */
+  let openFor = null;
+  function closeList(r) {
+    const inp = r.inp; if (!inp) return;
+    const lb = document.getElementById(inp.getAttribute("aria-controls") || "");
+    inp.setAttribute("aria-expanded", "false"); inp.removeAttribute("aria-controls");
+    if (lb) setTimeout(() => lb.remove(), 200);          // close animation: stays a moment
+    if (openFor === r) openFor = null;
+  }
+  function closeAll() { for (const r of allRows()) if (r.inp) closeList(r); }
+  function openList(r, q) {
+    if (openFor && openFor !== r) closeList(openFor);
+    const inp = r.inp;
+    const old = document.getElementById(inp.getAttribute("aria-controls") || "");
+    if (old) old.remove();
+    const id = uid("options-list");
+    inp.setAttribute("aria-expanded", "true"); inp.setAttribute("aria-controls", id);
+    openFor = r;
+    const used = new Set(allRows().filter((x) => x !== r && x.da).map((x) => x.da));
+    const match = PEOPLE.map((p) => p[0]).filter((n) => n.toLowerCase().includes(q.toLowerCase()));
+    if (!match.length) return;                            // Amazon: no listbox element at all
+    const lb = document.createElement("div");
+    lb.setAttribute("role", "listbox"); lb.id = id;
+    const rect = inp.getBoundingClientRect();
+    lb.style.left = (rect.left + scrollX) + "px"; lb.style.top = (rect.bottom + scrollY + 4) + "px";
+    const group = (title, names) => {
+      if (!names.length) return;
+      const g = document.createElement("div"); g.setAttribute("role", "group");
+      g.innerHTML = `<span role="presentation">${title}</span>`;
+      for (const n of names) {
+        const o = document.createElement("button");
+        o.setAttribute("role", "option"); o.setAttribute("aria-label", n); o.setAttribute("aria-selected", "false"); o.setAttribute("mdn-option-list-item", "");
+        o.innerHTML = `<div><p><strong>${n}</strong></p><p>${HOURS[n]}</p></div>`;
+        o.onclick = () => later(() => { r.da = n; inp.value = ""; closeList(r); recompute(); });
+        g.appendChild(o);
+      }
+      lb.appendChild(g);
+    };
+    group("Available", match.filter((n) => !used.has(n)));
+    group("Assigned to an overlapping block", match.filter((n) => used.has(n)));
+    document.body.appendChild(lb);
+  }
+
+  build();
+})();
+</script>
+</body>
+</html>

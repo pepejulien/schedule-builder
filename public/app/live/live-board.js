@@ -32,6 +32,11 @@ import {
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
+// Roster bookmark (2026-10-09, docs/roster-bookmarklet.md): the link only injects roster.js (next to
+// index.html, absolute, cache-busted), so fixing roster.js fixes every computer's bookmark.
+const ROSTER_BOOKMARK = () => `javascript:(function(){var s=document.createElement('script');s.src='${
+  new URL('roster.js', location.href.split('#')[0]).href}?'+Date.now();document.body.appendChild(s);})();`;
+const ROSTER_HOWTO = 'Drag this button onto your bookmarks bar. Then on Amazon: Dispatch → pick the day → Edit route assignment → click the bookmark. It fills the DA boxes; you check and press Save changes.';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 // the discipline engine's driver key: first|last, letters only (attendance records use it)
 const nameKey = (s) => { const t = String(s || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean); return t.length ? t[0] + '|' + t[t.length - 1] : ''; };
@@ -558,6 +563,7 @@ function Board() {
   const [marker, setMarker] = useState(null);  // {name, day, kind}
   const [confirm, setConfirm] = useState(null);
   const [limit, setLimit] = useState(null);     // the overtime pop-up
+  const [rosterTip, setRosterTip] = useState(false);   // the Roster to Amazon how-to (2026-10-09)
   const [opts, setOpts] = useState(null);       // add_options for the driver whose day/week is open
   const [finder, setFinder] = useState({ day: null, role: 'road' });
   const [showLog, setShowLog] = useState(false);
@@ -1185,8 +1191,11 @@ function Board() {
           <button class="small" disabled=${!ready} onClick=${downloadXlsx}>${Icon('download', 15)} Workbook</button>
           <button class="small" onClick=${() => download(new TextEncoder().encode(driverCsv(view, data.meta.label)).buffer,
             `Week-${data.meta.num}-Driver-Notices.csv`, 'text/csv')}>${Icon('download', 15)} Driver notices</button>
+          <a class="btn-small" href=${ROSTER_BOOKMARK()} title=${ROSTER_HOWTO} draggable="true"
+            onClick=${(e) => { e.preventDefault(); setRosterTip((t) => !t); }}>🧾 Roster to Amazon</a>
         </div>
       </div>
+      ${rosterTip ? html`<${Banner} kind="info">${ROSTER_HOWTO}<//>` : ''}
 
       <div class="row lv-tools">
         <input type="search" placeholder="Search a driver…" value=${q} onInput=${(e) => setQ(e.target.value)}
