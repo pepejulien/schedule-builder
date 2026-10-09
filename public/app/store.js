@@ -24,7 +24,8 @@ function freshWizard() {
 
 let state = {
   auth: 'unknown',                 // 'unknown' | 'in' | 'out'
-  route: 'home',                   // 'home' | 'wizard' | 'settings' | 'live'
+  route: 'home',                   // 'home' | 'wizard' | 'settings' | 'live' | 'drivers'
+  driversOpen: null,               // a driver name: the Drivers page opens their editor, then clears this
   wizard: freshWizard(),
   toast: null,
 };
