@@ -7,7 +7,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, toast } from '../store.js';
 import { Spinner } from '../ui.js';
 import { canTimeoff, watchTimeoff, saveTimeoff, clearTimeoff } from '../api.js';
-import { loadDriverPrefs, loadDriverRoster, weekUnavailable, WHY_LABEL, prefSummary } from '../lib/driver-prefs.js';
+import { loadDriverPrefs, loadDriverRoster, saveDriverPref, weekUnavailable, WHY_LABEL, prefSummary } from '../lib/driver-prefs.js';
 import { DAYS } from '../lib/waves.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 import { SHIFT_COLORS, todayISO } from './live-model.js';
@@ -21,6 +21,7 @@ const when = (iso) => (iso ? new Date(iso).toLocaleString('en-US',
   { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'just now');
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const SAVE_ERR = "Couldn't save — check your connection and try again.";
+const FULL_DAY = { Sun: 'Sunday', Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday' };
 const openDriver = (name) => setState({ route: 'drivers', driversOpen: name });
 
 // The roster read goes through the newest published week: kept for a few minutes, so moving
@@ -32,13 +33,14 @@ function rosterOnce() {
 }
 
 // The card anchored under a clicked day.
-function DayMenu({ week, m, canEdit, onClose }) {
+function DayMenu({ week, m, canEdit, prefs, onPrefs, onClose }) {
   const { name, day, date, rec, why } = m;
   const first = name.split(/\s+/)[0];
   const dayTxt = `${day} ${shortDate(date)}`;
   const [form, setForm] = useState(!why);        // the note box + save button
   const [note, setNote] = useState(rec && rec.note ? rec.note : '');
   const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState(false);  // "won't be scheduled on any Wednesday" check
   const alive = useRef(true);
   const inp = useRef(null);
   useEffect(() => () => { alive.current = false; }, []);
@@ -56,6 +58,35 @@ function DayMenu({ week, m, canEdit, onClose }) {
     rec ? 'Note saved' : `${first} marked off ${dayTxt}`);
   const remove = () => go(() => clearTimeoff(week, rec.name, date), `${first}'s day off on ${dayTxt} removed`);
 
+  // Standing "can't work this weekday" — the same as unticking the day on Driver preferences.
+  // Saved under the spelling the prefs doc already has, so no duplicate entry.
+  const prefKey = Object.keys((prefs && prefs.drivers) || {}).find((k) => nkey(k) === nkey(name)) || null;
+  const cur = prefKey ? prefs.drivers[prefKey] : null;
+  const prefName = prefKey || (rec ? rec.name : name);
+  const full = FULL_DAY[day] || day;
+  const setDays = async (days, ok, after) => {
+    if (saving) return;
+    setSaving(true);
+    let doc;
+    try { doc = await saveDriverPref(prefName, { ...(cur || {}), days }); }
+    catch { toast(SAVE_ERR, 'err'); if (alive.current) setSaving(false); return; }
+    onPrefs(doc);
+    if (after) { try { await after(); } catch { /* harmless: the preference covers it */ } }
+    toast(ok);
+    onClose();
+  };
+  const repeat = () => {
+    const days = (cur && cur.days && cur.days.length ? cur.days : DAYS).filter((d) => d !== day);
+    if (!days.length) { toast('That would leave no days they can work.', 'err'); return; }
+    setDays(days, `${first} can't work ${full}s from now on`,
+      why === 'timeoff' && rec ? () => clearTimeoff(week, rec.name, date) : null);
+  };
+  const canAgain = () => {
+    const base = cur && cur.days && cur.days.length ? cur.days : DAYS;
+    setDays(DAYS.filter((d) => d === day || base.includes(d)), `${first} can work ${full}s again`, null);
+  };
+  const repeatBtn = html`<button class="small" disabled=${saving} onClick=${() => setConfirm(true)}>Repeat every ${day}</button>`;
+
   return html`<div class="fw-menu" role="dialog" aria-label=${`${name}, ${dayTxt}`} style=${m.style}>
     <div class="fw-menu-head"><b>${name}</b> <span class="muted">${dayTxt}</span>
       <button class="dm-x fw-x" aria-label="Close" onClick=${onClose}>×</button></div>
@@ -65,6 +96,12 @@ function DayMenu({ week, m, canEdit, onClose }) {
     ${why === 'days' || why === 'weekend' ? html`<div class="fw-menu-info">
       <b>${WHY_LABEL[why]}</b> — from their preferences</div>` : ''}
     ${!canEdit ? html`<p class="muted" style="margin:6px 0 0">Days off are entered on the JAJB site.</p>`
+      : confirm ? html`<div class="fw-menu-form">
+        <p style="margin:6px 0 8px">${first} won't be scheduled on any ${full} from now on — same as unticking ${day} on Driver preferences.</p>
+        <div class="row">
+          <button class="small primary" disabled=${saving} onClick=${repeat}>${saving ? 'Saving…' : `Yes, every ${full}`}</button>
+          <button class="small ghost" disabled=${saving} onClick=${() => setConfirm(false)}>Cancel</button>
+        </div></div>`
       : form ? html`<div class="fw-menu-form">
         ${!rec ? html`<div class="fw-menu-title">Mark ${first} off ${dayTxt}</div>` : ''}
         <input ref=${inp} type="text" maxlength="300" placeholder="Note (optional)" value=${note} disabled=${saving}
@@ -72,14 +109,17 @@ function DayMenu({ week, m, canEdit, onClose }) {
           onKeyDown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } else if (e.key === 'Escape') onClose(); }} />
         <div class="row">
           <button class="small primary" disabled=${saving} onClick=${save}>${saving ? 'Saving…' : rec ? 'Save note' : 'Mark day off'}</button>
+          ${!why ? repeatBtn : ''}
           ${why ? html`<button class="link" disabled=${saving} onClick=${() => setForm(false)}>Cancel</button>` : ''}
         </div></div>`
       : why === 'timeoff' ? html`<div class="row fw-menu-acts">
         <button class="small" disabled=${saving} onClick=${remove}>${saving ? 'Saving…' : 'Remove'}</button>
-        <button class="small" disabled=${saving} onClick=${() => setForm(true)}>Edit note</button></div>`
+        <button class="small" disabled=${saving} onClick=${() => setForm(true)}>Edit note</button>
+        ${repeatBtn}</div>`
       : html`<div class="row fw-menu-acts">
-        <button class="small" onClick=${() => openDriver(name)}>Edit preferences</button>
-        <button class="small" onClick=${() => setForm(true)}>Mark day off anyway</button></div>`}
+        ${why === 'days' ? html`<button class="small" disabled=${saving} onClick=${canAgain}>${saving ? 'Saving…' : `Can work ${full}s again`}</button>` : ''}
+        <button class="small" disabled=${saving} onClick=${() => openDriver(name)}>Edit preferences</button>
+        <button class="small" disabled=${saving} onClick=${() => setForm(true)}>Mark day off anyway</button></div>`}
   </div>`;
 }
 
@@ -207,7 +247,7 @@ export function FutureWeek({ week, label }) {
         </tbody>
       </table></div>
       ${live ? html`<div ref=${menuEl}><${DayMenu} key=${live.name + '|' + live.date + '|' + (live.why || '')} week=${week} m=${live}
-        canEdit=${canEdit} onClose=${() => setMenu(null)} /></div>` : ''}
+        canEdit=${canEdit} prefs=${prefs} onPrefs=${setPrefs} onClose=${() => setMenu(null)} /></div>` : ''}
     </div>
     <div class="lv-legend">
       <span class="lv-sw" style=${`background:${SHIFT_COLORS.off}`}>${WHY_LABEL.timeoff}</span>
