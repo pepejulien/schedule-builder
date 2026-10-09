@@ -1,7 +1,8 @@
 // Assemble the solver config JSON from the wizard state, encoding the SKILL.md
 // tier-policy ladder. This is the correctness heart of the app.
 import { portalToSchedule } from './waves.js';
-import { preflightNames, resolveFuzzy } from './names.js';
+import { preflightNames, resolveFuzzy, matchName } from './names.js';
+import { normPref, weekUnavailable, onWeekendDays } from './driver-prefs.js';
 
 export const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -95,6 +96,10 @@ function dayWaves(rows) {
 //   trainerHistory:{ weekStartISO:[[trainer, trainee, day]] },
 //   advanced:{ free_primary_cap, max_primary_days, weekly_hours_cap, ... },
 //   priorWeekAvailable:bool,
+//   driverPrefs:{v:1, drivers:{name: Pref}} | null,      Drivers page (lib/driver-prefs.js)
+//   weekTimeoff:{"<ISO>|<name>": {name, day, note}} | null, this week's requested days off
+//   driverPrefsFailed:bool,                                 the read failed: build without them
+//   nameAliases:{ [normName]: rosterName },                 confirmed name matches (optional)
 // }
 export function assembleConfig(state) {
   const warnings = [];
@@ -224,6 +229,12 @@ export function assembleConfig(state) {
     backupField = { backup_pct: Number(state.backups?.pct ?? 0.15) };
   }
 
+  // --- Driver preferences + requested days off (2026-10-09) ---
+  // Names map to this week's roster spelling when they match one driver; the rest
+  // go through as-is (the solver skips + lists them, never a strict_names error).
+  const prefs = buildPrefKeys(state, roster, exclude, bench);
+  if (state.driverPrefsFailed) warnings.push("Couldn't read driver preferences — this build doesn't use them.");
+
   // --- config object ---
   const config = {
     week_label: state.week?.label || '',
@@ -271,6 +282,11 @@ export function assembleConfig(state) {
   const wknCap = Number(adv.max_weekend_days);
   if (Number.isFinite(wknCap) && wknCap > 0) config.max_weekend_days = wknCap;
   if (adv.merge_standing_unavailable && config.prefs_csv) config.merge_standing_unavailable = true;
+  // Drivers-page keys: only when non-empty. NOT part of the name pre-flight below.
+  for (const k of ['extra_unavailable', 'driver_max_days', 'driver_max_row', 'prefer_days']) {
+    if (Object.keys(prefs[k]).length) config[k] = prefs[k];
+  }
+  if (prefs.keep_together.length) config.keep_together = prefs.keep_together;
 
   // --- name pre-flight (mirror the solver's strict_names) ---
   const allNames = [
@@ -286,7 +302,63 @@ export function assembleConfig(state) {
   ];
   const nameProblems = preflightNames([...new Set(allNames)], roster);
 
-  return { config, warnings, nameProblems };
+  return { config, warnings, nameProblems, prefsInfo: prefs.info };
+}
+
+// The solver keys from the Drivers page + this week's time off, plus what the
+// review card shows: info = { off: {name: {Day: {why, note?}}}, limits: {name: {maxDays?, maxRow?}},
+// unmatched: [name] } (unmatched = not on this week's roster; excluded / benched are left out).
+function buildPrefKeys(state, roster, exclude, bench) {
+  const out = { extra_unavailable: {}, driver_max_days: {}, driver_max_row: {}, keep_together: [],
+    prefer_days: {}, info: { off: {}, limits: {}, unmatched: [] } };
+  const startISO = state.week?.startISO;
+  const doc = state.driverPrefs;
+  const timeoff = state.weekTimeoff;
+  if (state.driverPrefsFailed || !startISO || (!doc && !timeoff)) return out;
+  const aliases = state.nameAliases || {};
+  const toRoster = (n) => matchName(n, roster, aliases).match || String(n).trim();
+  const onRoster = new Set(roster);
+  const unmatched = new Set();
+  const take = (n) => {                     // roster name to use, or null to skip (excluded / benched)
+    const r = toRoster(n);
+    if (exclude.has(r) || bench.has(r)) return null;
+    if (!onRoster.has(r)) unmatched.add(r);
+    return r;
+  };
+
+  for (const [nm, days] of Object.entries(weekUnavailable(doc, timeoff, startISO))) {
+    const r = take(nm);
+    if (!r) continue;
+    const eu = (out.extra_unavailable[r] = out.extra_unavailable[r] || {});
+    const inf = (out.info.off[r] = out.info.off[r] || {});
+    for (const [d, v] of Object.entries(days)) {
+      if (eu[d] === 'timeoff' && v.why !== 'timeoff') continue;   // a requested day off wins
+      eu[d] = v.why;
+      inf[d] = v;
+    }
+  }
+  const keep = new Set();
+  for (const [nm, raw] of Object.entries((doc && doc.drivers) || {})) {
+    const p = normPref(raw);
+    if (!p) continue;
+    const onW = onWeekendDays(p, startISO);
+    if (!p.maxDays && !p.maxRow && !p.together && !onW.length) continue;
+    const r = take(nm);
+    if (!r) continue;
+    const lim = (k, v) => {
+      if (!v) return;
+      out[k][r] = out[k][r] == null ? v : Math.min(out[k][r], v);
+      const L = (out.info.limits[r] = out.info.limits[r] || {});
+      L[k === 'driver_max_days' ? 'maxDays' : 'maxRow'] = out[k][r];
+    };
+    lim('driver_max_days', p.maxDays);
+    lim('driver_max_row', p.maxRow);
+    if (p.together) keep.add(r);
+    if (onW.length) out.prefer_days[r] = [...new Set([...(out.prefer_days[r] || []), ...onW])];
+  }
+  out.keep_together = [...keep];
+  out.info.unmatched = [...unmatched].sort();
+  return out;
 }
 
 // Capacity sanity check (SKILL.md): can the fixed groups + free pool reach the

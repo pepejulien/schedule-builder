@@ -7,12 +7,40 @@ import { Banner } from '../ui.js';
 import { assembleFromWizard } from '../build-inputs.js';
 import { DAYS } from '../lib/waves.js';
 import { AdvancedPanel } from './advanced-panel.js';
+import { WHY_LABEL } from '../lib/driver-prefs.js';
+
+const PREFS_FAILED = "Couldn't read driver preferences — this build doesn't use them.";
+
+// "From Driver preferences": what the Drivers page + requested days off put
+// into this week's build.
+function PrefsCard({ info, loaded, failed }) {
+  if (failed) return html`<div class="card"><h3>From Driver preferences</h3><${Banner} kind="warn">${PREFS_FAILED}<//></div>`;
+  if (!loaded) return html`<div class="card"><h3>From Driver preferences</h3><p class="muted">Loading driver preferences…</p></div>`;
+  const notOn = new Set(info.unmatched);
+  const off = Object.entries(info.off).filter(([n]) => !notOn.has(n));
+  const limits = Object.entries(info.limits).filter(([n]) => !notOn.has(n));
+  const why = (v) => (WHY_LABEL[v.why] || v.why).toLowerCase();
+  const limitText = (L) => [L.maxDays ? `${L.maxDays} day${L.maxDays === 1 ? '' : 's'} max` : '',
+    L.maxRow ? `${L.maxRow} in a row max` : ''].filter(Boolean).join(', ');
+  const nothing = !off.length && !limits.length && !notOn.size;
+  return html`<div class="card">
+    <h3>From Driver preferences</h3>
+    ${nothing ? html`<p class="muted">No driver preferences or days off for this week.</p>` : ''}
+    ${off.length ? html`<p><span class="chip gray">Days off (Unavailable)</span></p><ul>
+      ${off.map(([n, days]) => html`<li>${n} — ${DAYS.filter((d) => days[d]).map((d) => `${d} (${why(days[d])})`).join(', ')}</li>`)}</ul>` : ''}
+    ${limits.length ? html`<p><span class="chip blue">Limits</span></p><ul>
+      ${limits.map(([n, L]) => html`<li>${n} — ${limitText(L)}</li>`)}</ul>` : ''}
+    ${notOn.size ? html`<p class="muted">Not on this week's roster: ${[...notOn].join(', ')}</p>` : ''}
+  </div>`;
+}
 
 export function Step8Review() {
   const wizard = useStore((s) => s.wizard);
   const [showJson, setShowJson] = useState(false);
   const embedded = useContext(Embedded);
-  const { config, nameProblems, capacity, warnings } = assembleFromWizard(wizard);
+  const { config, nameProblems, capacity, warnings: allWarnings, prefsInfo } = assembleFromWizard(wizard);
+  const warnings = allWarnings.filter((w) => w !== PREFS_FAILED);   // shown in the prefs card instead
+  const prefsLoaded = !!wizard.driverPrefs && wizard.weekTimeoffISO === wizard.week.startISO;
   const roster = wizard.availability?.rosterNames || [];
 
   const opDays = DAYS.filter((d) => config.waves[d]);
@@ -77,6 +105,7 @@ export function Step8Review() {
         ${showJson ? html`<pre class="log">${JSON.stringify(config, null, 2)}</pre>` : ''}
       </div>
     </div>
+    <${PrefsCard} info=${prefsInfo} loaded=${prefsLoaded} failed=${!!wizard.driverPrefsFailed} />
     <${AdvancedPanel} roster=${roster} />
     ${!embedded ? html`<div class="card">
       <${StepNav} canNext=${canBuild} nextLabel="Build schedule" />

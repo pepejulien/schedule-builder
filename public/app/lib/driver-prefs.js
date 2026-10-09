@@ -165,6 +165,13 @@ export async function loadDriverPrefs() {
   } catch { return emptyDoc(); }
 }
 
+// Same as loadDriverPrefs, except a failed read THROWS — the weekly build uses it so it can say
+// "couldn't read driver preferences" instead of quietly building without them.
+export async function readDriverPrefs() {
+  const { storeGet } = await import('../api.js');
+  return cleanDoc(await storeGet(PREFS_KEY));
+}
+
 // Save one driver's preference (null / nothing left = remove them). Reads the doc again first so two
 // dispatchers editing different drivers don't undo each other; a failed read throws instead of
 // writing over everyone. Returns the new doc.
