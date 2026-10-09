@@ -51,9 +51,9 @@ export async function ensureStanding() {
 
 // Load the Drivers-page preferences and this week's requested days off into
 // the build. Prefs are read every call (they change on another page); time off
-// is re-read when the week changes or force is set. A failed prefs read never
-// blocks a build: it sets driverPrefsFailed (the review shows a warning) and
-// the build runs without them.
+// is re-read when the week changes, after a failed read, or with force. A
+// failed read never blocks a build: it sets driverPrefsFailed / timeoffFailed
+// (the review shows a warning) and the build runs with whatever did load.
 let prefsLoading = null;
 export function ensureDriverPrefs({ force = false } = {}) {
   if (prefsLoading) return prefsLoading.then(() => ensureDriverPrefs({ force }));
@@ -65,11 +65,13 @@ export function ensureDriverPrefs({ force = false } = {}) {
     try { const a = await storeGet('standing/aliases.json'); if (a && typeof a === 'object') aliases = a; } catch { /* keep */ }
     const patch = { driverPrefs: doc, driverPrefsFailed: failed, nameAliases: aliases };
     const w = getState().wizard;
-    if (weekISO && (force || w.weekTimeoffISO !== weekISO || !w.weekTimeoff)) {
-      let t = {};
-      try { t = await timeoffOnce(weekISO); } catch { t = {}; }
-      patch.weekTimeoff = t || {};
+    if (weekISO && (force || w.timeoffFailed || w.weekTimeoffISO !== weekISO || !w.weekTimeoff)) {
+      let t = null;
+      try { t = await timeoffOnce(weekISO); } catch { t = null; }
+      // a failed read is not cached as loaded: the next call tries again
+      patch.weekTimeoff = t;
       patch.weekTimeoffISO = weekISO;
+      patch.timeoffFailed = !t;
     }
     setWizard(patch);
   })().finally(() => { prefsLoading = null; });

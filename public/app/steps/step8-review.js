@@ -8,24 +8,30 @@ import { assembleFromWizard } from '../build-inputs.js';
 import { DAYS } from '../lib/waves.js';
 import { AdvancedPanel } from './advanced-panel.js';
 import { WHY_LABEL } from '../lib/driver-prefs.js';
+import { PREFS_FAILED_MSG, TIMEOFF_FAILED_MSG } from '../lib/config-assemble.js';
 
-const PREFS_FAILED = "Couldn't read driver preferences — this build doesn't use them.";
-
-// "From Driver preferences": what the Drivers page + requested days off put
-// into this week's build.
-function PrefsCard({ info, loaded, failed }) {
-  if (failed) return html`<div class="card"><h3>From Driver preferences</h3><${Banner} kind="warn">${PREFS_FAILED}<//></div>`;
-  if (!loaded) return html`<div class="card"><h3>From Driver preferences</h3><p class="muted">Loading driver preferences…</p></div>`;
+// "From Driver preferences": everything the Drivers page + requested days off
+// put into this week's build. A failed read of one source shows a warning; the
+// other source still applies.
+function PrefsCard({ info, loaded, prefsFailed, timeoffFailed }) {
   const notOn = new Set(info.unmatched);
   const off = Object.entries(info.off).filter(([n]) => !notOn.has(n));
   const limits = Object.entries(info.limits).filter(([n]) => !notOn.has(n));
   const why = (v) => (WHY_LABEL[v.why] || v.why).toLowerCase();
-  const limitText = (L) => [L.maxDays ? `${L.maxDays} day${L.maxDays === 1 ? '' : 's'} max` : '',
-    L.maxRow ? `${L.maxRow} in a row max` : ''].filter(Boolean).join(', ');
+  const limitText = (L) => [
+    L.maxDays ? `${L.maxDays} day${L.maxDays === 1 ? '' : 's'} max` : '',
+    L.maxRow ? `${L.maxRow} in a row max` : '',
+    L.together ? 'Days together' : '',
+    L.weekend ? (L.weekend.on.length ? `Every other weekend (on this weekend: ${L.weekend.on.join(', ')})`
+      : 'Every other weekend (off this weekend)') : '',
+  ].filter(Boolean).join(', ');
   const nothing = !off.length && !limits.length && !notOn.size;
   return html`<div class="card">
     <h3>From Driver preferences</h3>
-    ${nothing ? html`<p class="muted">No driver preferences or days off for this week.</p>` : ''}
+    ${prefsFailed ? html`<${Banner} kind="warn">${PREFS_FAILED_MSG}<//>` : ''}
+    ${timeoffFailed ? html`<${Banner} kind="warn">${TIMEOFF_FAILED_MSG}<//>` : ''}
+    ${!loaded ? html`<p class="muted">Loading driver preferences…</p>`
+      : nothing && !prefsFailed && !timeoffFailed ? html`<p class="muted">No driver preferences or days off for this week.</p>` : ''}
     ${off.length ? html`<p><span class="chip gray">Days off (Unavailable)</span></p><ul>
       ${off.map(([n, days]) => html`<li>${n} — ${DAYS.filter((d) => days[d]).map((d) => `${d} (${why(days[d])})`).join(', ')}</li>`)}</ul>` : ''}
     ${limits.length ? html`<p><span class="chip blue">Limits</span></p><ul>
@@ -39,8 +45,10 @@ export function Step8Review() {
   const [showJson, setShowJson] = useState(false);
   const embedded = useContext(Embedded);
   const { config, nameProblems, capacity, warnings: allWarnings, prefsInfo } = assembleFromWizard(wizard);
-  const warnings = allWarnings.filter((w) => w !== PREFS_FAILED);   // shown in the prefs card instead
-  const prefsLoaded = !!wizard.driverPrefs && wizard.weekTimeoffISO === wizard.week.startISO;
+  // the read-failure warnings show in the prefs card instead
+  const warnings = allWarnings.filter((w) => w !== PREFS_FAILED_MSG && w !== TIMEOFF_FAILED_MSG);
+  const prefsLoaded = (!!wizard.driverPrefs || !!wizard.driverPrefsFailed) && wizard.weekTimeoffISO === wizard.week.startISO;
+  const timeoffFailed = !!wizard.timeoffFailed && wizard.weekTimeoffISO === wizard.week.startISO;
   const roster = wizard.availability?.rosterNames || [];
 
   const opDays = DAYS.filter((d) => config.waves[d]);
@@ -105,7 +113,7 @@ export function Step8Review() {
         ${showJson ? html`<pre class="log">${JSON.stringify(config, null, 2)}</pre>` : ''}
       </div>
     </div>
-    <${PrefsCard} info=${prefsInfo} loaded=${prefsLoaded} failed=${!!wizard.driverPrefsFailed} />
+    <${PrefsCard} info=${prefsInfo} loaded=${prefsLoaded} prefsFailed=${!!wizard.driverPrefsFailed} timeoffFailed=${timeoffFailed} />
     <${AdvancedPanel} roster=${roster} />
     ${!embedded ? html`<div class="card">
       <${StepNav} canNext=${canBuild} nextLabel="Build schedule" />

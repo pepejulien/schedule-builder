@@ -273,13 +273,15 @@ export const canTimeoff = () => onFirebase() && typeof window.JAJB.watchSchedule
 export const watchTimeoff = (weekISO, cb) => (canTimeoff() ? window.JAJB.watchScheduleTimeoff(weekISO, cb) : (cb({}), () => {}));
 export const saveTimeoff = (weekISO, name, dayISO, note) => window.JAJB.saveScheduleTimeoff(weekISO, name, dayISO, note || '');
 export const clearTimeoff = (weekISO, name, dayISO) => window.JAJB.deleteScheduleTimeoff(weekISO, name, dayISO);
-// Once: the first snapshot, or {} when nothing comes back in time.
+// Once: the first snapshot ({} = really no days off), or null when the read failed or
+// nothing came back in time — so a failure never looks like "nobody asked off".
+// Netlify (no time off at all) is {}.
 export function timeoffOnce(weekISO, ms = 6000) {
   if (!canTimeoff()) return Promise.resolve({});
   return new Promise((resolve) => {
     let done = false, un = null;
-    const finish = (d) => { if (done) return; done = true; clearTimeout(t); setTimeout(() => un && un(), 0); resolve(d || {}); };
-    const t = setTimeout(() => finish({}), ms);
+    const finish = (d) => { if (done) return; done = true; clearTimeout(t); setTimeout(() => un && un(), 0); resolve(d && typeof d === 'object' ? d : null); };
+    const t = setTimeout(() => finish(null), ms);
     un = window.JAJB.watchScheduleTimeoff(weekISO, finish);
   });
 }

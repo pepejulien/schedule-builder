@@ -18,6 +18,7 @@ export function assembleFromWizard(w) {
     driverPrefs: w.driverPrefs || null,
     weekTimeoff: w.weekTimeoffISO && w.weekTimeoffISO === w.week.startISO ? (w.weekTimeoff || null) : null,
     driverPrefsFailed: !!w.driverPrefsFailed,
+    timeoffFailed: !!w.timeoffFailed && w.weekTimeoffISO === w.week.startISO,
     nameAliases: w.nameAliases || {},
   };
   const out = assembleConfig(state);

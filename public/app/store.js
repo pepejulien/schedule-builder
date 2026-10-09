@@ -22,6 +22,7 @@ function freshWizard() {
     weekTimeoff: null,             // live: requested days off for weekTimeoffISO
     weekTimeoffISO: null,
     driverPrefsFailed: false,      // the prefs read failed -> build without them, warn
+    timeoffFailed: false,          // the time-off read failed / timed out -> build without it, warn
     nameAliases: {},               // confirmed name matches (standing/aliases.json)
     build: { status: 'idle', report: null, xlsx: null, error: null, savedName: null },
   };
@@ -74,6 +75,7 @@ export function hydrateWizard(wizard) {
   merged.weekTimeoff = null;
   merged.weekTimeoffISO = null;
   merged.driverPrefsFailed = false;
+  merged.timeoffFailed = false;
   // A 'building' status saved mid-build has no live engine after a page reload,
   // so nothing would ever finish it — reset to 'idle' so the user sees the
   // Build button instead of a frozen spinner.

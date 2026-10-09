@@ -126,10 +126,27 @@ eq('no strict-name problems from prefs', out.nameProblems, []);
 eq('info.unmatched', out.prefsInfo.unmatched, ['Nobody Here', 'Someone Else']);
 eq('info.limits Daniel', out.prefsInfo.limits['Daniel Lynch'], { maxDays: 4 });
 eq('info.off note kept', out.prefsInfo.off['Daniel Lynch'].Wed, { why: 'timeoff', note: 'dentist' });
-// a failed read: no keys + the warning
-const failed = assembleConfig({ ...state, driverPrefs, weekTimeoff, driverPrefsFailed: true });
-ok('failed: no keys', !('extra_unavailable' in failed.config) && !('driver_max_days' in failed.config));
-ok('failed: warning', failed.warnings.some((w) => w.startsWith("Couldn't read driver preferences")));
+eq('info.limits Grace (together)', out.prefsInfo.limits['Grace Nolan'], { maxRow: 2, together: true });
+eq('info.limits Cara (weekend on Sat)', out.prefsInfo.limits['Cara Amos'], { weekend: { on: ['Sat'] } });
+const PREFS_W = "Couldn't read driver preferences — this build doesn't use them.";
+const TIME_W = "Couldn't read the days off asked for this week — check the connection, then build again.";
+ok('ok reads: no failure warnings', !out.warnings.includes(PREFS_W) && !out.warnings.includes(TIME_W));
+// prefs read failed, time off fine -> time off still applies, no prefs keys
+const pf = assembleConfig({ ...state, driverPrefs: null, weekTimeoff, driverPrefsFailed: true });
+eq('prefs failed: only time off', pf.config.extra_unavailable,
+  { 'Daniel Lynch': { Wed: 'timeoff' }, 'Bianca Cole': { Sun: 'timeoff' }, 'Someone Else': { Tue: 'timeoff' } });
+ok('prefs failed: no prefs keys', ['driver_max_days', 'driver_max_row', 'keep_together', 'prefer_days'].every((k) => !(k in pf.config)));
+ok('prefs failed: prefs warning only', pf.warnings.includes(PREFS_W) && !pf.warnings.includes(TIME_W));
+// time-off read failed, prefs fine -> prefs still apply, no 'timeoff' days
+const tf = assembleConfig({ ...state, driverPrefs, weekTimeoff: null, timeoffFailed: true });
+ok('time off failed: no timeoff days', Object.values(tf.config.extra_unavailable).every((d) => !Object.values(d).includes('timeoff')));
+eq('time off failed: prefs days still in', tf.config.extra_unavailable['Daniel Lynch'], { Sun: 'days' });
+eq('time off failed: caps still in', tf.config.driver_max_days, { 'Daniel Lynch': 4, 'Nobody Here': 3 });
+ok('time off failed: time-off warning only', tf.warnings.includes(TIME_W) && !tf.warnings.includes(PREFS_W));
+// both failed -> no keys, both warnings
+const bf = assembleConfig({ ...state, driverPrefsFailed: true, timeoffFailed: true });
+ok('both failed: no keys', !('extra_unavailable' in bf.config) && !('driver_max_days' in bf.config));
+ok('both failed: both warnings', bf.warnings.includes(PREFS_W) && bf.warnings.includes(TIME_W));
 
 // solver run input: Aaron Bell (works Wed without prefs) asks off Wed + a 4-day cap
 const sc = assembleConfig({ ...state, driverPrefs: { v: 1, drivers: { 'Aaron Bell': { maxDays: 4 } } },
