@@ -1059,7 +1059,10 @@ def _restore(res, snap):
     _STATE["ovr_limits"] = snap.get("ovr_limits", set())
     for k, x in (snap.get("rtx") or {}).items():          # sync_actual's add, as it was in that snapshot
         if k in (_STATE.get("rt") or {}):
-            _STATE["rt"][k]["extra"] = x
+            if isinstance(x, dict):                       # a route->backup: its count changes there
+                _STATE["rt"][k].update(x)
+            else:
+                _STATE["rt"][k]["extra"] = x
 
 
 def _routes_filled(res, day):
@@ -1913,6 +1916,11 @@ def clear_mark(payload_json):
 # role)}: not added again while Route Tracker still has it (no flip-flop). The sync
 # never goes on the undo stack: it is patched into every saved undo snapshot
 # instead, so a dispatcher's "Undo my last change" undoes their change, not the sync.
+# A plain ROUTE where Route Tracker has a BACKUP (no route from Amazon) becomes a
+# backup in the same wave: the day is one route fewer, a day whose backups were all
+# filled one backup more. rt keeps kind "swap" + the original cell and the count
+# changes (cut, bkx), and it goes back exactly when Route Tracker stops saying
+# backup - same "still exactly what sync put there" / rt_off rules (Jose 2026-10-08).
 _RT_TIME = re.compile(r'(\d{1,2}):(\d{2})\s*([AP]M)?', re.I)
 RT_OFF_WHY = "removed by hand on the schedule — still in Route Tracker"
 
@@ -1950,10 +1958,11 @@ def _rt_views(res):
     {(n, day): extra?} says whether the route sync put in IT was an extra one
     (the live grid's answer is in _STATE["rt"])."""
     yield dict(assign=res.roster, cell=res.cell, waves=res.waves, routes=res.routes,
-               edits=_STATE["edits"], marks=_STATE["marks"], rtx=None)
+               backup=res.backup, edits=_STATE["edits"], marks=_STATE["marks"], rtx=None)
     for s in _STATE["undo"]:
         yield dict(assign=s["assign"], cell=s["cell"], waves=s["waves"], routes=s["routes"],
-                   edits=s["edits"], marks=s.get("marks", {}), rtx=s.setdefault("rtx", {}))
+                   backup=s["backup"], edits=s["edits"], marks=s.get("marks", {}),
+                   rtx=s.setdefault("rtx", {}))
 
 
 def _rt_blank(v, i, n, day):
@@ -1996,6 +2005,51 @@ def _rt_take(v, i, n, day, pv, desc):
     v["edits"].append(desc)
 
 
+def _rt_on_route(v, i, n, day, orig):
+    """The view still has the plain route a route->backup starts from."""
+    a = v["assign"][i]
+    return (day in a["prim"] and day not in a["bk"] and n not in v["marks"].get(day, {})
+            and v["cell"].get(day, {}).get(i) == orig)
+
+
+def _rt_swap(v, i, day, w):
+    """Route -> backup in wave w. The wave / day loses the route Amazon didn't give
+    (never below what is still driven); a day whose backups were all filled gets one
+    more backup (no slot taken from anyone). -> {cut, bkx}: what it changed."""
+    cell, wv = v["cell"][day], v["waves"][day]
+    fw = sum(1 for x in cell.values() if "Backup" not in x and "TRAIN helper" not in x and _cell_wave(x) == w)
+    fd = sum(1 for x in cell.values() if "Backup" not in x and "TRAIN helper" not in x)
+    cut = 0 < wv.get(w, 0) and wv.get(w, 0) >= fw and v["routes"].get(day, 0) >= fd
+    bkx = sum(1 for x in cell.values() if "Backup" in x) >= v["backup"].get(day, 0)
+    a = v["assign"][i]
+    a["prim"].remove(day)
+    a["bk"].append(day)
+    cell[i] = w + " Backup"
+    if cut:
+        wv[w] -= 1
+        v["routes"][day] = v["routes"].get(day, 0) - 1
+        if not wv[w]:
+            del wv[w]
+    if bkx:
+        v["backup"][day] = v["backup"].get(day, 0) + 1
+    return dict(cut=cut, bkx=bkx)
+
+
+def _rt_unswap(v, i, n, day, pv, desc):
+    """Back to the original route, the counts as they were (this view's own)."""
+    x = pv if v["rtx"] is None else v["rtx"].pop((n, day), pv)
+    a = v["assign"][i]
+    a["bk"].remove(day)
+    a["prim"].append(day)
+    v["cell"][day][i] = pv["orig"]
+    if x["cut"]:
+        v["waves"][day][pv["wave"]] = v["waves"][day].get(pv["wave"], 0) + 1
+        v["routes"][day] = v["routes"].get(day, 0) + 1
+    if x["bkx"]:
+        v["backup"][day] = max(0, v["backup"].get(day, 0) - 1)
+    v["edits"].append(desc)
+
+
 def _rt_cell(res, i, dr, day):
     """(kind, cell text) of a driver's day: blank | mark | duty | training | road |
     backup | unavailable."""
@@ -2028,7 +2082,8 @@ def sync_actual(payload_json):
     role: 'backup'|'road', start?: 'HH:MM', code?}]} - EVERY driver-day Route
     Tracker has this week through today (one this op added that is missing from
     it is taken back off). Returns the usual report plus changed: bool and
-    data: {applied, removed, skipped, ignored}. No rule gate: those days
+    data: {applied, removed, skipped, ignored} (a route made a backup / put back:
+    kind 'swap', cell = the route). No rule gate: those days
     happened, and their hours already come from h_act."""
     try:
         p = json.loads(payload_json)
@@ -2107,18 +2162,24 @@ def sync_actual(payload_json):
             i, dr = _find(res, pv["name"])
             views = list(_rt_views(res))
             holds = dr is not None and _rt_holds(views[0], i, n, day, pv)
-            if (n, day) in present:
+            swap = pv.get("kind") == "swap"                       # a route sync made a backup
+            if ((n, day, "backup") in present_r) if swap else ((n, day) in present):
                 if not holds:
                     del rt[(n, day)]
                     rt_off.add((n, day, pv["role"]))
                 continue
             if holds:
-                desc = f"{dr['name']}: {_rt_text(pv, day)} removed (no longer in Route Tracker)"
+                if swap:
+                    why = ("Route Tracker has a route now" if (n, day) in present
+                           else "no longer a backup in Route Tracker")
+                    desc = f"{dr['name']}: {day} back on the {pv['wave']} route — {why}"
+                else:
+                    desc = f"{dr['name']}: {_rt_text(pv, day)} removed (no longer in Route Tracker)"
                 for v in views:
                     if _rt_holds(v, i, n, day, pv):
-                        _rt_take(v, i, n, day, pv, desc)
+                        (_rt_unswap if swap else _rt_take)(v, i, n, day, pv, desc)
                 removed.append(dict(name=dr["name"], date=pv["date"], day=day, role=pv["role"],
-                                    label=pv["label"]))
+                                    label=pv["label"], **(dict(kind="swap", cell=pv["orig"]) if swap else {})))
             del rt[(n, day)]
         rt_off &= present_r                                       # Route Tracker let go of it
 
@@ -2163,7 +2224,29 @@ def sync_actual(payload_json):
             if kind == "unavailable" and day in dr.get("std_added", set()):
                 why = "standing day off (from preferences)"
             if kind == "road" and role == "backup":
-                kind, why = "conflict", "scheduled on a route; Route Tracker has them as a backup"
+                w = _cell_wave(cell)
+                if (w and cell == w and day in dr["prim"] and day not in dr["bk"]
+                        and day not in dr["unav"] and w in res.waves.get(day, {})):
+                    # 3) a plain route, Route Tracker has a backup: Amazon had fewer routes
+                    pv = dict(name=dr["name"], role="backup", kind="swap", label=w + " Backup", wave=w,
+                              orig=cell, date=d.isoformat())
+                    views = list(_rt_views(res))
+                    pv.update(_rt_swap(views[0], i, day, w))
+                    desc = (f"{dr['name']}: {day} {w} route made a backup from Route Tracker (no route from Amazon; "
+                            f"{day} is {'now' if pv['cut'] else 'still'} {res.routes[day]} routes"
+                            f"{'; one more backup than planned' if pv['bkx'] else ''})")
+                    views[0]["edits"].append(desc)
+                    for v in views[1:]:
+                        if _rt_on_route(v, i, n, day, cell):
+                            v["rtx"][(n, day)] = _rt_swap(v, i, day, w)
+                            v["edits"].append(desc)
+                    rt[(n, day)] = pv
+                    applied.append(dict(name=dr["name"], date=d.isoformat(), day=day, role=role, wave=w,
+                                        label=pv["label"], extra=pv["bkx"], kind="swap", cell=cell,
+                                        code=e.get("code") or ""))
+                    continue
+                kind, why = "conflict", ("scheduled on a route; Route Tracker has them as a backup"
+                                         " (not a plain route here - change it by hand)")
             elif kind == "backup" and role == "road":
                 kind, why = "agree", "scheduled as a backup and sent out on a route (normal)"
             elif kind in ("road", "backup"):
