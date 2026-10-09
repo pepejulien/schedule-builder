@@ -13,8 +13,9 @@ import { html } from '../preact-setup.js';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
-import { liveRequest } from '../solver-client.js';
-import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, saveLiveConfirm, watchLiveAttendance, watchLiveLate, saveLiveLate } from '../api.js';
+import { liveRequest, warmup } from '../solver-client.js';
+import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, saveLiveConfirm, watchLiveAttendance, watchLiveLate, saveLiveLate,
+  watchLiveSummary, canWatchSummary } from '../api.js';
 import { MissingCheck } from './missing.js';
 import { routeDays } from './limits.js';
 import { driverCsv } from '../lib/driver-csv.js';
@@ -26,6 +27,7 @@ import {
 import {
   loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
   WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk, runRisk, riskCardHtml, roomOn, clockOutBy, missingDays, workedSig, actualList,
+  notePrevSummary, prevTailRev,
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 
@@ -527,7 +529,7 @@ export function LiveBoard() {
 function Board() {
   const [weeks, setWeeks] = useState(null);
   const [sel, setSel] = useState(null);
-  const [data, setData] = useState(null);      // {meta, summary, engineJson, rev}
+  const [data, setData] = useState(null);      // {meta, summary, rev, remote?} (engine state: engJson below)
   const [rep, setRep] = useState(null);        // the engine's report for data.rev
   const [eng, setEng] = useState({ status: 'idle', rev: null, error: null });
   const [metaLive, setMetaLive] = useState(null);
@@ -559,8 +561,18 @@ function Board() {
 
   // async work reads the newest values through refs
   const R = useRef({});
-  Object.assign(R.current, { sel, data, rep, eng, metaLive, busy });
+  Object.assign(R.current, { sel, data, rep, eng, metaLive, busy, weeks });
   const saving = useRef(false);
+  // Speed (2026-10-08): the grid shows a version as soon as it's known and the engine catches up
+  // behind it. data = {meta, summary, rev} on screen; the engine state saved with it is kept apart.
+  const engJson = useRef(null);      // {week, rev, json}: the saved engine state of a version
+  const smLive = useRef(null);       // {week, rev, json}: the newest summary doc from the watch
+  const engGen = useRef(0);          // bumped by every engine load: an older load never lands on a newer one
+  const engJob = useRef(null);       // the engine load in flight: {gen, week, promise}
+  const pendingSync = useRef(false); // an engine reload asked for while saving / loading: done right after
+  const toasted = useRef(0);         // the last rev announced as someone else's change
+  const lateT = useRef(null);
+  const pre = useRef(null);          // this week, read while the week list loads (the usual pick)
 
   async function refreshWeeks(pick) {
     try {
@@ -572,60 +584,213 @@ function Board() {
       }
     } catch (e) { setErr('Could not read the published weeks: ' + (e.message || e)); setWeeks([]); }
   }
-  useEffect(() => { refreshWeeks(true); }, []);
+  useEffect(() => {
+    warmup();   // the rules engine (Python) starts loading now, alongside the reads
+    const t = sundayOf(todayISO());
+    pre.current = { week: t, p: liveWeek(t).catch(() => null) };
+    refreshWeeks(true);
+    return () => { engGen.current++; clearTimeout(lateT.current); };
+  }, []);
 
+  // last week's rev as the week list showed it: null = not published, undefined = can't tell
+  const knownPrevRev = (week) => {
+    const pw = prevISO(week), ws = R.current.weeks;
+    if (!ws) return undefined;
+    const w = ws.find((x) => x.week === pw);
+    if (w) return w.rev;
+    return ws.length < 80 || ws.some((x) => x.week < pw) ? null : undefined;
+  };
+
+  const announce = (ml) => {
+    if (!ml || ml.rev <= toasted.current) return;
+    toasted.current = ml.rev;
+    toast(`${ml.by || 'Someone'} changed this week — showing the latest.`);
+  };
+
+  // A version of the week on screen. The grid draws its saved summary until the engine has it.
+  function show(week, nd, json) {
+    R.current.data = nd; setData(nd);
+    R.current.rep = null; setRep(null);
+    if (json != null) engJson.current = { week, rev: nd.rev, json };
+    if (nd.remote) { const ml = R.current.metaLive; if (ml && ml.rev === nd.rev) announce(ml); }
+  }
+
+  // Load the engine with the version on screen. One painted from the summary watch has no engine
+  // state yet: that doc is read first (the meta + summary docs come from the open listeners).
+  function syncEngine(week) {
+    if (R.current.sel !== week || !R.current.data) return Promise.resolve(false);
+    const gen = ++engGen.current;
+    R.current.eng = { status: 'loading', rev: null, error: null }; setEng(R.current.eng);
+    const p = (async () => {
+      try {
+        let nd = R.current.data;
+        let ej = engJson.current;
+        if (!ej || ej.week !== week || ej.rev !== nd.rev) {
+          let d = await liveWeek(week);
+          for (let i = 0; i < 2 && d && d.meta.rev < R.current.data.rev; i++) {   // a read older than the watch: again
+            await new Promise((r) => setTimeout(r, 400));
+            d = await liveWeek(week);
+          }
+          if (gen !== engGen.current || R.current.sel !== week) return false;
+          if (!d) throw new Error('That week is no longer on the Live board.');
+          nd = R.current.data;
+          if (d.meta.rev < nd.rev) throw new Error('That week is being changed right now - try again in a moment.');
+          if (d.meta.rev > nd.rev) { nd = { meta: d.meta, summary: JSON.parse(d.summary), rev: d.meta.rev, remote: true }; show(week, nd, d.engine); }
+          else engJson.current = { week, rev: d.meta.rev, json: d.engine };
+          ej = engJson.current;
+        }
+        const r = await loadEngine(week, ej.json, 'live', { summary: nd.summary, prevRev: knownPrevRev(week),
+          live: () => gen === engGen.current && R.current.sel === week });
+        if (!r || gen !== engGen.current || R.current.sel !== week || !R.current.data || R.current.data.rev !== nd.rev) return false;
+        R.current.rep = r; setRep(r);
+        R.current.eng = { status: 'ready', rev: nd.rev, error: null }; setEng(R.current.eng);
+        if (pendingSync.current && !saving.current) { pendingSync.current = false; syncEngine(week); }
+        return true;
+      } catch (e) {
+        if (gen === engGen.current && R.current.sel === week) {
+          R.current.eng = { status: 'error', rev: null, error: e.message || String(e) }; setEng(R.current.eng);
+        }
+        return false;
+      }
+    })();
+    engJob.current = { gen, week, promise: p };
+    return p;
+  }
+
+  // A save that reached the summary watch: on screen at once when it's newer than what's shown,
+  // then the engine loads it. true = it put one up.
+  function pullSummary(week, quiet) {
+    const doc = smLive.current, d = R.current.data;
+    if (!doc || doc.week !== week || !d || R.current.sel !== week || saving.current || doc.rev <= d.rev) return false;
+    let summary;
+    try { summary = JSON.parse(doc.json); } catch { return false; }
+    const ml = R.current.metaLive;
+    const meta = ml && ml.rev === doc.rev ? ml : { ...d.meta, rev: doc.rev };
+    if (quiet) toasted.current = Math.max(toasted.current, doc.rev);
+    show(week, { meta, summary, rev: doc.rev, remote: true });
+    syncEngine(week);
+    return true;
+  }
+
+  // The meta said there's a newer save but its summary hasn't come: give the watch a moment, then
+  // read the week (no watch on this login's bundle: read it now).
+  function laterOpen(week) {
+    if (!canWatchSummary()) { openWeek(week); return; }
+    clearTimeout(lateT.current);
+    lateT.current = setTimeout(() => {
+      const d = R.current.data, ml = R.current.metaLive;
+      if (R.current.sel !== week || !d || !ml || ml.rev <= d.rev || saving.current) return;
+      if (!pullSummary(week)) openWeek(week);
+    }, 3000);
+  }
+
+  // Route Tracker hours / a "they worked" answer / last week changed: reload the engine. The grid
+  // keeps what it shows until the new numbers are in.
+  function needSync(week) {
+    if (R.current.sel !== week) return;
+    const st = R.current.eng.status;
+    if (saving.current || st === 'loading') { pendingSync.current = true; return; }
+    if (st === 'ready') syncEngine(week);
+  }
+
+  // Read the whole week (meta + summary + engine state) and load it.
   async function openWeek(week) {
     try {
-      const d = await liveWeek(week);
+      const pf = pre.current && pre.current.week === week ? pre.current.p : null;
+      pre.current = null;
+      let d = pf ? await pf : null;
+      if (!d) d = await liveWeek(week);
       if (R.current.sel !== week) return;
       if (!d) { setErr('That week is no longer on the Live board.'); return; }
-      const nd = { meta: d.meta, summary: JSON.parse(d.summary), engineJson: d.engine, rev: d.meta.rev };
-      setData(nd); R.current.data = nd;
-      setRep(null);
-      setEng({ status: 'loading', rev: null, error: null });
-      const r = await loadEngine(week, d.engine);
-      if (R.current.sel !== week || R.current.data !== nd) return;
-      setRep(r); R.current.rep = r;
-      setEng({ status: 'ready', rev: nd.rev, error: null }); R.current.eng = { status: 'ready', rev: nd.rev };
+      const cur = R.current.data;
+      if (cur && cur.rev > d.meta.rev) return;   // a newer version is on screen already (its engine is loading)
+      if (cur && cur.rev === d.meta.rev) engJson.current = { week, rev: d.meta.rev, json: d.engine };
+      else show(week, { meta: d.meta, summary: JSON.parse(d.summary), rev: d.meta.rev }, d.engine);
+      if (pullSummary(week)) return;   // a save that came in while reading
+      const ml = R.current.metaLive;
+      if (ml && ml.rev > d.meta.rev) laterOpen(week);
+      await syncEngine(week);
     } catch (e) {
-      setEng({ status: 'error', rev: null, error: e.message || String(e) });
+      if (R.current.sel !== week) return;
+      R.current.eng = { status: 'error', rev: null, error: e.message || String(e) }; setEng(R.current.eng);
+      if (!R.current.data) setErr('Could not read the week: ' + (e.message || e));
     }
+  }
+
+  // run() edits only an engine that holds exactly the version on screen
+  async function ensureEngine(week) {
+    for (let i = 0; i < 4; i++) {
+      const d = R.current.data, e = R.current.eng;
+      if (!d || R.current.sel !== week) return false;
+      if (e.status === 'ready' && e.rev === d.rev) return true;
+      if (e.status === 'error' && i > 0) return false;
+      const job = engJob.current;
+      await (e.status === 'loading' && job && job.gen === engGen.current && job.week === week ? job.promise : syncEngine(week));
+    }
+    return false;
+  }
+
+  // after a save (ours, or one that failed): a save from someone else that came in meanwhile, and
+  // engine reloads asked for meanwhile
+  function catchUp(week) {
+    if (R.current.sel !== week || !R.current.data) return;
+    if (pullSummary(week)) return;
+    const ml = R.current.metaLive, d = R.current.data;
+    if (ml && ml.rev > d.rev) { laterOpen(week); return; }
+    if (ml && ml.rev === d.rev && d.meta !== ml) { const nd = { ...d, meta: ml }; R.current.data = nd; setData(nd); }
+    if (pendingSync.current && R.current.eng.status === 'ready') { pendingSync.current = false; syncEngine(week); }
   }
 
   useEffect(() => {
     if (!sel) return undefined;
     setData(null); setRep(null); setLog([]); setErr(''); setMetaLive(null);
     setEng({ status: 'idle', rev: null, error: null });
+    R.current.data = null; R.current.rep = null; R.current.metaLive = null; R.current.eng = { status: 'idle', rev: null, error: null };
+    engGen.current++; engJson.current = null; smLive.current = null; pendingSync.current = false; toasted.current = 0;
+    clearTimeout(lateT.current);
     openWeek(sel);
-    const un1 = watchLiveWeek(sel, (m) => setMetaLive(m));
+    const un1 = watchLiveWeek(sel, (m) => { R.current.metaLive = m; setMetaLive(m); });
+    // another dispatcher's save: its summary goes on the grid the moment it lands
+    const unSm = watchLiveSummary(sel, (doc) => {
+      if (!doc || typeof doc.rev !== 'number') return;
+      smLive.current = { week: sel, rev: doc.rev, json: doc.json };
+      notePrevSummary(sel, doc);   // this week is next week's tail: kept current while it's open
+      pullSummary(sel);
+    });
+    // last week's real days + hours (the 6-in-7 / 60h tail): kept current, reloaded when it changes
+    const pw = prevISO(sel);
+    const unPrev = watchLiveSummary(pw, (doc) => {
+      // null = not published, or the listener failed: the engine load reads it again then
+      if (!doc || !notePrevSummary(pw, doc)) return;
+      const seen = ACT_LOADED[sel];
+      if (seen && seen.prevRev !== prevTailRev(pw)) needSync(sel);
+    });
     const un2 = watchLiveLog(sel, (l) => setLog(l));
     setNotes({}); setConfirms({}); setActDocs({}); setAtt([]); setLates({});
     const unAtt = watchLiveAttendance(sel, (l) => setAtt(l || []));
     const unLate = watchLiveLate(sel, (l) => setLates(l || {}));
     const unNotes = watchLiveNotes(sel, (n) => setNotes(n || {}));
+    const engOk = () => saving.current || ['ready', 'loading'].includes(R.current.eng.status);
     const unConf = watchLiveConfirms(sel, (c) => {
       setConfirms(c || {});
       // a "they worked" answer changed: reload so the hours count it
       const seen = ACT_LOADED[sel];
-      if (!seen || workedSig(c) === seen.confirm) return;
-      if (saving.current || !R.current.eng || R.current.eng.status !== 'ready') return;
+      if (!seen || workedSig(c) === seen.confirm || !engOk()) return;
       seen.confirm = workedSig(c);
-      openWeek(sel);
+      needSync(sel);
     });
     // a clock-out in Route Tracker changed someone's real hours: reload so the limits use them
     const onActual = (which) => (doc) => {
+      setActDocs((x) => ({ ...x, [which]: doc }));
       const seen = ACT_LOADED[sel];
-      if (!seen || actualSig(doc) === seen[which]) return;
-      if (saving.current || !R.current.eng || R.current.eng.status !== 'ready') return;
+      if (!seen || actualSig(doc) === seen[which] || !engOk()) return;
       seen[which] = actualSig(doc);
       toast('Hours updated from Route Tracker clock-outs.');
-      openWeek(sel);
+      needSync(sel);
     };
     const un3 = watchActualHours(sel, onActual('cur'));
-    const un4 = watchActualHours(prevISO(sel), onActual('prev'));
-    const unA = watchActualHours(sel, (doc) => setActDocs((x) => ({ ...x, cur: doc })));
-    const unB = watchActualHours(prevISO(sel), (doc) => setActDocs((x) => ({ ...x, prev: doc })));
-    return () => { unNotes(); unConf(); unAtt(); unLate(); unA(); unB(); un1(); un2(); un3(); un4(); };
+    const un4 = watchActualHours(pw, onActual('prev'));
+    return () => { unNotes(); unConf(); unAtt(); unLate(); un1(); un2(); un3(); un4(); unSm(); unPrev(); };
   }, [sel]);
 
   // A No-call-no-show / call-off dispatch put on the report (2026-10-08): mark that day here too —
@@ -661,13 +826,18 @@ function Board() {
     }
   }, [data && data.rev, eng.status, busy, att, confirms]);
 
-  // someone else saved this week: pull it in
+  // someone else saved this week: its summary normally comes through the summary watch (above);
+  // this says who, and reads the week if the summary doesn't come
   useEffect(() => {
     const d = R.current.data;
     if (!metaLive || !d || saving.current) return;
     if (metaLive.rev > d.rev) {
-      toast(`${metaLive.by || 'Someone'} changed this week — showing the latest.`);
-      openWeek(R.current.sel);
+      announce(metaLive);
+      if (!pullSummary(R.current.sel)) laterOpen(R.current.sel);
+    } else if (metaLive.rev === d.rev) {
+      if (d.remote) announce(metaLive);
+      // the header's "last change by" from the meta (a summary that came first, or our own save)
+      if (d.meta !== metaLive) { const nd = { ...d, meta: metaLive }; R.current.data = nd; setData(nd); }
     }
   }, [metaLive && metaLive.rev]);
 
@@ -683,48 +853,65 @@ function Board() {
   // engine must hold exactly the saved version first; a save that fails
   // (someone else saved first, or no signal) reloads the saved version so
   // nothing unsaved lingers on screen.
+  // 2026-10-08: the grid shows the change as soon as the engine has made it ("Saving…" stays on
+  // until Firestore has it); a save that fails puts the saved version straight back.
   async function run(op, payload) {
-    const d = R.current.data;
-    if (!d) return { ok: false, error: { kind: 'busy', message: 'The week is still loading.' } };
+    const week = R.current.sel;
+    if (!R.current.data) return { ok: false, error: { kind: 'busy', message: 'The week is still loading.' } };
     if (R.current.busy) return { ok: false, error: { kind: 'busy', message: 'Still saving the last change…' } };
     setBusy(true); R.current.busy = true; saving.current = true;
+    let undo = null, unsaved = false;   // the grid before a change not saved yet
+    // back to the saved version: the grid at once, then the engine (it holds the unsaved change)
+    const revert = () => {
+      unsaved = false;
+      if (R.current.sel !== week) return;   // another week is open now
+      R.current.rep = undo; setRep(undo);
+      R.current.eng = { status: 'loading', rev: null, error: null }; setEng(R.current.eng);
+    };
     try {
-      if (R.current.eng.status !== 'ready' || R.current.eng.rev !== d.rev) {
-        const r0 = await loadEngine(R.current.sel, d.engineJson);
-        setRep(r0); R.current.rep = r0;
-        R.current.eng = { status: 'ready', rev: d.rev }; setEng({ status: 'ready', rev: d.rev, error: null });
+      if (!(await ensureEngine(week))) {
+        const failed = R.current.eng.status === 'error';
+        return { ok: false, error: { kind: failed ? 'crash' : 'busy',
+          message: failed ? R.current.eng.error : 'The week is still loading.' } };
       }
+      const d = R.current.data;
       const before = (R.current.rep && R.current.rep.edits) || [];
       const m = await liveRequest(op, payload);
       if (!m.ok) return m;
+      const lines = logLines(before, m.report.edits, KIND[op] || 'edit');
+      undo = R.current.rep; unsaved = true;
+      R.current.rep = m.report; setRep(m.report);
       let saved;
       try {
-        saved = await saveWeek({ weekISO: R.current.sel, meta: d.meta, report: m.report, expectRev: d.rev,
-          log: logLines(before, m.report.edits, KIND[op] || 'edit') });
+        saved = await saveWeek({ weekISO: week, meta: d.meta, report: m.report, expectRev: d.rev, log: lines });
       } catch (e) {
+        revert();
         const msg = e.code === 'conflict'
           ? `${e.message} The page now shows the latest version — make your change again if it's still needed.`
           : `Not saved — ${e.message || e}. Check the connection and try again.`;
         toast(msg, e.code === 'conflict' ? 'warn' : 'err');
         saving.current = false;
-        await openWeek(R.current.sel);
+        if (e.code === 'conflict') {
+          toasted.current = Math.max(toasted.current, d.rev + 1);   // the toast above says who
+          if (!pullSummary(week, true)) await openWeek(week);
+        } else if (!pullSummary(week, true)) await syncEngine(week);
         return { ok: false, error: { kind: 'save', message: msg } };
       }
-      const nd = { meta: { ...d.meta, rev: saved.rev }, summary: summaryFromReport(m.report, d.meta),
-        engineJson: saved.engine, rev: saved.rev };
-      setData(nd); R.current.data = nd;
-      setRep(m.report); R.current.rep = m.report;
-      R.current.eng = { status: 'ready', rev: saved.rev }; setEng({ status: 'ready', rev: saved.rev, error: null });
-      const lines = logLines(before, m.report.edits, KIND[op]);
+      unsaved = false;
+      if (R.current.sel === week) {
+        const nd = { meta: { ...d.meta, rev: saved.rev }, summary: summaryFromReport(m.report, d.meta), rev: saved.rev };
+        engJson.current = { week, rev: saved.rev, json: saved.engine };
+        setData(nd); R.current.data = nd;
+        R.current.eng = { status: 'ready', rev: saved.rev, error: null }; setEng(R.current.eng);
+      }
       toast('Saved — ' + lines[lines.length - 1].text);
       return m;
     } catch (e) {
+      if (unsaved) { revert(); saving.current = false; syncEngine(week); }
       return { ok: false, error: { kind: 'crash', message: e.message || String(e) } };
     } finally {
       setBusy(false); R.current.busy = false; saving.current = false;
-      // a save from someone else that landed while ours was in flight
-      const ml = R.current.metaLive, dd = R.current.data;
-      if (ml && dd && ml.rev > dd.rev) openWeek(R.current.sel);
+      catchUp(week);
     }
   }
   const req = (op, p) => (MUT.has(op) ? run(op, p) : liveRequest(op, p));

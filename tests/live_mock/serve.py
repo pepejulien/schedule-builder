@@ -4,6 +4,9 @@ so the Firebase-only screens (the Live board) can be tried on this PC.
 Fixtures are at /__fixtures/. TEST ONLY.
 
     python tests/live_mock/serve.py
+
+Speed checks: ?lat=300 adds Firestore-like latency (jajb-mock.js); make_seed.py
+writes the test week and /__mock/perf-harness.js times the board on it.
 """
 import http.server
 import os
@@ -37,8 +40,8 @@ class H(http.server.SimpleHTTPRequestHandler):
             html = open(os.path.join(PUBLIC, 'index.html'), encoding='utf-8').read()
             html = html.replace('</title>', '</title>\n  <script src="/__mock/jajb-mock.js"></script>', 1)
             return self._send(html.encode('utf-8'), 'text/html; charset=utf-8')
-        if path == '/__mock/jajb-mock.js':
-            return self._send(open(os.path.join(HERE, 'jajb-mock.js'), 'rb').read(), 'text/javascript')
+        if path in ('/__mock/jajb-mock.js', '/__mock/perf-harness.js'):
+            return self._send(open(os.path.join(HERE, os.path.basename(path)), 'rb').read(), 'text/javascript')
         if path == '/__board.json' and os.path.isfile(BOARD):
             return self._send(open(BOARD, 'rb').read(), 'application/json')
         if path.startswith('/__fixtures/'):

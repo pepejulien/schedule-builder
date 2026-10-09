@@ -8,7 +8,7 @@
 //            days-in-a-row tail, and is what a drivers' app will read later
 //   engine   the schedule engine's whole state (runner.export_state)
 import { editRequest } from '../solver-client.js';
-import { liveWeek, saveLiveWeek, actualHoursOnce, confirmsOnce } from '../api.js';
+import { liveWeek, saveLiveWeek, actualHoursOnce, confirmsOnce, liveSummaryOnce } from '../api.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 // the limit checks + actual-hours merge live in limits.js (no app imports), so the
 // Vehicle Assigner can load them too
@@ -76,28 +76,68 @@ export const actualSig = (doc) => JSON.stringify((doc && doc.drivers)
 // only the "they worked" answers change the hours (the engine reloads when they do)
 export const workedSig = (confirms) => JSON.stringify(Object.keys(confirms || {}).filter((k) => confirms[k].answer === 'worked').sort());
 
+// What each week's engine was last loaded with: {cur, prev, confirm (signatures), prevRev}.
 export const ACT_LOADED = {};
+
+// Last week's tail ({rev, prev, prevHours}), kept per week (2026-10-08): a week that's over rarely
+// changes, so it's read once — its summary doc only, not its engine state — and again only when its
+// rev moves. The Live board keeps a listener on it that feeds notePrevSummary.
+const NO_TAIL = { rev: null, prev: null, prevHours: null };
+const TAILS = {};
+// doc = {json, rev} | null (not published). true = the tail changed.
+export function notePrevSummary(weekISO, doc) {
+  const rev = doc && typeof doc.rev === 'number' ? doc.rev : null;
+  const c = TAILS[weekISO];
+  if (c && c.rev === rev) return false;
+  if (rev === null) { TAILS[weekISO] = NO_TAIL; return true; }
+  let sm;
+  try { sm = JSON.parse(doc.json); } catch { return false; }
+  TAILS[weekISO] = { rev, prev: prevWorkedFrom(sm), prevHours: prevHoursFrom(sm) };
+  return true;
+}
+export const prevTailRev = (weekISO) => (TAILS[weekISO] ? TAILS[weekISO].rev : undefined);
+
+// known = that week's rev as the week list showed it (null: not published, undefined: not known)
+async function prevTail(weekISO, known) {
+  const c = TAILS[weekISO];
+  if (known === null) return c || NO_TAIL;
+  if (typeof known === 'number') {
+    if (c && c.rev != null && c.rev >= known) return c;
+    // a cached copy older than the list can come first: wait for the current one
+    const doc = await liveSummaryOnce(weekISO, (d) => !d || d.rev >= known);
+    if (doc !== undefined) { notePrevSummary(weekISO, doc); return TAILS[weekISO] || NO_TAIL; }
+  }
+  // not known (or no answer): read the week, as before
+  try {
+    const p = await liveWeek(weekISO);
+    notePrevSummary(weekISO, p ? { json: p.summary, rev: p.meta.rev } : null);
+    return TAILS[weekISO] || NO_TAIL;
+  } catch { return c || NO_TAIL; /* no history for last week — keep the builder's tail */ }
+}
 
 // Load a saved week into an engine slot. Last week's REAL worked days and
 // hours (from its own Live board, if it was published) replace the uploaded
 // file's tail.
-export async function loadEngine(weekISO, engineJson, slot = 'live') {
-  let prev = null, prevHours = null;
-  try {
-    const p = await liveWeek(prevISO(weekISO));
-    if (p) { const sm = JSON.parse(p.summary); prev = prevWorkedFrom(sm); prevHours = prevHoursFrom(sm); }
-  } catch { /* no history for last week — keep the builder's tail */ }
+// opts (the Live board, 2026-10-08): summary = this week's saved summary when the caller has it (no
+// second read of the week); prevRev = last week's rev from the week list (see prevTail); live() =
+// false once a newer load was asked for — then nothing reaches the engine and this resolves null.
+// Every read here runs at once (the board's own listeners usually answer them without a round trip).
+export async function loadEngine(weekISO, engineJson, slot = 'live', opts = {}) {
+  const pw = prevISO(weekISO);
   // the real hours of days already worked (Route Tracker), this week and last
-  const [actCur, actPrev, confirms, cur] = await Promise.all([actualHoursOnce(weekISO), actualHoursOnce(prevISO(weekISO)),
-    confirmsOnce(weekISO), liveWeek(weekISO).catch(() => null)]);
-  ACT_LOADED[weekISO] = { cur: actualSig(actCur), prev: actualSig(actPrev), confirm: workedSig(confirms) };
+  const [tail, actCur, actPrev, confirms, cur] = await Promise.all([prevTail(pw, opts.prevRev),
+    actualHoursOnce(weekISO), actualHoursOnce(pw), confirmsOnce(weekISO),
+    opts.summary ? null : liveWeek(weekISO).catch(() => null)]);
   // a "they worked" answer counts the scheduled hours until Route Tracker has the clock-out
   let actual = actualList(actPrev, actCur);
   try {
-    if (cur) { const sm = JSON.parse(cur.summary); actual = withConfirmed(actual, missingDays(sm, actual, confirms), sm.limits || {}); }
+    const sm = opts.summary || (cur ? JSON.parse(cur.summary) : null);
+    if (sm) actual = withConfirmed(actual, missingDays(sm, actual, confirms), sm.limits || {});
   } catch { /* keep the clock-outs */ }
+  if (opts.live && !opts.live()) return null;
+  ACT_LOADED[weekISO] = { cur: actualSig(actCur), prev: actualSig(actPrev), confirm: workedSig(confirms), prevRev: tail.rev };
   const m = await editRequest('load_state',
-    { state: engineJson, out: `/work/${slot}.xlsx`, prev_worked: prev, prev_hours: prevHours, actual }, slot);
+    { state: engineJson, out: `/work/${slot}.xlsx`, prev_worked: tail.prev, prev_hours: tail.prevHours, actual }, slot);
   if (!m.ok) throw Object.assign(new Error(m.error.message), { kind: m.error.kind });
   return m.report;
 }
