@@ -195,6 +195,20 @@
       if (answer) all[k] = { name: nm, day, answer, by: name, at: now(), ...(answer === 'callout' && excused ? { excused: true } : {}) }; else delete all[k];
       put('confirm/' + week, all); fire();
     },
+    // requested days off for weeks not built yet (2026-10-09): schedule_timeoff/{week}/days
+    watchScheduleTimeoff: (week, cb) => listen('timeoff/' + week, () => get('timeoff/' + week) || {}, cb),
+    saveScheduleTimeoff: async (week, nm, day, note) => {
+      await delay(LAT);
+      const all = get('timeoff/' + week) || {};
+      all[day + '|' + nm] = { name: nm, day, note: String(note || '').trim().slice(0, 300), by: name, at: now() };
+      put('timeoff/' + week, all); fire();
+    },
+    deleteScheduleTimeoff: async (week, nm, day) => {
+      await delay(LAT);
+      const all = get('timeoff/' + week) || {};
+      delete all[day + '|' + nm];
+      put('timeoff/' + week, all); fire();
+    },
     deleteScheduleWeek: async (week) => {
       const all = weeks(); delete all[week]; put('weeks', all);
       localStorage.removeItem(K + 'log/' + week);

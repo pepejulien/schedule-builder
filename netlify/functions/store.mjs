@@ -7,7 +7,7 @@
 import { getStore } from '@netlify/blobs';
 import { requireAuth } from '../lib/session.mjs';
 
-const KEY_RE = /^standing\/(config\.json|prefs\.csv|aliases\.json|training-history\.json)$/;
+const KEY_RE = /^standing\/(config\.json|prefs\.csv|aliases\.json|training-history\.json|drivers\.json)$/;
 
 function contentTypeFor(key) {
   if (key.endsWith('.json')) return 'application/json';
