@@ -18,6 +18,41 @@
 
   function weeks() { return get('weeks') || {}; }
 
+  // ?demo=1 (2026-10-08): a made-up week (this week, no engine - the grid still shows) and Route
+  // Tracker docs with `routes` / `open`, to see the "has a route" stripes without publishing a week.
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const sunday = (() => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - d.getDay()); return d; })();
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dateOf = (base, i) => { const d = new Date(base); d.setDate(d.getDate() + i); return iso(d); };
+  if (params.get('demo') === '1' && !weeks()[iso(sunday)]) {
+    const wk = iso(sunday), cells = (a) => Object.fromEntries(DAYS.map((d, i) => [d, a[i] || '']));
+    const drivers = [
+      ['Ana Road', ['10:25 AM', '10:25 AM', '', '10:45 AM', '10:25 AM', '11:05 AM', '']],
+      ['Ben Backup', ['', '10:25 AM Backup', '10:25 AM Backup', '', '10:45 AM Backup', '10:45 AM', '']],
+      ['Cara Trainer', ['', '10:45 AM TRAIN helper (w/ Dan Trainee)', '10:45 AM', 'Unavailable', '10:45 AM TRAIN helper (w/ Dan Trainee)', '', '']],
+      ['Dan Trainee', ['', '10:45 AM TRAIN drives (w/ Cara Trainer)', '', '', '10:45 AM TRAIN drives (w/ Cara Trainer)', '10:45 AM', '']],
+      ['Eve Extra', ['', '', 'Unavailable', '', '', '11:25 AM', '11:25 AM']],
+      ['Finn Callout', ['10:45 AM', 'Called out', '10:45 AM', '11:05 AM', '', '', '']],
+    ].map(([n, c]) => ({ name: n, cls: 'free', hours: 30, cells: cells(c), worked_dates: [] }));
+    const summary = { limits: { max_7day_hours: 60 }, marks: [], infeasible: [], errors: [], overridden: [],
+      days: DAYS.map((d, i) => ({ day: d, date: dateOf(sunday, i), open: true, routes: 4, routes_filled: 4, backup: 1, backup_filled: 1 })),
+      drivers };
+    const all = weeks();
+    all[wk] = { meta: { week: wk, label: 'Demo week', num: 41, rev: 1, stats: {}, by: 'demo', at: now(), publishedBy: 'demo', publishedAt: now() },
+      summary: JSON.stringify(summary), engine: '' };
+    put('weeks', all);
+    // Route Tracker: route days up to today (codes known or not), an open day today, a route nobody scheduled
+    const d = (i) => dateOf(sunday, i), t = new Date().getDay();
+    const doc = { drivers: {
+      a: { name: 'Ana Road', keys: ['ana|road'], days: { [d(0)]: 10, [d(1)]: 9.5 }, routes: { [d(0)]: 'CX12', [d(1)]: 'CX14', [d(3)]: '' }, open: t >= 4 ? [d(4)] : [] },
+      b: { name: 'Ben Backup', keys: ['ben|backup'], days: { [d(2)]: 9 }, routes: { [d(2)]: 'CX20' } },
+      c: { name: 'Cara Trainer', keys: ['cara|trainer'], days: { [d(1)]: 10 }, routes: { [d(1)]: 'CX31' } },
+      e: { name: 'Eve Extra', keys: ['eve|extra'], days: { [d(1)]: 10, [d(2)]: 9 }, routes: { [d(1)]: 'CX44', [d(2)]: '' } },
+      f: { name: 'Finn Callout', keys: ['finn|callout'], days: { [d(0)]: 10, [d(1)]: 10 }, routes: { [d(0)]: '', [d(1)]: 'CX50', [d(5)]: 'CX99' } },
+    } };
+    put('actual/' + wk, doc);
+  }
+
   window.JAJB = {
     ready: Promise.resolve(),
     user: () => ({ email: 'test@example.com' }),

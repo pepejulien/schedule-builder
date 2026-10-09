@@ -16,6 +16,8 @@ export function actualList(...docs) {
     Object.assign(cur.days, d.days || {});
     // days on a route with no out time yet: they worked (Route Tracker, 2026-10-07)
     if ((d.open || []).length) cur.open = [...new Set([...(cur.open || []), ...d.open])];
+    // days on a route: {ISO: route code(s) or ""} (Route Tracker, Jose 2026-10-08)
+    if (d.routes && Object.keys(d.routes).length) cur.routes = Object.assign(cur.routes || {}, d.routes);
     by.set(id, cur);
   }
   return [...by.values()];
@@ -345,6 +347,18 @@ function actualIndex(list) {
     by.set(k, a);
   }
   return (name) => { const k = flKey(name); return dup.has(k) ? null : by.get(k) || null; };
+}
+// name -> {ISO: route code or ""} for every day the driver was on a route (Route Tracker),
+// or null. Open days (no out time yet) are route days too. (Jose 2026-10-08)
+export function routeDays(list) {
+  const find = actualIndex(list);
+  return (name) => {
+    const a = find(name);
+    if (!a) return null;
+    const out = { ...(a.routes || {}) };
+    for (const iso of a.open || []) if (!(iso in out)) out[iso] = '';
+    return Object.keys(out).length ? out : null;
+  };
 }
 // -> [{name, date, day, cell, hours, answer, by, at}] for this week's summary
 export function missingDays(summary, list, confirms, today = toISODate(new Date())) {

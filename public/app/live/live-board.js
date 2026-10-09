@@ -16,6 +16,7 @@ import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest } from '../solver-client.js';
 import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, saveLiveConfirm, watchLiveAttendance, watchLiveLate, saveLiveLate } from '../api.js';
 import { MissingCheck } from './missing.js';
+import { routeDays } from './limits.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
 import {
@@ -82,8 +83,16 @@ function RiskInfo({ d, risk, iso }) {
   return html`<div dangerouslySetInnerHTML=${{ __html: riskCardHtml(d, risk, iso) }} />`;
 }
 
-function Block({ v }) {
+function Block({ v, route }) {
   const c = cellInfo(v);
+  // on a route that day (Route Tracker): Amazon's green stripes, the shift's own color as the
+  // border. Not scheduled / Unavailable / a mark -> a plain "Route" block. (Jose 2026-10-08)
+  if (route != null) {
+    const shift = !['empty', 'off', 'mark'].includes(c.kind);
+    const sub = shift ? [c.sub, route].filter(Boolean).join(' · ') : route;
+    return html`<div class="lv-blk b-route" style=${`border-color:${shift ? c.bg || SHIFT_COLORS.other : SHIFT_COLORS.other}`}>
+      <span>${shift ? c.top : 'Route'}</span>${sub ? html`<small>${sub}</small>` : ''}</div>`;
+  }
   if (c.kind === 'empty') return '';
   return html`<div class=${'lv-blk b-' + c.kind} style=${c.bg ? `background:${c.bg}` : ''}>
     <span>${c.top}</span>${c.sub ? html`<small>${c.sub}</small>` : ''}</div>`;
@@ -267,7 +276,7 @@ function LateBox({ late, rec, busy, onSave }) {
 const fmtTime = (v) => { const m = /^(\d{1,2}):(\d{2})$/.exec(v || ''); if (!m) return v; const h = +m[1]; return `${(h % 12) || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`; };
 
 // What one driver is doing on one day, and everything that can be done about it.
-function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk, note, onSaveNote, late, rec, onSaveLate }) {
+function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk, note, onSaveNote, late, rec, onSaveLate, route }) {
   const v = (d.cells || {})[day] || '';
   const c = cellInfo(v);
   const kind = c.kind;
@@ -291,7 +300,7 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
           <div class="dm-name">${d.name}</div>
           <div class="dm-date">${date}</div>
         </div>
-        <div class="dm-now">${kind === 'empty' ? html`<span class="muted">Not scheduled</span>` : html`<${Block} v=${v} />`}</div>
+        <div class="dm-now">${kind === 'empty' && route == null ? html`<span class="muted">Not scheduled</span>` : html`<${Block} v=${v} route=${route} />`}</div>
         <button class="dm-x" aria-label="Close" onClick=${onClose}>×</button>
       </div>
 
@@ -877,6 +886,9 @@ function Board() {
   const today = todayISO();
   const tday = view.days.find((x) => x.date === today);
   const lim = view.limits || {};
+  // who had a route each day, today and before (Route Tracker) (Jose 2026-10-08)
+  const routeOf = routeDays(actualList(actDocs.prev, actDocs.cur));
+  const routeFor = (name, iso) => { const r = iso && iso <= today ? routeOf(name) : null; return r && iso in r ? r[iso] : undefined; };
   const openRoutes = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.routes - x.routes_filled), 0);
   const openBk = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.backup - x.backup_filled), 0);
   const byName = Object.fromEntries(view.drivers.map((x) => [x.name, x]));
@@ -1028,11 +1040,13 @@ function Board() {
                   const hot = risks[x.name] && risks[x.name].hot.includes(dd.date);
                   const note = notes[dd.date + '|' + x.name];
                   const late = lates[dd.date + '|' + x.name];
+                  const route = routeFor(x.name, dd.date);
+                  const onRoute = route == null ? '' : (route ? `On route ${route} (Route Tracker)\n` : 'On a route (Route Tracker)\n');
                   return html`<td class=${'lv-cell k-' + c.kind + (dd.date === today ? ' today' : '') + (dd.open ? '' : ' closed') + (hot ? ' lv-over' : '')}
-                    title=${hot ? undefined : (note ? `💬 ${note.text} — ${note.by || ''}\n` : '') + (c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed'))}
+                    title=${hot ? undefined : onRoute + (note ? `💬 ${note.text} — ${note.by || ''}\n` : '') + (c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed'))}
                     onMouseEnter=${hot ? (e) => showPop(e, x.name, dd.date) : undefined}
                     onMouseLeave=${hot ? () => setPop(null) : undefined}
-                    onClick=${dd.open || note ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} />${
+                    onClick=${dd.open || note ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} route=${route} />${
                       note ? html`<span class="lv-notedot" aria-label="Has a comment">💬</span>` : ''}${
                       late ? html`<span class="lv-notedot" style="right:auto;left:2px" title=${'Late — ' + late.time} aria-label="Late arrival">⏰</span>` : ''}</td>`;
                 })}
@@ -1056,6 +1070,7 @@ function Board() {
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.meet}`}>Meeting</span>
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.off}`}>Unavailable</span>
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.mark}`}>Called out / No-show</span>
+        <span class="lv-sw lv-sw-route">Has a route (Route Tracker)</span>
       </div>
       ${pop && risks[pop.name] && byName[pop.name] ? html`<div class="lv-pop" style=${`left:${pop.left}px;` + (pop.up != null
         ? `top:${pop.up}px;transform:translateY(-100%)` : `top:${pop.top}px`)}><${RiskInfo} d=${byName[pop.name]} risk=${risks[pop.name]} iso=${pop.iso} /></div>` : ''}
@@ -1083,6 +1098,7 @@ function Board() {
       opt=${opts && opts.data && opts.data.name === cell.name ? (opts.data.days.find((x) => x.day === cell.day) || null) : null}
       fills=${waveFills(view, cell.day)} view=${view} risk=${risks[cell.name]}
       note=${notes[(view.days.find((x) => x.day === cell.day) || {}).date + '|' + cell.name]}
+      route=${routeFor(cell.name, (view.days.find((x) => x.day === cell.day) || {}).date)}
       late=${lates[(view.days.find((x) => x.day === cell.day) || {}).date + '|' + cell.name]}
       rec=${att.find((r) => r.date === (view.days.find((x) => x.day === cell.day) || {}).date && nameKey(r.name) === nameKey(cell.name))}
       onSaveLate=${async (t) => {

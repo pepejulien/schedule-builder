@@ -69,7 +69,10 @@ export function prevHoursFrom(summary) {
   return Object.keys(out).length ? out : null;
 }
 
-export const actualSig = (doc) => JSON.stringify((doc && doc.drivers) || null);
+// route codes alone don't change hours: left out so they don't reload the engine (Jose 2026-10-08)
+export const actualSig = (doc) => JSON.stringify((doc && doc.drivers)
+  ? Object.fromEntries(Object.entries(doc.drivers).map(([id, d]) => { const { routes, ...rest } = d || {}; return [id, rest]; }))
+  : null);
 // only the "they worked" answers change the hours (the engine reloads when they do)
 export const workedSig = (confirms) => JSON.stringify(Object.keys(confirms || {}).filter((k) => confirms[k].answer === 'worked').sort());
 
