@@ -10,7 +10,7 @@ import { weekLabel, isSunday } from '../public/app/lib/weeks.js';
 import { driverCsv } from '../public/app/lib/driver-csv.js';
 import { readiness } from '../public/app/readiness.js';
 import { joinChunks } from '../public/app/lib/board-fetch.js';
-import { runRisk, riskCardHtml, actualList, routeDays, backupDays, rtMismatches } from '../public/app/live/limits.js';
+import { runRisk, riskCardHtml, actualList, routeDays, backupDays, rtMismatches, missingDays, mergeActual, withConfirmed } from '../public/app/live/limits.js';
 import { actualSig } from '../public/app/live/live-model.js';
 
 let pass = 0, fail = 0;
@@ -273,6 +273,36 @@ eq('joinChunks unquoted cell', joinChunks('enc1:AAAA'), { payload: 'enc1:AAAA', 
   eq('mismatch: open-day button only for schedule rows', rows.map((r) => r.onSchedule), [true, true, true, true, true, true, false]);
   eq('mismatch: day for setCell', rows[1].day, 'Wed');
   eq('mismatch: nothing without Route Tracker', rtMismatches(summary, [], T), []);
+}
+
+// Transporter ID match first, like runner._matcher (Jose 2026-10-08)
+{
+  const T = '2026-10-08';
+  const days = [{ day: 'Sun', date: '2026-10-04' }, { day: 'Mon', date: '2026-10-05' }, { day: 'Tue', date: '2026-10-06' },
+    { day: 'Wed', date: '2026-10-07' }, { day: 'Thu', date: '2026-10-08' }];
+  const kathy = { name: 'Kathy Deaton', tid: 'T1', cells: { Mon: '10:25 AM', Tue: '10:25 AM', Wed: 'Unavailable' } };
+  const other = { name: 'Zed Other', tid: '', cells: { Mon: '10:25 AM' } };
+  const rt = [{ name: 'Kathryn Deaton', keys: ['kathryn|deaton'], tid: 'T1', days: { '2026-10-05': 10 },
+    routes: { '2026-10-05': 'CX1' }, bk: { '2026-10-07': 2 } },
+  { name: 'Zed Other', keys: ['zed|other'], tid: 'Z9', days: { '2026-10-05': 9, '2026-10-06': 9 } }];   // Tue tracked
+  const summary = { days, drivers: [kathy, other], limits: {} };
+  eq('tid: routeDays via driver', routeDays(rt)(kathy), { '2026-10-05': 'CX1' });
+  eq('tid: routeDays via (name, tid)', routeDays(rt)('Kathy Deaton', 'T1'), { '2026-10-05': 'CX1' });
+  eq('tid: routeDays plain name misses', routeDays(rt)('Kathy Deaton'), null);
+  eq('tid: plain name still works', routeDays(rt)('Kathryn Deaton'), { '2026-10-05': 'CX1' });
+  eq('tid: backupDays via driver', backupDays(rt)(kathy), { '2026-10-07': 2 });
+  const miss = missingDays(summary, rt, {}, T);
+  eq('tid: missingDays finds Kathy Tue', miss.map((m) => `${m.name}|${m.date}|${m.tid}`), ['Kathy Deaton|2026-10-06|T1']);
+  const rows = rtMismatches(summary, rt, T);
+  eq('tid: rtMismatches on schedule, no nosched row', rows.map((r) => `${r.name}|${r.date}|${r.kind}`), ['Kathy Deaton|2026-10-07|off']);
+  eq('tid: mergeActual lays actual hours', mergeActual(summary, rt).drivers[0].day_hours['2026-10-05'], 10);
+  const wc = withConfirmed(rt, [{ ...miss[0], answer: 'worked' }], {});
+  eq('tid: withConfirmed folds into the tid entry', wc[0].days['2026-10-06'], 10);
+  // a tid two Route Tracker entries share: never guessed, falls back to the name
+  const shared = [{ name: 'Kathy Deaton', keys: [], tid: 'T1', routes: { '2026-10-05': 'A' } },
+    { name: 'Kat Other', keys: [], tid: 'T1', routes: { '2026-10-05': 'B' } }];
+  eq('tid: shared tid -> name', routeDays(shared)(kathy), { '2026-10-05': 'A' });
+  eq('tid: shared tid, name differs -> null', routeDays(shared)({ name: 'Kathy Smith', tid: 'T1' }), null);
 }
 
 console.log(`\n${pass}/${pass + fail} passed`);

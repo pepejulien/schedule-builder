@@ -136,6 +136,8 @@ def _driver_rows(res):
                 cells[d] = ""
         rows.append(dict(
             name=dr["name"],
+            # Amazon Transporter ID: the board matches Route Tracker by it first, like _matcher (Jose 2026-10-08)
+            tid=str(dr.get("tid") or "").strip(),
             cls=_classify(dr, res),
             target=res.TARGET.get(n),
             road_days=prim,

@@ -1090,10 +1090,11 @@ function Board() {
   // who had a route each day, today and before (Route Tracker) (Jose 2026-10-08)
   const actList = actualList(actDocs.prev, actDocs.cur);
   const routeOf = routeDays(actList);
-  const routeFor = (name, iso) => { const r = iso && iso <= today ? routeOf(name) : null; return r && iso in r ? r[iso] : undefined; };
+  const drvOf = new Map((view.drivers || []).map((d) => [d.name, d]));   // name -> driver, for its tid (Jose 2026-10-08)
+  const routeFor = (name, iso) => { const r = iso && iso <= today ? routeOf(drvOf.get(name) || name) : null; return r && iso in r ? r[iso] : undefined; };
   // backup days (Route Tracker) - shown on blank days until the cloud writer adds them (Jose 2026-10-08)
   const bkOf = backupDays(actList);
-  const bkFor = (name, iso) => { const r = iso && iso <= today ? bkOf(name) : null; return r && iso in r ? r[iso] : undefined; };
+  const bkFor = (name, iso) => { const r = iso && iso <= today ? bkOf(drvOf.get(name) || name) : null; return r && iso in r ? r[iso] : undefined; };
   const openRoutes = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.routes - x.routes_filled), 0);
   const openBk = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.backup - x.backup_filled), 0);
   const byName = Object.fromEntries(view.drivers.map((x) => [x.name, x]));

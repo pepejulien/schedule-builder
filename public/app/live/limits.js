@@ -37,12 +37,7 @@ export function flKey(name) {
 // watch list counts what was really worked. Same matching as the engine: shared names skipped.
 export function mergeActual(summary, list) {
   if (!summary || !list || !list.length) return summary;
-  const byKey = new Map(), dup = new Set();
-  for (const a of list) for (const k of new Set([flKey(a.name), ...(a.keys || [])])) {
-    if (!k) continue;
-    if (byKey.has(k) && byKey.get(k) !== a) dup.add(k);
-    byKey.set(k, a);
-  }
+  const find = actualIndex(list);
   const dates = (summary.days || []).map((d) => d.date);
   const start = dates[0];
   // a day that's over and that Route Tracker tracked (anyone has a clock-out): a driver it
@@ -51,8 +46,7 @@ export function mergeActual(summary, list) {
   const tracked = new Set();
   for (const a of list) for (const [iso, h] of Object.entries(a.days || {})) if (iso < today && Number(h)) tracked.add(iso);
   const drivers = (summary.drivers || []).map((d) => {
-    const k = flKey(d.name);
-    const a = dup.has(k) ? null : byKey.get(k);
+    const a = find(d);
     if (!a) return d;
     const missed = {};
     for (const iso of tracked) if (!Number((a.days || {})[iso]) && !(a.open || []).includes(iso)) missed[iso] = 0;
@@ -342,21 +336,35 @@ function shiftHours(v, lim) {
   if (s === 'Dispatch') return lim.dispatch_hours || 12;
   return /^\d{1,2}:\d{2} [AP]M/.test(s) ? (lim.primary_hours || 10) : 0;
 }
+// Route Tracker entry for a schedule driver, like runner._matcher: Transporter ID first (exact,
+// one entry only), then first|last key; a key two entries share is never guessed. who = a name
+// string or a driver {name, tid}; tid may also come as the 2nd argument. (Jose 2026-10-08)
+const tidOf = (x) => String((x && x.tid) || '').trim();
 function actualIndex(list) {
-  const by = new Map(), dup = new Set();
-  for (const a of list || []) for (const k of new Set([flKey(a.name), ...(a.keys || [])])) {
-    if (!k) continue;
-    if (by.has(k) && by.get(k) !== a) dup.add(k);
-    by.set(k, a);
+  const by = new Map(), dup = new Set(), byTid = new Map(), dupTid = new Set();
+  for (const a of list || []) {
+    const t = tidOf(a);
+    if (t) { if (byTid.has(t) && byTid.get(t) !== a) dupTid.add(t); byTid.set(t, a); }
+    for (const k of new Set([flKey(a.name), ...(a.keys || [])])) {
+      if (!k) continue;
+      if (by.has(k) && by.get(k) !== a) dup.add(k);
+      by.set(k, a);
+    }
   }
-  return (name) => { const k = flKey(name); return dup.has(k) ? null : by.get(k) || null; };
+  return (who, tid) => {
+    const name = who && typeof who === 'object' ? who.name : who;
+    const t = String(tid || (who && typeof who === 'object' ? tidOf(who) : '') || '').trim();
+    if (t && !dupTid.has(t) && byTid.has(t)) return byTid.get(t);
+    const k = flKey(name);
+    return dup.has(k) ? null : by.get(k) || null;
+  };
 }
-// name -> {ISO: route code or ""} for every day the driver was on a route (Route Tracker),
+// name (or driver {name, tid}) -> {ISO: route code or ""} for every day the driver was on a route (Route Tracker),
 // or null. Open days (no out time yet) are route days too. (Jose 2026-10-08)
 export function routeDays(list) {
   const find = actualIndex(list);
-  return (name) => {
-    const a = find(name);
+  return (who, tid) => {
+    const a = find(who, tid);
     if (!a) return null;
     const out = { ...(a.routes || {}) };
     for (const iso of a.open || []) if (!(iso in out)) out[iso] = '';
@@ -367,8 +375,8 @@ export function routeDays(list) {
 // Same matching as routeDays. (Jose 2026-10-08)
 export function backupDays(list) {
   const find = actualIndex(list);
-  return (name) => {
-    const a = find(name);
+  return (who, tid) => {
+    const a = find(who, tid);
     return a && a.bk && Object.keys(a.bk).length ? { ...a.bk } : null;
   };
 }
@@ -401,9 +409,11 @@ export function rtMismatches(summary, list, today = toISODate(new Date())) {
   };
   const find = actualIndex(list), out = [];
   const add = (r) => out.push({ ...r, line: `${r.name} · ${md(r.date)} — ${r.why}` });
+  const matched = new Set();
   for (const d of summary.drivers || []) {
-    const a = find(d.name);
+    const a = find(d);
     if (!a) continue;
+    matched.add(a);
     for (const x of days) {
       const rt = rtOn(a, x.date);
       if (!rt) continue;
@@ -419,10 +429,12 @@ export function rtMismatches(summary, list, today = toISODate(new Date())) {
     }
   }
   // Route Tracker people no schedule driver matches (any of their keys = a schedule name's key)
+  // (or a matched entry / a schedule driver's Transporter ID - Jose 2026-10-08)
   const schedKeys = new Set((summary.drivers || []).map((d) => flKey(d.name)).filter(Boolean));
+  const schedTids = new Set((summary.drivers || []).map(tidOf).filter(Boolean));
   for (const a of list) {
     const keys = new Set([flKey(a.name), ...(a.keys || [])].filter(Boolean));
-    if ([...keys].some((k) => schedKeys.has(k))) continue;
+    if (matched.has(a) || (tidOf(a) && schedTids.has(tidOf(a))) || [...keys].some((k) => schedKeys.has(k))) continue;
     for (const x of days) {
       const rt = rtOn(a, x.date);
       if (rt) add({ name: a.name, date: x.date, day: x.day, cell: '', rt, kind: 'nosched',
@@ -440,18 +452,18 @@ export function missingDays(summary, list, confirms, today = toISODate(new Date(
   for (const a of list) for (const [iso, h] of Object.entries(a.days || {})) if (iso < today && Number(h)) tracked.add(iso);
   const find = actualIndex(list), out = [];
   for (const d of summary.drivers || []) {
-    const a = find(d.name);
+    const a = find(d);
     if (!a) continue;                          // Route Tracker doesn't know them: the schedule stands
     for (const x of summary.days || []) {
       if (x.date >= today || !tracked.has(x.date) || Number((a.days || {})[x.date])) continue;
       const cell = String((d.cells || {})[x.day] || '').trim(), hours = shiftHours(cell, lim);
       if (!hours) continue;
       if ((a.open || []).includes(x.date)) {   // on a route, out time not entered: they worked
-        out.push({ name: d.name, date: x.date, day: x.day, cell, hours, answer: 'worked', auto: true, by: 'Route Tracker' });
+        out.push({ name: d.name, tid: tidOf(d), date: x.date, day: x.day, cell, hours, answer: 'worked', auto: true, by: 'Route Tracker' });
         continue;
       }
       const c = (confirms || {})[confirmKey(x.date, d.name)];
-      out.push({ name: d.name, date: x.date, day: x.day, cell, hours, answer: c ? c.answer : null, by: c && c.by, at: c && c.at });
+      out.push({ name: d.name, tid: tidOf(d), date: x.date, day: x.day, cell, hours, answer: c ? c.answer : null, by: c && c.by, at: c && c.at });
     }
   }
   return out.sort((p, q) => p.date.localeCompare(q.date) || p.name.localeCompare(q.name));
@@ -466,7 +478,7 @@ export function withConfirmed(list, missing, lim = {}) {
   const out = (list || []).map((a) => ({ ...a, days: { ...(a.days || {}) } }));
   const byOrig = new Map((list || []).map((a, i) => [a, out[i]]));
   for (const m of worked) {
-    const a = find(m.name);
+    const a = find(m);                         // m.tid (missingDays) first, then the name
     if (a && !Number(a.days && a.days[m.date])) byOrig.get(a).days[m.date] = m.hours;
   }
   for (const a of out) for (const iso of a.open || []) if (!Number(a.days[iso])) a.days[iso] = lim.primary_hours || 10;

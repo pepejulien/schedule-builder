@@ -26,7 +26,7 @@ export function sundayOf(iso) {
 
 const DRIVER_KEYS = ['name', 'cls', 'target', 'hours', 'streak', 'road_days', 'backup_days',
   'helper_days', 'dispatch_days', 'meeting_days', 'unavailable', 'cells', 'worked_dates',
-  'day_hours', 'clock_hours', 'max7', 'act_dates'];
+  'day_hours', 'clock_hours', 'max7', 'act_dates', 'tid'];   // tid: Route Tracker match (Jose 2026-10-08)
 
 export function summaryFromReport(r, meta) {
   const chk = r.check || {};
