@@ -62,6 +62,8 @@ OPTIONAL FEATURES (behind config flags):
         min with max_consecutive.
       keep_together [name] -- SOFT: adjacency weight doubled in prefsc().
       prefer_days {name: [Day]} -- SOFT: +15 placement on those days.
+      like_days {name: [Day]} -- VERY SOFT: +4 placement on days they'd like
+        to work (the weakest nudge; never flagged, never a verification check).
     A cap the driver asked for beats an exact_days target / a training pair;
     the shortfall is reported, not an error.
 
@@ -406,6 +408,15 @@ def load_config(config_path):
                 bad = [d for d in v if d not in ALL]
                 if bad:
                     errs.append(f"prefer_days['{nm}']: {bad} not valid days ({ALL})")
+    lk = cfg.get('like_days')
+    if lk is not None:
+        if not isinstance(lk, dict) or any(not isinstance(v, list) for v in lk.values()):
+            errs.append("'like_days' must be {name: [Day, ...]}")
+        else:
+            for nm, v in lk.items():
+                bad = [d for d in v if d not in ALL]
+                if bad:
+                    errs.append(f"like_days['{nm}']: {bad} not valid days ({ALL})")
 
     if errs:
         raise ScheduleConfigError(
@@ -606,6 +617,7 @@ def build_schedule(cfg, prev_hook=None):
     #   driver_max_row {name: n}  : HARD max worked days in a row (last week counts).
     #   keep_together [name]      : SOFT, days next to each other (placement only).
     #   prefer_days {name: [Day]} : SOFT placement boost (placement only).
+    #   like_days {name: [Day]}   : VERY SOFT placement nudge, the weakest term.
     prefs_unmatched = []
     by_n = {norm(dr['name']): dr for dr in roster}
 
@@ -642,6 +654,11 @@ def build_schedule(cfg, prev_hook=None):
         dr = _pref_driver(nm, 'prefer_days')
         if dr is not None:
             PREFD.setdefault(norm(dr['name']), set()).update(days)
+    LIKED = {}
+    for nm, days in (cfg.get('like_days') or {}).items():
+        dr = _pref_driver(nm, 'like_days')
+        if dr is not None:
+            LIKED.setdefault(norm(dr['name']), set()).update(days)
 
     # within-tier rate ordering (Jose 2026-07-11): when two drivers sit in the
     # same priority class, the BETTER board rate (closer to 0, e.g. -14 beats
@@ -814,7 +831,8 @@ def build_schedule(cfg, prev_hook=None):
         > weekend spread (+/-25) > compactness (+18 adjacent / +8 near, Jose
         2026-07-11: no more Sun-Tue-Thu-Sat zigzags; doubled to +36/+16 for
         keep_together drivers) > usual day (+20) > Drivers-page prefer_days
-        (+15) > often-off (-12)."""
+        (+15) > often-off (-12) > Drivers-page like_days (+4, the weakest
+        nudge: only breaks near-ties)."""
         p = 0
         if d in dr['seed']:
             p += 40
@@ -835,6 +853,8 @@ def build_schedule(cfg, prev_hook=None):
             p += 20
         if d in dr['soft']:
             p -= 12
+        if d in LIKED.get(n, ()):          # Drivers page: days they'd like (weakest)
+            p += 4
         # Discipline tier works the days nobody wants (Sun/Sat) -- soft placement
         # now (Jose 2026-07-19); the day COUNT is set by the rank ladder above.
         if norm(dr['name']) in REDS:
@@ -1493,7 +1513,7 @@ def build_schedule(cfg, prev_hook=None):
                   PAIRLOG=PAIRLOG, REDS=REDS, REDPREF=REDPREF, RATE=RATE,
                   MAXWKND=MAXWKND, weekend_rule=weekend_rule, CAPX=CAPX,
                   XBK=XBK, exchanges=exchanges,
-                  prefs_unmatched=prefs_unmatched, KEEPT=KEEPT, PREFD=PREFD,
+                  prefs_unmatched=prefs_unmatched, KEEPT=KEEPT, PREFD=PREFD, LIKED=LIKED,
                   merge_std=merge_std, notes=notes, infeasible=infeasible)
 
 

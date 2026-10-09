@@ -7,6 +7,7 @@ Config keys (all optional; absent = the old behavior exactly):
   driver_max_row    {name: n}           HARD max days in a row (last week counts)
   keep_together     [name]              SOFT: days next to each other
   prefer_days       {name: [Day]}       SOFT: placement boost
+  like_days         {name: [Day]}       VERY SOFT: the weakest placement nudge
 Names are matched loosely; an unmatched / ambiguous one is skipped and listed.
 In runner.py a manual edit past a driver's own cap is POLICY (allowed, flagged)
 and a Drivers-page day off is the typed-confirm 'unavail' bucket.
@@ -223,6 +224,19 @@ r2, c2 = build(synth_week(KT, 6, 'pd', prefer_days={'Fairq12': ['Sat']}))
 ok('Sat' in drv(r2, 'Fairq12')['prim'] and not hard_errs(c2),
    f"prefer_days: Fairq12 works Sat ({sorted(drv(r2, 'Fairq12')['prim'], key=ALL.index)})")
 
+print('A4b like_days: the weakest placement nudge, never a day count')
+LK = ['Sun', 'Mon', 'Thu']                    # none of Fairq12's baseline days
+d0 = drv(r0, 'Fairq12')
+ok(not (set(d0['prim']) & set(LK)), f"precondition: Fairq12 baseline {sorted(d0['prim'], key=ALL.index)} has none of {LK}")
+r3, c3 = build(synth_week(KT, 6, 'lk', like_days={'Fairq12': LK, 'Ghosty Nobody': ['Mon']}))
+d3 = drv(r3, 'Fairq12')
+ok(len(set(d3['prim']) & set(LK)) > len(set(d0['prim']) & set(LK)),
+   f"placement moves toward liked days: {sorted(d3['prim'], key=ALL.index)}")
+ok(all(len(drv(r3, n)['prim']) == len(drv(r0, n)['prim']) and total(drv(r3, n)) == total(drv(r0, n)) for n in KT),
+   'every driver keeps the same day count')
+ok(not hard_errs(c3) and not c3['errors'], f'all invariants hold: {c3["errors"][:3]}')
+ok(any('like_days: "Ghosty Nobody"' in x for x in r3.prefs_unmatched), f'unmatched listed: {r3.prefs_unmatched}')
+
 print('A5 unmatched / ambiguous names: skipped, listed, never an error')
 res, chk = build(fixture_cfg(
     strict_names=True,
@@ -246,7 +260,7 @@ print('A6 bad shapes fail loudly in load_config')
 for bad in ({'extra_unavailable': {'X': ['Mon']}}, {'extra_unavailable': {'X': {'Funday': 'timeoff'}}},
             {'driver_max_days': {'X': -1}}, {'driver_max_row': {'X': 0}},
             {'driver_max_days': {'X': 'two'}}, {'keep_together': 'X'},
-            {'prefer_days': {'X': ['Mo']}}):
+            {'prefer_days': {'X': ['Mo']}}, {'like_days': {'X': ['Mo']}}, {'like_days': ['X']}):
     try:
         B.load_config(save_cfg(fixture_cfg(**bad), 'bad.json'))
         ok(False, f'rejected {bad}')
@@ -387,7 +401,7 @@ old = json.loads(st)
 for dr in old['res']['roster']:
     for k in ('unav_why', 'max_days', 'max_row'):
         dr.pop(k, None)
-for k in ('prefs_unmatched', 'KEEPT', 'PREFD'):
+for k in ('prefs_unmatched', 'KEEPT', 'PREFD', 'LIKED'):
     old['res'].pop(k, None)
 runner.use_slot('live-old')
 rep = J(runner.load_state, {'state': json.dumps(old), 'out': os.path.join(tmp, 'old.xlsx')})

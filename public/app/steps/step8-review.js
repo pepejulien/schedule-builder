@@ -35,7 +35,11 @@ function PrefsCard({ info, loaded, prefsFailed, timeoffFailed }) {
     ${off.length ? html`<p><span class="chip gray">Days off (Unavailable)</span></p><ul>
       ${off.map(([n, days]) => html`<li>${n} — ${DAYS.filter((d) => days[d]).map((d) => `${d} (${why(days[d])})`).join(', ')}</li>`)}</ul>` : ''}
     ${limits.length ? html`<p><span class="chip blue">Limits</span></p><ul>
-      ${limits.map(([n, L]) => html`<li>${n} — ${limitText(L)}</li>`)}</ul>` : ''}
+      ${limits.map(([n, L]) => {
+        const t = limitText(L);
+        const likes = L.likes && L.likes.length ? `Likes ${L.likes.join(', ')}` : '';
+        return html`<li>${n} — ${t}${likes ? html`<span class="muted">${t ? ', ' : ''}${likes}</span>` : ''}</li>`;
+      })}</ul>` : ''}
     ${notOn.size ? html`<p class="muted">Not on this week's roster: ${[...notOn].join(', ')}</p>` : ''}
   </div>`;
 }

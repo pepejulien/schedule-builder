@@ -235,7 +235,7 @@ export function assembleConfig(state) {
   // --- Driver preferences + requested days off (2026-10-09) ---
   // Names map to this week's roster spelling when they match one driver; the rest
   // go through as-is (the solver skips + lists them, never a strict_names error).
-  const prefs = buildPrefKeys(state, roster, exclude, bench);
+  const prefs = buildPrefKeys(state, roster, exclude, bench, closed);
   if (state.driverPrefsFailed) warnings.push(PREFS_FAILED_MSG);
   if (state.timeoffFailed) warnings.push(TIMEOFF_FAILED_MSG);
 
@@ -287,7 +287,7 @@ export function assembleConfig(state) {
   if (Number.isFinite(wknCap) && wknCap > 0) config.max_weekend_days = wknCap;
   if (adv.merge_standing_unavailable && config.prefs_csv) config.merge_standing_unavailable = true;
   // Drivers-page keys: only when non-empty. NOT part of the name pre-flight below.
-  for (const k of ['extra_unavailable', 'driver_max_days', 'driver_max_row', 'prefer_days']) {
+  for (const k of ['extra_unavailable', 'driver_max_days', 'driver_max_row', 'prefer_days', 'like_days']) {
     if (Object.keys(prefs[k]).length) config[k] = prefs[k];
   }
   if (prefs.keep_together.length) config.keep_together = prefs.keep_together;
@@ -311,12 +311,13 @@ export function assembleConfig(state) {
 
 // The solver keys from the Drivers page + this week's time off, plus what the
 // review card shows: info = { off: {name: {Day: {why, note?}}},
-// limits: {name: {maxDays?, maxRow?, together?, weekend?: {on: [Day]}}}, unmatched: [name] }
+// limits: {name: {maxDays?, maxRow?, together?, weekend?: {on: [Day]}, likes?: [Day]}}, unmatched: [name] }
+// like_days (very soft) leaves out closed days and the driver's days off this week.
 // (unmatched = not on this week's roster; excluded / benched are left out).
 // A failed read of one source still applies the other.
-function buildPrefKeys(state, roster, exclude, bench) {
+function buildPrefKeys(state, roster, exclude, bench, closed = []) {
   const out = { extra_unavailable: {}, driver_max_days: {}, driver_max_row: {}, keep_together: [],
-    prefer_days: {}, info: { off: {}, limits: {}, unmatched: [] } };
+    prefer_days: {}, like_days: {}, info: { off: {}, limits: {}, unmatched: [] } };
   const startISO = state.week?.startISO;
   const doc = state.driverPrefsFailed ? null : state.driverPrefs;
   const timeoff = state.timeoffFailed ? null : state.weekTimeoff;
@@ -348,7 +349,8 @@ function buildPrefKeys(state, roster, exclude, bench) {
     const p = normPref(raw);
     if (!p) continue;
     const onW = onWeekendDays(p, startISO);
-    if (!p.maxDays && !p.maxRow && !p.together && !p.weekends) continue;
+    const likeOpen = (p.likeDays || []).filter((d) => !closed.includes(d));
+    if (!p.maxDays && !p.maxRow && !p.together && !p.weekends && !likeOpen.length) continue;
     const r = take(nm);
     if (!r) continue;
     const L = () => (out.info.limits[r] = out.info.limits[r] || {});
@@ -362,6 +364,11 @@ function buildPrefKeys(state, roster, exclude, bench) {
     if (p.together) { keep.add(r); L().together = true; }
     if (onW.length) out.prefer_days[r] = [...new Set([...(out.prefer_days[r] || []), ...onW])];
     if (p.weekends) L().weekend = { on: out.prefer_days[r] || [] };   // [] = off this weekend
+    const like = likeOpen.filter((d) => !(out.extra_unavailable[r] && d in out.extra_unavailable[r]));
+    if (like.length) {
+      out.like_days[r] = DAYS.filter((d) => like.includes(d) || (out.like_days[r] || []).includes(d));
+      L().likes = out.like_days[r];
+    }
   }
   out.keep_together = [...keep];
   out.info.unmatched = [...unmatched].sort();

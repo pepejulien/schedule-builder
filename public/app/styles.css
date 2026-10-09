@@ -625,6 +625,7 @@ table.lv-grid { font-size: 12.5px; }
 .dv-days .chip { position: relative; cursor: pointer; padding: 5px 12px; font-size: 12.5px; }
 .dv-days .chip:focus-within { box-shadow: 0 0 0 3px rgba(36,55,98,.18); }
 .chip.dv-off { text-decoration: line-through; }
+.dv-days .chip.dv-dis { opacity: .4; cursor: not-allowed; }
 .dv-sr { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
 .dv-on { gap: 7px; font-size: 13px; color: var(--ink2); }
 .dv-grid .dv-check { padding-top: 8px; }
