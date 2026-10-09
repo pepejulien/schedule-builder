@@ -81,11 +81,11 @@ function max7IfSent(d, days, today, lim) {
   return Math.round(best * 100) / 100;
 }
 
-// Weeks not built yet (2026-10-09): this week's Sunday through 8 weeks ahead, the published ones
+// Weeks not built yet (2026-10-09): this week's Sunday through 12 weeks ahead, the published ones
 // left out — {week, future: true, label}, newest first. Only their days off show (future-week.js);
 // none of the published-week machinery runs for them. The week number counts on from the newest
 // published week when all of both weeks fall in one year (the numbers restart each year); else dates only.
-const FUTURE_AHEAD = 8;
+const FUTURE_AHEAD = 12;
 const mdy = (iso) => pd(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 function futureWeeks(published) {
   const t = sundayOf(todayISO());
