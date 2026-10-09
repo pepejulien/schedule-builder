@@ -2,11 +2,12 @@
 // week / in a row, every other weekend, keep days together, a note. The weekly build reads these;
 // the Live board deep-links here with setState({ route: 'drivers', driversOpen: '<name>' }).
 import { html } from './preact-setup.js';
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { useStore, setState, toast } from './store.js';
 import { Spinner } from './ui.js';
 import { DAYS } from './lib/waves.js';
 import { parseISODate, toISODate, addDays } from './lib/weeks.js';
+import { canTimeoff, timeoffOnce, saveTimeoff, clearTimeoff, liveWeeks } from './api.js';
 import { loadDriverPrefs, saveDriverPref, loadDriverRoster, normPref, prefSummary, weekendOn } from './lib/driver-prefs.js';
 
 // case- and accent-insensitive, like the Live board's search
@@ -22,6 +23,95 @@ function nextWeekends() {
   return [0, 1, 2, 3].map((i) => shift(sat, 7 * i));
 }
 const weekendLabel = (sat) => `Sat ${md(sat)} – Sun ${md(shift(sat, 1))}`;
+
+const sundayOf = (iso) => shift(iso, -parseISODate(iso).getDay());
+const dayLabel = (iso) => `${DAYS[parseISODate(iso).getDay()]} ${md(iso)}`;
+const AHEAD = 12;   // weeks past this one, as on the Live board
+
+// One-off days off for weeks not built yet (the Live board's future weeks show them as "Asked off").
+// Saved right away, apart from the editor's Save button. Published weeks use the Live board instead.
+function DaysOff({ name }) {
+  const today = toISODate(new Date());
+  const week0 = sundayOf(today);
+  const weeks = Array.from({ length: AHEAD + 1 }, (_, i) => shift(week0, 7 * i));
+  const maxDay = shift(weeks[AHEAD], 6);
+  const [list, setList] = useState(null);       // [{name, day, note, week}] | null = loading
+  const [warn, setWarn] = useState(false);      // some week's read failed
+  const [date, setDate] = useState('');
+  const [note, setNote] = useState('');
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+  const alive = useRef(true);
+  const built = useRef(null);                   // Promise<Set of published week Sundays>
+  useEffect(() => () => { alive.current = false; }, []);
+
+  const load = async () => {
+    const res = await Promise.all(weeks.map((w) => timeoffOnce(w).catch(() => null)));
+    if (!alive.current) return;
+    const out = [];
+    res.forEach((r, i) => {
+      for (const t of Object.values(r || {})) {
+        if (t && fold(t.name) === fold(name) && t.day >= today && t.day >= weeks[i] && t.day <= shift(weeks[i], 6)) out.push({ ...t, week: weeks[i] });
+      }
+    });
+    out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+    setList(out);
+    setWarn(res.some((r) => r === null));
+  };
+  useEffect(() => {
+    built.current = Promise.resolve(liveWeeks(80)).then((ws) => new Set((ws || []).map((w) => w && w.week)));
+    built.current.catch(() => {});
+    load();
+  }, []);
+
+  const add = async () => {
+    setMsg('');
+    if (!date) { setMsg('Pick a date first.'); return; }
+    if (date < today || date > maxDay) { setMsg(`Pick a date from ${dayLabel(today)} to ${dayLabel(maxDay)}.`); return; }
+    const week = sundayOf(date);
+    setBusy(true);
+    try {
+      let pub;
+      try { pub = await built.current; }
+      catch { setMsg("Couldn't check which weeks are built — check the connection."); return; }
+      if (pub.has(week)) { setMsg('That week is already built — mark the day off on the Live schedule instead.'); return; }
+      await saveTimeoff(week, name, date, note.trim().slice(0, 300));
+      if (!alive.current) return;
+      setDate(''); setNote('');
+      toast('Day off added');
+      await load();
+    } catch {
+      toast("Couldn't save — check your connection and try again.", 'err');
+    } finally { if (alive.current) setBusy(false); }
+  };
+  const remove = async (t) => {
+    setBusy(true);
+    try { await clearTimeoff(t.week, t.name, t.day); await load(); }
+    catch { toast("Couldn't remove it — check your connection and try again.", 'err'); }
+    finally { if (alive.current) setBusy(false); }
+  };
+
+  return html`<div class="dv-dl">
+    ${list === null ? html`<div class="muted small"><${Spinner}/> Loading…</div>`
+      : list.length ? html`<div class="dv-dl-list">${list.map((t) => html`<div class="row dv-dl-row" key=${t.day + '|' + t.name}>
+          <span class="dv-dl-day">${dayLabel(t.day)}</span>
+          ${t.note ? html`<span class="muted small dv-dl-note">${t.note}</span>` : ''}
+          <button class="small ghost" disabled=${busy} onClick=${() => remove(t)}>Remove</button>
+        </div>`)}</div>`
+      : html`<div class="muted small">None coming up.</div>`}
+    ${warn ? html`<div class="muted small">Couldn't load every week's days off — check the connection.</div>` : ''}
+    <div class="row dv-dl-add">
+      <input type="date" min=${today} max=${maxDay} value=${date} disabled=${busy} aria-label="Date off"
+        onInput=${(e) => { setDate(e.target.value); setMsg(''); }} />
+      <input type="text" class="dv-dl-in" maxLength="300" placeholder="Doctor visit" value=${note} disabled=${busy}
+        aria-label="Note (optional)" onInput=${(e) => setNote(e.target.value)}
+        onKeyDown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} />
+      <button class="small" disabled=${busy} onClick=${add}>${busy ? 'Saving…' : 'Add day off'}</button>
+    </div>
+    ${msg ? html`<div class="small dv-dl-msg" role="alert">${msg}</div>` : ''}
+    <div class="hint dv-h">Saved right away. These go in as Unavailable when that week is built.</div>
+  </div>`;
+}
 
 const MAX_ROW = [['1', '1 (every other day)'], ['2', '2 (2 on, 1 off)'], ['3', '3'], ['4', '4'], ['5', '5']];
 
@@ -118,6 +208,9 @@ function Editor({ name, pref, onSaved, onClose }) {
         </div>
         <div class="hint dv-h">On their off weekend, Saturday and Sunday count as days off. On their on weekend, the build tries to give them both days.</div>
       </div>
+
+      ${canTimeoff() ? html`<div class="dv-lab">Specific days off</div>
+      <${DaysOff} name=${name} />` : ''}
 
       <div class="dv-lab">Keep days together</div>
       <div><label class="dv-check"><input type="checkbox" checked=${f.together}

@@ -633,6 +633,14 @@ table.lv-grid { font-size: 12.5px; }
 .dv-last { margin-top: 8px; }
 .dv-add { margin-top: 14px; }
 .dv-add input { flex: 0 1 220px; }
+.dv-dl { padding-top: 8px; font-size: 13px; }
+.dv-dl-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.dv-dl-row { gap: 10px; }
+.dv-dl-day { font-weight: 600; min-width: 84px; }
+.dv-dl-note { overflow-wrap: anywhere; }
+.dv-dl-add { gap: 6px; margin-top: 6px; }
+.dv-dl-in { flex: 0 1 220px; }
+.dv-dl-msg { margin-top: 6px; color: var(--err); }
 @media (max-width: 600px) {
   .dv-grid { grid-template-columns: 1fr; gap: 4px; }
   .dv-lab { padding-top: 10px; }
