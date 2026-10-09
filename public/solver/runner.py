@@ -146,6 +146,10 @@ def _driver_rows(res):
             dispatch_days=extra,
             meeting_days=meet,
             unavailable=sorted(dr["unav"]),
+            # Drivers page (2026-10): why a day is off / the driver's own caps
+            unav_why=dict(dr.get("unav_why") or {}),
+            max_days=dr.get("max_days"),
+            max_row=dr.get("max_row"),
             hours=hours,
             cells=cells,
             worked_dates=sorted(x.isoformat() for x in _worked_dates(res, dr)),
@@ -243,6 +247,7 @@ def _report(cfg, res, chk):
         summary_text=buf.getvalue(),
         infeasible=list(res.infeasible),
         notes=list(res.notes),
+        prefs_unmatched=list(getattr(res, "prefs_unmatched", None) or []),
         pairlog=[list(t) for t in res.PAIRLOG],
         fallback_used=[list(t) for t in res.fallback_used],
         drivers=_driver_rows(res),
@@ -710,6 +715,29 @@ def _hour_limits(res, dr, day, role):
     return out
 
 
+# Why a day is off, for the typed-confirm bucket (Jose 2026-10: Drivers page).
+PREF_OFF_WHY = {
+    "timeoff": "asked for this day off (Drivers page)",
+    "days": "can't work {day}s (Drivers page)",
+    "weekend": "off weekend (Drivers page)",
+}
+
+
+def _unav_reason(dr, day, default):
+    """The reason text for a day in dr['unav']: a Drivers-page day off says
+    which kind, a merged standing day off says so, else `default`."""
+    why = (dr.get("unav_why") or {}).get(day)
+    if why is not None:
+        return PREF_OFF_WHY.get(why, PREF_OFF_WHY["timeoff"]).format(day=day)
+    if day in (dr.get("std_added") or set()):
+        return "standing day off (from preferences)"
+    return default
+
+
+def _plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
 def _assess(res, dr, day, role):
     """Return (status, reasons, notes) for giving `dr` the (day, role) slot.
 
@@ -751,10 +779,7 @@ def _assess(res, dr, day, role):
         mk = _STATE["marks"][day][n]
         unav.append(f"{MARK_LABEL.get(mk['kind'], mk['kind']).lower()} that day")
     elif day in dr["unav"]:
-        if day in dr.get("std_added", set()):
-            unav.append("standing day off (from preferences)")
-        else:
-            unav.append("marked Unavailable that day")
+        unav.append(_unav_reason(dr, day, "marked Unavailable that day"))
     if day in dr["prim"] or day in dr["helper"]:
         blocks.append("already on a route that day")
     if day in dr["bk"]:
@@ -773,6 +798,10 @@ def _assess(res, dr, day, role):
             else:
                 blocks.append(f"would work {rl} days in a row (max "
                               f"{res.MAXC + 1 if live else res.MAXC})")
+        elif dr.get("max_row") is not None and rl > dr["max_row"]:
+            # the driver's own limit (Drivers page): POLICY - allowed, flagged
+            warns.append(f"asked for no more than {_plural(dr['max_row'], 'day')} "
+                         f"in a row (Drivers page)")
         # never 6 worked days in any 7 in a row, last week included (Jose 2026-10-07).
         # Builder: locked. Live board: the 6th day goes through after the pop-up (Jose
         # 2026-10-07, same day: "I want to be allowed to bypass this rule manually") and
@@ -797,6 +826,10 @@ def _assess(res, dr, day, role):
             limits.append(f"6-day: a 6th worked day this week (usual max {res.MAXTOT})")
         else:
             blocks.append(f"already at {tot} worked days")
+    kd = dr.get("max_days")
+    if kd is not None and not real and tot + inc > kd:
+        # the driver's own limit (Drivers page): POLICY - allowed, flagged
+        warns.append(f"asked for {_plural(kd, 'day')} max (Drivers page)")
     if FREE_name(dr, res.TARGET, res.MOST) and _pdays(dr) + len(dr["bk"]) + 1 > res.FREETOT:
         warns.append(f"Fair drivers normally max out at {res.FREETOT} total days")
 
@@ -880,8 +913,8 @@ def _note_override(dr, day, status, reasons):
         _STATE["ovr_limits"].add(n)
     if status == "unavail":
         _STATE["ovr_unav"].add((n, day))
-    if status in ("unavail", "warn"):
-        _STATE["ovr_policy"].add(n)
+    if status in ("unavail", "warn") or (status == "confirm" and len(reasons or []) > len(lim)):
+        _STATE["ovr_policy"].add(n)       # (confirm: the pop-up also carried policy flags)
     tag = f"  [OK'D: {'; '.join(lim)}]" if lim else ""
     if status == "unavail":
         return f"  [OVERRIDE: {reasons[0]}]" + tag
@@ -896,6 +929,8 @@ _OVR_RES = (
     (re.compile(r"^FAIR-SHAPE: (.+) roads\+backups over"), "policy"),
     (re.compile(r"^BACKUP<2PRIMARY: (.+)$"), "policy"),
     (re.compile(r"^BACKUP-ONLY: (.+)$"), "policy"),
+    (re.compile(r"^PREF-DAYS: (.+) \d+ worked days"), "policy"),
+    (re.compile(r"^PREF-ROW: (.+) run=\d+"), "policy"),
     (re.compile(r"^CONSEC>\d+: (.+) run=(\d+)$"), "limits"),
     (re.compile(r"^DAYS7>\d+: (.+?) (\d+) days in 7"), "limits"),
     (re.compile(r"^OT: (.+) road days over"), "limits"),
@@ -1772,6 +1807,14 @@ def load_state(payload_json):
             return json.dumps(dict(ok=False, kind="edit",
                 message="This saved week was made by a newer version of the app - reload the page."))
         res = Result(**_dec(st["res"]))
+        # a week saved before the Drivers-page preferences (2026-10): defaults
+        for dr in res.roster:
+            dr.setdefault("unav_why", {})
+            dr.setdefault("max_days", None)
+            dr.setdefault("max_row", None)
+        for k, v in (("prefs_unmatched", []), ("KEEPT", set()), ("PREFD", {})):
+            if not hasattr(res, k):
+                setattr(res, k, v)
         res.cfg["out"] = p.get("out") or res.cfg.get("out") or "/work/live.xlsx"
         pw = p.get("prev_worked")
         if pw:
@@ -2221,8 +2264,8 @@ def sync_actual(payload_json):
                    "duty": "on dispatch that day" if cell == "Dispatch" else "in a meeting that day",
                    "training": "on a training day",
                    "unavailable": "asked for the day off"}.get(kind)
-            if kind == "unavailable" and day in dr.get("std_added", set()):
-                why = "standing day off (from preferences)"
+            if kind == "unavailable":
+                why = _unav_reason(dr, day, why)
             if kind == "road" and role == "backup":
                 w = _cell_wave(cell)
                 if (w and cell == w and day in dr["prim"] and day not in dr["bk"]
