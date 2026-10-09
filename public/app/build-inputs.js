@@ -13,6 +13,13 @@ export function assembleFromWizard(w) {
     trainerHistory: w.trainerHistory || {},
     advanced: w.advanced || {},
     priorWeekAvailable: !!(w.priorWeek && w.priorWeek.bytes),
+    // Drivers page + requested days off (loaded by ensureDriverPrefs). Time off read for a
+    // different week than the one being built is ignored.
+    driverPrefs: w.driverPrefs || null,
+    weekTimeoff: w.weekTimeoffISO && w.weekTimeoffISO === w.week.startISO ? (w.weekTimeoff || null) : null,
+    driverPrefsFailed: !!w.driverPrefsFailed,
+    timeoffFailed: !!w.timeoffFailed && w.weekTimeoffISO === w.week.startISO,
+    nameAliases: w.nameAliases || {},
   };
   const out = assembleConfig(state);
   out.capacity = capacityCheck(out.config, state.availabilityRosterNames);

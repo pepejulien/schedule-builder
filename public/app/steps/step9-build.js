@@ -3,7 +3,7 @@ import { useState, useEffect } from 'preact/hooks';
 import { useStore, setWizard, setState, getState, toast } from '../store.js';
 import { StepNav, Embedded, goStep } from '../app.js';
 import { Step8Review } from './step8-review.js';
-import { ensureStanding } from './step7-standing.js';
+import { ensureStanding, ensureDriverPrefs } from './step7-standing.js';
 import { Banner, Spinner, download } from '../ui.js';
 import { assembleFromWizard } from '../build-inputs.js';
 import { build, editRequest } from '../solver-client.js';
@@ -681,6 +681,18 @@ function QuickAdjust({ wizard, onRebuild }) {
     </div>`;
 }
 
+// report.prefs_unmatched lines look like 'extra_unavailable: "Name" (not on this week's roster)';
+// one entry per name: 'Name (not on this week's roster)'.
+function prefsSkipped(r) {
+  const seen = new Map();
+  for (const line of (r && r.prefs_unmatched) || []) {
+    const m = String(line).match(/"([^"]+)"\s*(\(.*\))?/);
+    const name = m ? m[1] : String(line);
+    if (!seen.has(name)) seen.set(name, m && m[2] ? `${name} ${m[2]}` : name);
+  }
+  return [...seen.values()];
+}
+
 export function Step9Build() {
   const wizard = useStore((s) => s.wizard);
   const b = wizard.build;
@@ -694,6 +706,10 @@ export function Step9Build() {
 
   // Saved exclusions / trainers / dispatch apply even if that step was skipped.
   useEffect(() => { ensureStanding(); }, []);
+  // Driver preferences + this week's requested days off: fresh on every visit
+  // (they change on the Drivers page / Live board), again when the week changes.
+  const prefsWeek = wizard.week.startISO;
+  useEffect(() => { ensureDriverPrefs(); }, [prefsWeek]);
 
   // One candidate fetch per selected slot, shared by the table highlight and
   // the compact list (switching views doesn't refetch).
@@ -761,7 +777,9 @@ export function Step9Build() {
     setWizard({ build: { status: 'building', report: null, xlsx: null, error: null } });
     setProgress({ stage: 'start', detail: 'Preparing…' });
     await ensureStanding();
-    const wizard = getState().wizard;           // fresh, incl. standing just loaded
+    // never blocks: a failed read builds without them (driverPrefsFailed -> warning)
+    try { await ensureDriverPrefs({ force: true }); } catch { /* build without them */ }
+    const wizard = getState().wizard;           // fresh, incl. standing + driver prefs just loaded
     // Fresh trainer-rotation log, so Auto training pairs pick the right person
     // even when Trainers & settings was skipped this session.
     let trainerHistory = wizard.trainerHistory || {};
@@ -1000,6 +1018,7 @@ export function Step9Build() {
         Fair-driver hours: ${chk.pool ? `${chk.pool.min}–${chk.pool.max} (avg ${chk.pool.avg})` : 'n/a'}
       </p>
       ${(chk.fifth_day || []).length ? html`<p class="muted">42h fifth-day backups: ${chk.fifth_day.map((x) => x[0]).join(', ')}</p>` : ''}
+      ${prefsSkipped(r).length ? html`<p class="muted">Driver preferences not used: ${prefsSkipped(r).join(', ')}</p>` : ''}
 
       <details style="margin-top:10px"><summary>Full verification log</summary>
         <pre class="log">${r.summary_text}</pre></details>

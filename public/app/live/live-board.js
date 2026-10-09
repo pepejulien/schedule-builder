@@ -20,7 +20,7 @@ import { MissingCheck } from './missing.js';
 import { routeDays, backupDays, rtMismatches } from './limits.js';
 import { RtCheck } from './rt-check.js';
 import { driverCsv } from '../lib/driver-csv.js';
-import { parseISODate } from '../lib/weeks.js';
+import { parseISODate, weekLabel } from '../lib/weeks.js';
 import {
   WaveEditor, SlotEditor, ConfirmOverride, LimitConfirm, runConfirmed, TIER_META, TIER_ORDER,
   translateInfeasible, translateOverride, RuleProblems,
@@ -31,6 +31,7 @@ import {
   notePrevSummary, prevTailRev,
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
+import { FutureWeek } from './future-week.js';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 // the discipline engine's driver key: first|last, letters only (attendance records use it)
@@ -78,6 +79,29 @@ function max7IfSent(d, days, today, lim) {
     best = Math.max(best, t);
   }
   return Math.round(best * 100) / 100;
+}
+
+// Weeks not built yet (2026-10-09): this week's Sunday through 12 weeks ahead, the published ones
+// left out — {week, future: true, label}, newest first. Only their days off show (future-week.js);
+// none of the published-week machinery runs for them. The week number counts on from the newest
+// published week when all of both weeks fall in one year (the numbers restart each year); else dates only.
+const FUTURE_AHEAD = 12;
+const mdy = (iso) => pd(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+function futureWeeks(published) {
+  const t = sundayOf(todayISO());
+  const have = new Set(published.map((w) => w.week));
+  const ref = published.find((w) => parseInt(w.num, 10) > 0 && /^\d{4}-\d{2}-\d{2}$/.test(w.week || ''));
+  const out = [];
+  for (let k = FUTURE_AHEAD; k >= 0; k--) {
+    const week = toISODate(addDays(pd(t), 7 * k));
+    if (have.has(week)) continue;
+    const end = toISODate(addDays(pd(week), 6));
+    const yr = week.slice(0, 4);
+    const n = ref ? parseInt(ref.num, 10) + Math.round((pd(week) - pd(ref.week)) / (7 * 86400000)) : 0;
+    const sameYear = ref && [ref.week, toISODate(addDays(pd(ref.week), 6)), end].every((d) => d.slice(0, 4) === yr);
+    out.push({ week, future: true, label: sameYear && n > 0 ? weekLabel(n, week) : `Week of ${mdy(week)} - ${mdy(end)}, ${end.slice(0, 4)}` });
+  }
+  return out;
 }
 
 // The over-the-limit card (hours in 7 days / days in a row): the same HTML the Vehicle
@@ -541,7 +565,8 @@ export function LiveBoard() {
 }
 
 function Board() {
-  const [weeks, setWeeks] = useState(null);
+  const [weeks, setWeeks] = useState(null);      // the published weeks only (knownPrevRev reads them)
+  const [futs, setFuts] = useState([]);          // weeks not built yet: futureWeeks()
   const [sel, setSel] = useState(null);
   const [data, setData] = useState(null);      // {meta, summary, rev, remote?} (engine state: engJson below)
   const [rep, setRep] = useState(null);        // the engine's report for data.rev
@@ -575,7 +600,8 @@ function Board() {
 
   // async work reads the newest values through refs
   const R = useRef({});
-  Object.assign(R.current, { sel, data, rep, eng, metaLive, busy, weeks });
+  Object.assign(R.current, { sel, data, rep, eng, metaLive, busy, weeks, futs });
+  const isFuture = (w) => !!w && (R.current.futs || []).some((x) => x.week === w);
   const saving = useRef(false);
   // Speed (2026-10-08): the grid shows a version as soon as it's known and the engine catches up
   // behind it. data = {meta, summary, rev} on screen; the engine state saved with it is kept apart.
@@ -591,12 +617,14 @@ function Board() {
   async function refreshWeeks(pick) {
     try {
       const ws = await liveWeeks(80);
+      const fw = futureWeeks(ws);
+      R.current.futs = fw; setFuts(fw);
       setWeeks(ws);
       if (pick) {
         const t = sundayOf(todayISO());
-        setSel((ws.find((w) => w.week === t) || ws[0] || {}).week || null);
+        setSel((ws.find((w) => w.week === t) || fw.find((w) => w.week === t) || ws[0] || fw[0] || {}).week || null);
       }
-    } catch (e) { setErr('Could not read the published weeks: ' + (e.message || e)); setWeeks([]); }
+    } catch (e) { setErr('Could not read the published weeks: ' + (e.message || e)); setWeeks([]); }   // no future weeks either: can't tell which are built
   }
   useEffect(() => {
     warmup();   // the rules engine (Python) starts loading now, alongside the reads
@@ -762,6 +790,8 @@ function Board() {
     R.current.data = null; R.current.rep = null; R.current.metaLive = null; R.current.eng = { status: 'idle', rev: null, error: null };
     engGen.current++; engJson.current = null; smLive.current = null; pendingSync.current = false; toasted.current = 0;
     clearTimeout(lateT.current);
+    // a week not built yet: no week to read, no engine, no watches (future-week.js has its own)
+    if (isFuture(sel)) { setNotes({}); setConfirms({}); setActDocs({}); setAtt([]); setLates({}); return undefined; }
     openWeek(sel);
     const un1 = watchLiveWeek(sel, (m) => { R.current.metaLive = m; setMetaLive(m); });
     // another dispatcher's save: its summary goes on the grid the moment it lands
@@ -1053,8 +1083,10 @@ function Board() {
 
   // ------------------------------------------------------------- render --
   if (weeks === null) return html`<div class="card"><${Spinner}/> Loading the published weeks…</div>`;
-  if (!weeks.length) {
-    return html`<div class="card hero">
+  // published + not built yet, newest first: ◀ ▶ and the list go across both
+  const allWeeks = [...weeks, ...futs].sort((a, b) => (a.week < b.week ? 1 : a.week > b.week ? -1 : 0));
+  const futSel = futs.find((w) => w.week === sel) || null;
+  const noPub = html`<div class="card hero">
       <div class="hero-ico">${Icon('live', 24)}</div>
       <h2>No published weeks yet</h2>
       <p class="hint">Build a schedule, then press <b>Publish to the Live board</b> on the Build step. The week then
@@ -1062,20 +1094,28 @@ function Board() {
       ${err ? html`<${Banner} kind="err">${err}<//>` : ''}
       <button class="accent" onClick=${() => { setState({ route: 'wizard' }); setWizard({ step: 4 }); }}>Go to Build ${Icon('arrow', 16)}</button>
     </div>`;
-  }
+  if (!allWeeks.length) return noPub;
 
-  const idx = weeks.findIndex((w) => w.week === sel);
+  const idx = allWeeks.findIndex((w) => w.week === sel);
   const thisWeek = sundayOf(todayISO());
   const picker = html`<div class="card lv-head">
     <div class="row">
-      <button class="small" disabled=${idx >= weeks.length - 1} title="Older week" onClick=${() => setSel(weeks[idx + 1].week)}>◀</button>
+      <button class="small" disabled=${idx >= allWeeks.length - 1} title="Older week" onClick=${() => setSel(allWeeks[idx + 1].week)}>◀</button>
       <select value=${sel || ''} onChange=${(e) => setSel(e.target.value)}>
-        ${weeks.map((w) => html`<option value=${w.week}>${w.label || w.week}${w.week === thisWeek ? ' — this week' : w.week > thisWeek ? ' — upcoming' : ''}</option>`)}
+        ${allWeeks.map((w) => html`<option value=${w.week}>${w.label || w.week}${w.week === thisWeek ? ' — this week' : w.week > thisWeek && !w.future ? ' — upcoming' : ''}${w.future ? ' — not built yet' : ''}</option>`)}
       </select>
-      <button class="small" disabled=${idx <= 0} title="Newer week" onClick=${() => setSel(weeks[idx - 1].week)}>▶</button>
-      <span class="muted lv-pub">${data ? `Published by ${data.meta.publishedBy || '—'} · last change by ${data.meta.by || '—'}` : ''}</span>
+      <button class="small" disabled=${idx <= 0} title="Newer week" onClick=${() => setSel(allWeeks[idx - 1].week)}>▶</button>
+      <span class="muted lv-pub">${data && !futSel ? `Published by ${data.meta.publishedBy || '—'} · last change by ${data.meta.by || '—'}` : ''}</span>
     </div>
   </div>`;
+
+  // a week not built yet: its days off only (the published board's state isn't read for it)
+  if (futSel) {
+    return html`<div>${picker}
+      ${!weeks.length ? html`<${Banner} kind="info"><b>No published weeks yet.</b> Build a schedule, then press <b>Publish to the Live board</b>
+        on the Build step. <button class="link" onClick=${() => { setState({ route: 'wizard' }); setWizard({ step: 4 }); }}>Go to Build</button><//>` : ''}
+      <${FutureWeek} week=${futSel.week} label=${futSel.label} /></div>`;
+  }
 
   if (!data) {
     return html`<div>${picker}

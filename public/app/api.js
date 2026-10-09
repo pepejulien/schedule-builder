@@ -64,6 +64,7 @@ const FB_DOCS = {
   'standing/config.json': ['standing', 'json'],
   'standing/aliases.json': ['aliases', 'json'],
   'standing/prefs.csv': ['prefs', 'text'],
+  'standing/drivers.json': ['drivers', 'json'],   // per-driver preferences, the Drivers page (2026-10-09)
 };
 
 export async function storeGet(key) {
@@ -157,6 +158,7 @@ export async function exportSettings() {
     standing: await get('standing/config.json'),
     aliases: await get('standing/aliases.json'),
     prefs: prefs || null,
+    drivers: await get('standing/drivers.json'),
     trainingHistory: await loadTrainingHistory().catch(() => ({})),
   };
 }
@@ -167,6 +169,7 @@ export async function importSettings(data) {
   if (data.standing) { await storePutJSON('standing/config.json', data.standing); done.push('standing settings'); }
   if (data.aliases) { await storePutJSON('standing/aliases.json', data.aliases); done.push('name matches'); }
   if (data.prefs) { await storeText('standing/prefs.csv', data.prefs); done.push('driver preferences'); }
+  if (data.drivers) { await storePutJSON('standing/drivers.json', data.drivers); done.push('driver preferences (Drivers page)'); }
   const weeks = Object.entries(data.trainingHistory || {});
   for (const [wk, rows] of weeks) {
     await saveTrainingWeek(wk, '', (rows || []).map((r) => ({ trainer: r[0], trainee: r[1], day: r[2] })));
@@ -261,5 +264,24 @@ export function liveSummaryOnce(weekISO, accept = () => true, ms = 6000) {
     const finish = (d) => { if (done) return; done = true; clearTimeout(t); setTimeout(() => un && un(), 0); resolve(d); };
     const t = setTimeout(() => finish(undefined), ms);
     un = window.JAJB.watch(`schedule_weeks/${weekISO}/data/summary`, (d) => { if (accept(d)) finish(d); });
+  });
+}
+
+// Requested days off for weeks not built yet (2026-10-09): Firestore schedule_timeoff/{weekStart}/days.
+// {"<ISO day>|<name>": {name, day, note, by, at}} — the weekly build turns them into Unavailable days.
+export const canTimeoff = () => onFirebase() && typeof window.JAJB.watchScheduleTimeoff === 'function';
+export const watchTimeoff = (weekISO, cb) => (canTimeoff() ? window.JAJB.watchScheduleTimeoff(weekISO, cb) : (cb({}), () => {}));
+export const saveTimeoff = (weekISO, name, dayISO, note) => window.JAJB.saveScheduleTimeoff(weekISO, name, dayISO, note || '');
+export const clearTimeoff = (weekISO, name, dayISO) => window.JAJB.deleteScheduleTimeoff(weekISO, name, dayISO);
+// Once: the first snapshot ({} = really no days off), or null when the read failed or
+// nothing came back in time — so a failure never looks like "nobody asked off".
+// Netlify (no time off at all) is {}.
+export function timeoffOnce(weekISO, ms = 6000) {
+  if (!canTimeoff()) return Promise.resolve({});
+  return new Promise((resolve) => {
+    let done = false, un = null;
+    const finish = (d) => { if (done) return; done = true; clearTimeout(t); setTimeout(() => un && un(), 0); resolve(d && typeof d === 'object' ? d : null); };
+    const t = setTimeout(() => finish(null), ms);
+    un = window.JAJB.watchScheduleTimeoff(weekISO, finish);
   });
 }

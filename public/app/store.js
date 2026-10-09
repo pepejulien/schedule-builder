@@ -18,13 +18,20 @@ function freshWizard() {
     standing: null,                // loaded from Blobs: { exclude, bench, dispatch, trainers, trainingPairs, hasPrefs }
     trainerHistory: {},            // loaded from Blobs: { weekStartISO: [[trainer, trainee, day]] } - trainer rotation
     advanced: {},                  // config overrides
+    driverPrefs: null,             // live: the Drivers-page prefs doc (ensureDriverPrefs; not resumed from a draft)
+    weekTimeoff: null,             // live: requested days off for weekTimeoffISO
+    weekTimeoffISO: null,
+    driverPrefsFailed: false,      // the prefs read failed -> build without them, warn
+    timeoffFailed: false,          // the time-off read failed / timed out -> build without it, warn
+    nameAliases: {},               // confirmed name matches (standing/aliases.json)
     build: { status: 'idle', report: null, xlsx: null, error: null, savedName: null },
   };
 }
 
 let state = {
   auth: 'unknown',                 // 'unknown' | 'in' | 'out'
-  route: 'home',                   // 'home' | 'wizard' | 'settings' | 'live'
+  route: 'home',                   // 'home' | 'wizard' | 'settings' | 'live' | 'drivers'
+  driversOpen: null,               // a driver name: the Drivers page opens their editor, then clears this
   wizard: freshWizard(),
   toast: null,
 };
@@ -62,6 +69,13 @@ export function hydrateWizard(wizard) {
     merged.step = [0, 0, 1, 0, 2, 2, 3, 4, 4][wizard.step] ?? 0;
     merged.flow = 2;
   }
+  // Driver preferences + time off are live data: drop any saved copy so the
+  // build step reads them fresh (ensureDriverPrefs).
+  merged.driverPrefs = null;
+  merged.weekTimeoff = null;
+  merged.weekTimeoffISO = null;
+  merged.driverPrefsFailed = false;
+  merged.timeoffFailed = false;
   // A 'building' status saved mid-build has no live engine after a page reload,
   // so nothing would ever finish it — reset to 'idle' so the user sees the
   // Build button instead of a frozen spinner.

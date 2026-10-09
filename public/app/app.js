@@ -16,6 +16,7 @@ import { Step9Build } from './steps/step9-build.js';
 import { Settings } from './settings.js';
 import { LiveBoard } from './live/live-board.js';
 import { Today } from './live/today.js';
+import { Drivers } from './drivers.js';
 
 // A step rendered INSIDE another step hides its own Back/Next bar.
 export const Embedded = createContext(false);
@@ -181,6 +182,7 @@ function Sidebar() {
     <nav>
       ${nav(route === 'home', 'home', canLive() ? 'Today' : 'Overview', () => setState({ route: 'home' }))}
       ${nav(route === 'live', 'live', 'Live schedule', () => setState({ route: 'live' }))}
+      ${nav(route === 'drivers', 'users', 'Driver preferences', () => setState({ route: 'drivers' }))}
       <div class="sbgroup">Build a week</div>
       ${STEPS.map((s, i) => {
         const st = r.steps[i]?.status;
@@ -205,11 +207,12 @@ function TopBar() {
   let title = canLive() ? 'Today' : 'Overview';
   let sub = canLive() ? 'This week at a glance' : 'Where this week\'s schedule stands';
   if (route === 'settings') { title = 'Settings'; sub = 'Saved for every week'; }
+  else if (route === 'drivers') { title = 'Driver preferences'; sub = 'Days each driver can work, and their limits'; }
   else if (route === 'live') { title = 'Live schedule'; sub = 'The published week, worked day by day — every change is logged'; }
   else if (route === 'wizard') { title = STEPS[step].title; sub = `Step ${step + 1} of ${STEPS.length} · ${STEPS[step].sub}`; }
   return html`<header class="topbar"><div class="tbrow">
     <div>
-      <div class="tbtitle"><h1>${title}</h1>${week?.label && route !== 'live' && !(route === 'home' && canLive()) ? html`<span class="wkpill">${week.label}</span>` : ''}</div>
+      <div class="tbtitle"><h1>${title}</h1>${week?.label && route !== 'live' && route !== 'drivers' && !(route === 'home' && canLive()) ? html`<span class="wkpill">${week.label}</span>` : ''}</div>
       <div class="tbsub">${sub}</div>
     </div>
     ${route === 'home' && !canLive() && (week?.num || step) ? html`<button class="rbtn" onClick=${() => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); }}>
@@ -224,6 +227,7 @@ function MobileSteps() {
   return html`<div class="msteps">
     <button class=${'mstep' + (route === 'home' ? ' on' : '')} onClick=${() => setState({ route: 'home' })}>${canLive() ? 'Today' : 'Overview'}</button>
     <button class=${'mstep' + (route === 'live' ? ' on' : '')} onClick=${() => setState({ route: 'live' })}>Live schedule</button>
+    <button class=${'mstep' + (route === 'drivers' ? ' on' : '')} onClick=${() => setState({ route: 'drivers' })}>Driver preferences</button>
     ${STEPS.map((s, i) => html`
     <button class=${'mstep' + (route === 'wizard' && i === step ? ' on' : '')}
       onClick=${() => { continueWizard(); goStep(i); }}>${i + 1}. ${s.title}</button>`)}
@@ -265,6 +269,7 @@ export function App() {
   let body;
   if (route === 'settings') body = html`<${Settings}/>`;
   else if (route === 'live') body = html`<${LiveBoard}/>`;
+  else if (route === 'drivers') body = html`<${Drivers}/>`;
   else if (route === 'wizard') { const Comp = STEPS[Math.min(step, STEPS.length - 1)].comp; body = html`<${Comp}/>`; }
   else body = html`<${Home}/>`;
 

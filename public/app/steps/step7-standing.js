@@ -4,7 +4,8 @@ import { useStore, setWizard, getState, toast } from '../store.js';
 import { StepNav, goStep } from '../app.js';
 import { Banner } from '../ui.js';
 import { DAYS } from '../lib/waves.js';
-import { storeGet, storePutJSON, loadTrainingHistory } from '../api.js';
+import { storeGet, storePutJSON, loadTrainingHistory, timeoffOnce } from '../api.js';
+import { readDriverPrefs } from '../lib/driver-prefs.js';
 import { AUTO_TRAINER, trainerRotation } from '../lib/config-assemble.js';
 
 export const DEFAULT_STANDING = {
@@ -46,6 +47,35 @@ export async function ensureStanding() {
   try { cfg = await storeGet('standing/config.json'); } catch { /* defaults */ }
   try { hasPrefs = !!(await storeGet('standing/prefs.csv')); } catch { /* none */ }
   if (!getState().wizard.standing) setWizard({ standing: { ...DEFAULT_STANDING, ...(cfg || {}), hasPrefs } });
+}
+
+// Load the Drivers-page preferences and this week's requested days off into
+// the build. Prefs are read every call (they change on another page); time off
+// is re-read when the week changes, after a failed read, or with force. A
+// failed read never blocks a build: it sets driverPrefsFailed / timeoffFailed
+// (the review shows a warning) and the build runs with whatever did load.
+let prefsLoading = null;
+export function ensureDriverPrefs({ force = false } = {}) {
+  if (prefsLoading) return prefsLoading.then(() => ensureDriverPrefs({ force }));
+  prefsLoading = (async () => {
+    const weekISO = getState().wizard.week?.startISO;
+    let doc = null, failed = false;
+    try { doc = await readDriverPrefs(); } catch { failed = true; }
+    let aliases = getState().wizard.nameAliases || {};
+    try { const a = await storeGet('standing/aliases.json'); if (a && typeof a === 'object') aliases = a; } catch { /* keep */ }
+    const patch = { driverPrefs: doc, driverPrefsFailed: failed, nameAliases: aliases };
+    const w = getState().wizard;
+    if (weekISO && (force || w.timeoffFailed || w.weekTimeoffISO !== weekISO || !w.weekTimeoff)) {
+      let t = null;
+      try { t = await timeoffOnce(weekISO); } catch { t = null; }
+      // a failed read is not cached as loaded: the next call tries again
+      patch.weekTimeoff = t;
+      patch.weekTimeoffISO = weekISO;
+      patch.timeoffFailed = !t;
+    }
+    setWizard(patch);
+  })().finally(() => { prefsLoading = null; });
+  return prefsLoading;
 }
 
 export function Step7Standing() {

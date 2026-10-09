@@ -597,3 +597,58 @@ table.lv-grid { font-size: 12.5px; }
 .td-ot { margin-top: 8px; font-size: 13.5px; }
 .td-ot summary { cursor: pointer; color: var(--muted); }
 .td-otlist { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+/* ---- Drivers page (standing preferences) ---- */
+.dv-tools { margin-bottom: 14px; }
+.dv-search { flex: 1 1 220px; max-width: 320px; }
+.dv-check { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font-size: 13px; color: var(--ink2); }
+.dv-loading { padding: 18px 0; color: var(--muted); }
+.dv-list { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.dv-item { scroll-margin-top: 140px; }
+.dv-item + .dv-item { border-top: 1px solid var(--line); }
+.dv-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 9px 14px; cursor: pointer; }
+.dv-row:hover, .dv-item.open > .dv-row { background: #f7f7fa; }
+.dv-row:focus-visible { outline: 2px solid var(--navy); outline-offset: -2px; }
+.dv-name { font-weight: 600; min-width: 170px; }
+.dv-chips { display: inline-flex; flex-wrap: wrap; gap: 5px; }
+.dv-list .small, .dv-ed .small, .dv-add .small { font-size: 12.5px; }
+.dv-note-txt { flex-basis: 100%; padding-left: 182px; }
+.dv-ed { padding: 14px 16px 12px; background: #fbfbfd; border-top: 1px solid var(--line); }
+.dv-grid { display: grid; grid-template-columns: 150px 1fr; gap: 12px 16px; align-items: start; }
+.dv-lab { font-weight: 600; font-size: 12.5px; color: var(--ink2); padding-top: 8px; }
+.dv-grid .hint.dv-h { margin: 6px 0 0; }
+.dv-days { gap: 6px; padding-top: 4px; }
+.dv-days .chip { position: relative; cursor: pointer; padding: 5px 12px; font-size: 12.5px; }
+.dv-days .chip:focus-within { box-shadow: 0 0 0 3px rgba(36,55,98,.18); }
+.chip.dv-off { text-decoration: line-through; }
+.dv-sr { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.dv-on { gap: 7px; font-size: 13px; color: var(--ink2); }
+.dv-grid .dv-check { padding-top: 8px; }
+.dv-note { width: 100%; max-width: 460px; }
+.dv-btns { margin-top: 16px; }
+.dv-last { margin-top: 8px; }
+.dv-add { margin-top: 14px; }
+.dv-add input { flex: 0 1 220px; }
+@media (max-width: 600px) {
+  .dv-grid { grid-template-columns: 1fr; gap: 4px; }
+  .dv-lab { padding-top: 10px; }
+  .dv-name { min-width: 0; flex-basis: 100%; }
+  .dv-note-txt { padding-left: 0; }
+  .dv-search { max-width: none; }
+}
+
+/* Future weeks on the Live board (2026-10-09): live/future-week.js */
+.fw-badge { vertical-align: middle; margin-left: 6px; }
+.fw-wrap { position: relative; }
+.fw-pref { font-size: 11.5px; font-weight: 500; color: var(--muted2); }
+.lv-cell.fw-past { cursor: default; opacity: .55; }
+.lv-cell.fw-past:hover { outline: none; }
+.fw-menu { position: absolute; z-index: 40; max-width: calc(100% - 8px); background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 10px 34px rgba(36,55,98,.18); padding: 10px 12px 12px; font-size: 13px; line-height: 1.45; }
+.fw-menu-head { display: flex; align-items: baseline; gap: 6px; padding-right: 28px; position: relative; }
+.fw-x { position: absolute; top: -6px; right: -6px; font-size: 22px; }
+.fw-menu-info { margin-top: 6px; }
+.fw-menu-note { margin-top: 2px; color: var(--ink2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.fw-menu-title { font-weight: 600; margin: 6px 0 4px; }
+.fw-menu-form input { width: 100%; margin: 4px 0 8px; }
+.fw-menu-acts { margin-top: 8px; }
