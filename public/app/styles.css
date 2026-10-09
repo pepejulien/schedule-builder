@@ -452,6 +452,12 @@ table.lv-grid { font-size: 12.5px; }
   background-size: 28.28px 28.28px; color: #16191f; }
 .lv-blk.b-route { border: 4px solid #DCE3F0; padding: 1px 3px; }
 .dm-now .lv-blk.b-route { padding: 3px 6px; }
+/* Unavailable / a call-off with a route in Route Tracker: the block stays, a striped strip on the right (Jose 2026-10-08) */
+.lv-blk.lv-has-tag { position: relative; padding-right: 13px; }
+.lv-rt-tag { position: absolute; top: 0; right: 0; bottom: 0; width: 6px; border-radius: 0 4px 4px 0;
+  background-image: linear-gradient(135deg, #C3EB5E 25%, #6FA82B 25%, #6FA82B 50%, #C3EB5E 50%, #C3EB5E 75%, #6FA82B 75%, #6FA82B 100%); background-size: 8px 8px; }
+/* a backup in Route Tracker the schedule doesn't have yet (Jose 2026-10-08) */
+.lv-blk.b-rtbk { background: #fff; border: 2px dashed #DCE3F0; padding: 3px 5px; font-weight: 500; }
 .lv-grid th.past { background: repeating-linear-gradient(135deg, #fbfbfd 0 6px, #eef0f3 6px 12px); }
 .lv-sub { font-size: 11px; color: var(--muted2); font-weight: 500; }
 .chip.trainer-chip { background: #FFA28A; color: #5b2412; padding: 1px 7px; font-size: 10.5px; }

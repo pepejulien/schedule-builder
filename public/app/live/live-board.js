@@ -17,7 +17,8 @@ import { liveRequest, warmup } from '../solver-client.js';
 import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, saveLiveConfirm, watchLiveAttendance, watchLiveLate, saveLiveLate,
   watchLiveSummary, canWatchSummary } from '../api.js';
 import { MissingCheck } from './missing.js';
-import { routeDays } from './limits.js';
+import { routeDays, backupDays, rtMismatches } from './limits.js';
+import { RtCheck } from './rt-check.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate } from '../lib/weeks.js';
 import {
@@ -85,15 +86,28 @@ function RiskInfo({ d, risk, iso }) {
   return html`<div dangerouslySetInnerHTML=${{ __html: riskCardHtml(d, risk, iso) }} />`;
 }
 
-function Block({ v, route }) {
+function Block({ v, route, bk }) {
   const c = cellInfo(v);
+  const rtTitle = route ? `On route ${route} (Route Tracker)` : 'On a route (Route Tracker)';
+  // Unavailable / a mark with a route in Route Tracker: keep the call-off visible, plus a small
+  // striped "Route" strip on the right. The mismatch card explains it. (Jose 2026-10-08)
+  if (route != null && (c.kind === 'off' || c.kind === 'mark')) {
+    return html`<div class=${'lv-blk lv-has-tag b-' + c.kind} style=${c.bg ? `background:${c.bg}` : ''}>
+      <span>${c.top}</span>${c.sub ? html`<small>${c.sub}</small>` : ''}<i class="lv-rt-tag" title=${rtTitle}></i></div>`;
+  }
   // on a route that day (Route Tracker): Amazon's green stripes, the shift's own color as the
-  // border. Not scheduled / Unavailable / a mark -> a plain "Route" block. (Jose 2026-10-08)
+  // border. Not scheduled -> a plain "Route" block. (Jose 2026-10-08)
   if (route != null) {
-    const shift = !['empty', 'off', 'mark'].includes(c.kind);
+    const shift = c.kind !== 'empty';
     const sub = shift ? [c.sub, route].filter(Boolean).join(' · ') : route;
     return html`<div class="lv-blk b-route" style=${`border-color:${shift ? c.bg || SHIFT_COLORS.other : SHIFT_COLORS.other}`}>
       <span>${shift ? c.top : 'Route'}</span>${sub ? html`<small>${sub}</small>` : ''}</div>`;
+  }
+  // a backup in Route Tracker on a blank day: shown right away, until the cloud writer adds it
+  // to the schedule (then it's a normal backup block) (Jose 2026-10-08)
+  if (c.kind === 'empty' && bk != null) {
+    return html`<div class="lv-blk b-rtbk" style=${`border-color:${SHIFT_COLORS.other}`}
+      title="Backup in Route Tracker — the schedule will add it"><span>Backup</span><small>Route Tracker</small></div>`;
   }
   if (c.kind === 'empty') return '';
   return html`<div class=${'lv-blk b-' + c.kind} style=${c.bg ? `background:${c.bg}` : ''}>
@@ -1074,8 +1088,12 @@ function Board() {
   const tday = view.days.find((x) => x.date === today);
   const lim = view.limits || {};
   // who had a route each day, today and before (Route Tracker) (Jose 2026-10-08)
-  const routeOf = routeDays(actualList(actDocs.prev, actDocs.cur));
+  const actList = actualList(actDocs.prev, actDocs.cur);
+  const routeOf = routeDays(actList);
   const routeFor = (name, iso) => { const r = iso && iso <= today ? routeOf(name) : null; return r && iso in r ? r[iso] : undefined; };
+  // backup days (Route Tracker) - shown on blank days until the cloud writer adds them (Jose 2026-10-08)
+  const bkOf = backupDays(actList);
+  const bkFor = (name, iso) => { const r = iso && iso <= today ? bkOf(name) : null; return r && iso in r ? r[iso] : undefined; };
   const openRoutes = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.routes - x.routes_filled), 0);
   const openBk = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.backup - x.backup_filled), 0);
   const byName = Object.fromEntries(view.drivers.map((x) => [x.name, x]));
@@ -1147,7 +1165,8 @@ function Board() {
         const slot = m ? { day: m[1], role: 'road' } : (m = l.match(/P2 SHORT (\w+)/)) ? { day: m[1], role: 'backup' } : null;
         return html`<li>${openText(l)}${slot ? html` <button class="small" onClick=${() => goFind(slot.day, slot.role)}>Find someone…</button>` : ''}</li>`;
       })}</ul><//>` : ''}
-    <${MissingCheck} week=${sel} missing=${missingDays(data.summary, actualList(actDocs.prev, actDocs.cur), confirms, today)} />
+    <${MissingCheck} week=${sel} missing=${missingDays(data.summary, actList, confirms, today)} />
+    <${RtCheck} rows=${rtMismatches(view, actList, today)} onOpen=${(c) => { setPop(null); setCell(c); }} />
     <${RuleProblems} lines=${view.errors || []} />
     ${(view.overridden || []).length ? html`<details class="banner warn"><summary><b>${view.overridden.length} approved override${view.overridden.length === 1 ? '' : 's'}</b></summary>
       <ul>${view.overridden.map((l) => html`<li>${translateOverride(l)}</li>`)}</ul></details>` : ''}
@@ -1228,12 +1247,14 @@ function Board() {
                   const note = notes[dd.date + '|' + x.name];
                   const late = lates[dd.date + '|' + x.name];
                   const route = routeFor(x.name, dd.date);
-                  const onRoute = route == null ? '' : (route ? `On route ${route} (Route Tracker)\n` : 'On a route (Route Tracker)\n');
+                  const rtBk = c.kind === 'empty' && route == null ? bkFor(x.name, dd.date) : undefined;
+                  const onRoute = route == null ? (rtBk != null ? 'Backup in Route Tracker — the schedule will add it\n' : '')
+                    : (route ? `On route ${route} (Route Tracker)\n` : 'On a route (Route Tracker)\n');
                   return html`<td class=${'lv-cell k-' + c.kind + (dd.date === today ? ' today' : '') + (dd.open ? '' : ' closed') + (hot ? ' lv-over' : '')}
                     title=${hot ? undefined : onRoute + (note ? `💬 ${note.text} — ${note.by || ''}\n` : '') + (c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed'))}
                     onMouseEnter=${hot ? (e) => showPop(e, x.name, dd.date) : undefined}
                     onMouseLeave=${hot ? () => setPop(null) : undefined}
-                    onClick=${dd.open || note ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} route=${route} />${
+                    onClick=${dd.open || note ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} route=${route} bk=${rtBk} />${
                       note ? html`<span class="lv-notedot" aria-label="Has a comment">💬</span>` : ''}${
                       late ? html`<span class="lv-notedot" style="right:auto;left:2px" title=${'Late — ' + late.time} aria-label="Late arrival">⏰</span>` : ''}</td>`;
                 })}

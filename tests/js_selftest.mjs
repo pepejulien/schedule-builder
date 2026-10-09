@@ -10,7 +10,7 @@ import { weekLabel, isSunday } from '../public/app/lib/weeks.js';
 import { driverCsv } from '../public/app/lib/driver-csv.js';
 import { readiness } from '../public/app/readiness.js';
 import { joinChunks } from '../public/app/lib/board-fetch.js';
-import { runRisk, riskCardHtml, actualList, routeDays } from '../public/app/live/limits.js';
+import { runRisk, riskCardHtml, actualList, routeDays, backupDays, rtMismatches } from '../public/app/live/limits.js';
 import { actualSig } from '../public/app/live/live-model.js';
 
 let pass = 0, fail = 0;
@@ -219,6 +219,60 @@ eq('joinChunks unquoted cell', joinChunks('enc1:AAAA'), { payload: 'enc1:AAAA', 
     ['2026-10-11', '2026-10-12', '2026-10-14', '2026-10-16']);
   ok('riskCardHtml mix: backup day tagged', /Tue <i>\(backup, if sent out\)<\/i> clock out by <b>8:45 PM<\/b>/
     .test(riskCardHtml(mk(six((i) => (i === 2 || i === 4 ? `${W[i]} Backup` : W[i]))), { run: r3 }, null, '')));
+}
+
+// Route Tracker backups / clock-in + "Route Tracker and the schedule don't match" (Jose 2026-10-08)
+{
+  const prev = { drivers: { k: { name: 'Kathy Deaton', keys: ['kathy|deaton'], days: {}, bk: { '2026-10-03': 2 }, start: { '2026-10-03': '10:25' } } } };
+  const cur = { drivers: { k: { name: 'Kathy Deaton', keys: ['kathy|deaton'], days: { '2026-10-05': 9 }, bk: { '2026-10-07': 2 }, start: { '2026-10-05': '10:45' } } } };
+  const L = actualList(prev, cur);
+  eq('actualList merges bk', L[0].bk, { '2026-10-03': 2, '2026-10-07': 2 });
+  eq('actualList merges start', L[0].start, { '2026-10-03': '10:25', '2026-10-05': '10:45' });
+  eq('backupDays finds', backupDays(L)('Kathy Deaton'), { '2026-10-03': 2, '2026-10-07': 2 });
+  eq('backupDays unknown -> null', backupDays(L)('Nobody Here'), null);
+  eq('backupDays no bk -> null', backupDays([{ name: 'A B', keys: [], days: {} }])('A B'), null);
+
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const days = DAYS.map((day, i) => ({ day, date: `2026-10-${String(4 + i).padStart(2, '0')}` })); // Sun 10/4 .. Sat 10/10
+  const W = '2026-10-07', T = '2026-10-08';  // Wed, Thu (today)
+  const drv = (name, cells) => ({ name, cells });
+  const rt = (name, o) => ({ name, keys: [], days: {}, ...o });
+  const summary = { days, drivers: [
+    drv('Kathy Deaton', { Wed: 'Unavailable' }),
+    drv('Mo Mark', { Wed: 'Called out' }),
+    drv('Tia Train', { Wed: '10:45 AM TRAIN helper (w/ X)', Thu: '10:45 AM TRAIN drives (w/ Y)' }),
+    drv('Dee Disp', { Wed: 'Dispatch', Thu: '1:00 PM Meeting' }),
+    drv('Rob Road', { Wed: '10:25 AM' }),
+    drv('Ann Agree', { Wed: '10:25 AM Backup', Thu: '10:45 AM' }),
+    drv('Sam Sent', { Wed: '10:25 AM Backup' }),
+    drv('Bea Blank', {}),
+    drv('Fut Ure', { Fri: 'Unavailable' }),
+  ] };
+  const list = [
+    rt('Kathy Deaton', { bk: { [W]: 2 } }),
+    rt('Mo Mark', { routes: { [W]: 'CX1' } }),
+    rt('Tia Train', { bk: { [W]: 2 }, routes: { [T]: 'CX2' } }),
+    rt('Dee Disp', { routes: { [W]: '' }, bk: { [T]: 2 } }),
+    rt('Rob Road', { bk: { [W]: 2 } }),
+    rt('Ann Agree', { bk: { [W]: 2 }, routes: { [T]: 'CX3' } }),
+    rt('Sam Sent', { routes: { [W]: 'CX4' } }),
+    rt('Bea Blank', { routes: { [W]: 'CX5' }, bk: { [T]: 2 } }),
+    rt('Fut Ure', { routes: { '2026-10-09': 'CX6' } }),
+    rt('Nora Nosched', { open: [T] }),
+  ];
+  const rows = rtMismatches(summary, list, T);
+  eq('mismatch lines', rows.map((r) => r.line), [
+    'Dee Disp · Wed 10/7 — Route Tracker has a route on a Dispatch day.',
+    'Kathy Deaton · Wed 10/7 — Route Tracker has them as a backup, but the day is marked Unavailable.',
+    'Mo Mark · Wed 10/7 — Route Tracker has them on a route, but the schedule says Called out.',
+    'Rob Road · Wed 10/7 — scheduled for a route, Route Tracker has a backup (Amazon had fewer routes?).',
+    'Tia Train · Wed 10/7 — Route Tracker has a backup on a training day.',
+    'Dee Disp · Thu 10/8 — Route Tracker has a backup on a meeting day.',
+    "Nora Nosched · Thu 10/8 — in Route Tracker but not on this week's schedule.",
+  ]);
+  eq('mismatch: open-day button only for schedule rows', rows.map((r) => r.onSchedule), [true, true, true, true, true, true, false]);
+  eq('mismatch: day for setCell', rows[1].day, 'Wed');
+  eq('mismatch: nothing without Route Tracker', rtMismatches(summary, [], T), []);
 }
 
 console.log(`\n${pass}/${pass + fail} passed`);

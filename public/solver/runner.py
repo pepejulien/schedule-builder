@@ -36,6 +36,8 @@ week never clobbers next week's build. use_slot(name) picks one before a call.
     runner.clear_mark(json)    -> remove a mark (the shift is NOT put back)
     runner.export_xlsx(json)   -> write the workbook on demand (the live slot
                                   skips the per-edit rewrite)
+    runner.sync_actual(json)   -> Route Tracker's routes/backups (today and past days)
+                                  onto blank cells, logged "from Route Tracker" (2026-10-08)
 
 HOURS + 6-DAYS (2026-10-06, Jose): two HARD limits everywhere, on the clock
 hours (route 10h, backup 2h, meeting 2h, dispatch 12h; last week from its Live
@@ -74,7 +76,7 @@ ONE = datetime.timedelta(days=1)
 def _new_state(write=True, live=False):
     return {'cfg': None, 'res': None, 'edits': [], 'undo': [],
             'ovr_unav': set(), 'ovr_policy': set(), 'ovr_limits': set(),
-            'marks': {}, 'write': write, 'live': live}
+            'marks': {}, 'rt': {}, 'rt_off': set(), 'write': write, 'live': live}
 
 
 _SLOTS = {'build': _new_state()}
@@ -367,7 +369,8 @@ def run(config_path):
             res.notes = list(res.notes) + ["Last week's hours: actual clock-outs from Route Tracker"]
         write_xlsx(res)                       # -> cfg['out']
         _STATE.update(cfg=cfg, res=res, edits=[], undo=[],
-                      ovr_unav=set(), ovr_policy=set(), ovr_limits=set(), marks={})
+                      ovr_unav=set(), ovr_policy=set(), ovr_limits=set(), marks={},
+                      rt={}, rt_off=set())
         chk = _verify(res)
         # Shortfalls straight from the finished grid (routes AND backups), so
         # the on-screen warnings match the workbook's totals row.
@@ -482,13 +485,11 @@ def _fl_key(name):
     return t[0] + "|" + t[-1] if len(t) > 1 else t[0]
 
 
-def _apply_actual(res, actual):
-    """actual: [{name, keys: ["first|last", ...], tid, days: {ISO: hours}}].
-    Returns how many roster drivers got actual hours."""
-    if not actual:
-        return 0
+def _matcher(recs):
+    """Route Tracker records -> fn(roster driver) -> its record or None: Transporter
+    Id first, then first|last key; a key two records share is never guessed."""
     by_tid, by_key, dup = {}, {}, set()
-    for a in actual:
+    for a in recs:
         if not isinstance(a, dict):
             continue
         if a.get("tid"):
@@ -499,6 +500,22 @@ def _apply_actual(res, actual):
             if k in by_key and by_key[k] is not a:
                 dup.add(k)
             by_key[k] = a
+
+    def match(dr):
+        a = by_tid.get(str(dr.get("tid")).strip()) if dr.get("tid") else None
+        if a is None:
+            k = _fl_key(dr["name"])
+            a = None if k in dup else by_key.get(k)
+        return a
+    return match
+
+
+def _apply_actual(res, actual):
+    """actual: [{name, keys: ["first|last", ...], tid, days: {ISO: hours}}].
+    Returns how many roster drivers got actual hours."""
+    if not actual:
+        return 0
+    match = _matcher(actual)
     start = res.DATEALL["Sun"]
     lo, hi = start - 7 * ONE, start + 7 * ONE
     today = datetime.date.today()
@@ -513,10 +530,7 @@ def _apply_actual(res, actual):
                 tracked.add(d)
     n = 0
     for dr in res.roster:
-        a = by_tid.get(str(dr.get("tid")).strip()) if dr.get("tid") else None
-        if a is None:
-            k = _fl_key(dr["name"])
-            a = None if k in dup else by_key.get(k)
+        a = match(dr)
         if a is None:
             continue
         act, prev = {}, {}
@@ -656,13 +670,33 @@ def _max7(hours, dates=None):
     return _num(best), at
 
 
+def _today():
+    """The engine's 'today': what the browser / the cloud passed (load_state,
+    sync_actual, an edit payload), else the machine's date (Jose 2026-10-08)."""
+    return _STATE.get("today") or datetime.date.today()
+
+
+def _take_today(p):
+    try:
+        if p.get("today"):
+            _STATE["today"] = datetime.date.fromisoformat(str(p["today"])[:10])
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _hour_limits(res, dr, day, role):
     """Hard on-the-clock limits for adding (day, role): 12h in a day, 60h in
-    any 7 days (last week included). Returns block reasons."""
+    any 7 days (last week included). Returns block reasons.
+    Real hours (h_act, Jose 2026-10-08 - no more "~20h" locks): a day already
+    over keeps them, the edit changes the plan, not the clock -> nothing to check;
+    today (not final yet: a backup shows 2h at once) counts max(real, planned)."""
     hrs = _day_hours(res, dr)
     dt = res.DATEALL[day]
+    act = dr.get("h_act") or {}
+    if dt in act and dt < _today():
+        return []
     add = {"road": res.PH, "trainer": res.PH, "dispatch": DISPATCH_H}.get(role, res.BH)
-    hrs[dt] = hrs.get(dt, 0) + add
+    hrs[dt] = max(act[dt], add) if dt in act else hrs.get(dt, 0) + add
     out = []
     if hrs[dt] > MAX_DAY_H:
         out.append(f"would be on the clock {hrs[dt]}h on {day} (max {MAX_DAY_H}h)")
@@ -692,6 +726,17 @@ def _assess(res, dr, day, role):
     n = norm(dr["name"])
     blocks, unav, warns, notes, limits = [], [], [], [], []
     live = _STATE.get("live", False)
+    # the day already has real hours (Route Tracker) (Jose 2026-10-08: no "~20h"
+    # locks, no false 6th day). A day already OVER: its hours and whether it was worked
+    # are counted from the clock-outs; an edit there changes the plan, not the clock -
+    # so the hour / days-worked limits (12h, 60h/7, in a row, days in 7, days this
+    # week, road-hours overtime) don't check it again (the verifier still shows
+    # anything real that's over). TODAY (or later): the real hours aren't final, so
+    # every check runs - the day counted once, its hours max(real, planned).
+    dt = res.DATEALL[day]
+    act = dr.get("h_act") or {}
+    real = dt in act and dt < _today()
+    now = dt in act and not real
     HCAP = res.HCAP
     BKCAP = HCAP if HCAP else 4 * res.PH
 
@@ -718,7 +763,7 @@ def _assess(res, dr, day, role):
                       f"({ALL_DAYS[td]})")
 
     # consecutive-days rule (incl. prior-week tail)
-    if not blocks:
+    if not blocks and not real:
         rl = _run_len(res, dr, day)
         if rl > res.MAXC:
             if live and rl == res.MAXC + 1:
@@ -744,8 +789,9 @@ def _assess(res, dr, day, role):
     # total worked-days caps
     tot = (_pdays(dr) + len(dr["bk"]) + len(dr["extra"]) + len(dr["meet"])
            + len(_act_dates(dr) - _sched_dates(res, dr)))     # + real unscheduled shifts
-    if tot + 1 > res.MAXTOT:
-        if live and tot + 1 == res.MAXTOT + 1:
+    inc = 0 if now and dt in _act_dates(dr) else 1           # today's real shift is in tot already
+    if not real and tot + inc > res.MAXTOT:
+        if live and tot + inc == res.MAXTOT + 1:
             limits.append(f"6-day: a 6th worked day this week (usual max {res.MAXTOT})")
         else:
             blocks.append(f"already at {tot} worked days")
@@ -757,8 +803,8 @@ def _assess(res, dr, day, role):
         warns.append(f"over the {res.MAXWKND}-weekend-day limit")
 
     if role in ("road", "trainer"):          # a trainer day counts as a road day
-        wk = _road_hours_real(res, dr) + res.PH    # real hours for days already worked
-        if HCAP and wk > HCAP:
+        wk = _road_hours_real(res, dr) + (max(act[dt], res.PH) - act[dt] if now else res.PH)
+        if HCAP and not real and wk > HCAP:
             (limits if live else blocks).append(
                 f"overtime: road hours go to {_num(wk)}h (over {HCAP}h)")
         elif _pdays(dr) + 1 > res.MAXPRIM:
@@ -801,6 +847,7 @@ def _gate(res, dr, day, role, payload):
     """Server-side enforcement of _assess for an edit about to be applied.
     Returns (error_json_or_None, status, reasons)."""
     _STATE.pop("_pending_limits", None)
+    _take_today(payload)
     status, reasons, _, limits = _assess(res, dr, day, role)
     if status == "blocked":
         return json.dumps(dict(ok=False, kind="compliance",
@@ -909,6 +956,7 @@ def candidates(payload_json):
         res = _STATE.get("res")
         if res is None:
             return _no_state()
+        _take_today(p)
         day, role = p.get("day"), p.get("role")
         if day not in res.DAYS or role not in ("road", "backup"):
             return json.dumps(dict(ok=False, kind="edit",
@@ -1007,6 +1055,9 @@ def _restore(res, snap):
     _STATE["ovr_policy"] = snap["ovr_policy"]
     _STATE["marks"] = snap.get("marks", {})
     _STATE["ovr_limits"] = snap.get("ovr_limits", set())
+    for k, x in (snap.get("rtx") or {}).items():          # sync_actual's add, as it was in that snapshot
+        if k in (_STATE.get("rt") or {}):
+            _STATE["rt"][k]["extra"] = x
 
 
 def _routes_filled(res, day):
@@ -1121,6 +1172,7 @@ def add_options(payload_json):
         if dr is None:
             return json.dumps(dict(ok=False, kind="edit",
                                    message=f"Driver not found: {p.get('name')}"))
+        _take_today(p)
         days = []
         for d in res.DAYS:
             cur = ("route" if d in dr["prim"] else "helper" if d in dr["helper"]
@@ -1694,14 +1746,15 @@ def export_state(payload_json):  # noqa: ARG001
                   ovr_unav=[list(x) for x in sorted(_STATE["ovr_unav"])],
                   ovr_policy=sorted(_STATE["ovr_policy"]),
                   ovr_limits=sorted(_STATE.get("ovr_limits", set())),
-                  marks=_STATE["marks"])
+                  marks=_STATE["marks"],
+                  rt=_enc(_STATE.get("rt") or {}), rt_off=_enc(_STATE.get("rt_off") or set()))
         return json.dumps(dict(ok=True, state=json.dumps(st, separators=(",", ":"))))
     except Exception:  # noqa: BLE001
         return _crash()
 
 
 def load_state(payload_json):
-    """payload: {state, out?, prev_worked?: {name: [ISO dates]},
+    """payload: {state, out?, today?: ISO (the board's date), prev_worked?: {name: [ISO dates]},
     prev_hours?: {name: {ISO date: hours}}, actual?: [see _apply_actual]}. Rehydrate a
     saved week into the current slot. prev_worked (last week's REAL worked
     days, from its own Live board) replaces the tail read from the uploaded
@@ -1739,7 +1792,11 @@ def load_state(payload_json):
                       ovr_unav={tuple(x) for x in st.get("ovr_unav", [])},
                       ovr_policy=set(st.get("ovr_policy", [])),
                       ovr_limits=set(st.get("ovr_limits", [])),
-                      marks=st.get("marks") or {})
+                      marks=st.get("marks") or {},
+                      # what sync_actual added / what a human took off since (Jose 2026-10-08)
+                      rt=_dec(st["rt"]) if st.get("rt") else {},
+                      rt_off=_dec(st["rt_off"]) if st.get("rt_off") else set(), today=None)
+        _take_today(p)
         chk = _verify(res)
         res.infeasible = ([ln for ln in res.infeasible if not ln.startswith(("P1 ", "P2 "))]
                           + _recount_short(res, chk))
@@ -1838,5 +1895,286 @@ def clear_mark(payload_json):
         res.infeasible = _recount_short(res, chk)
         _save_out(res)
         return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+# ---- Route Tracker -> the schedule itself (Jose 2026-10-08) ----------------------
+# sync_actual: for today and days already over, a driver Route Tracker has on a
+# route / a backup gets that shift on the schedule IF their cell that day is blank
+# (never over a day off, a mark, a duty or another shift - those are reported for a
+# human). What it added is remembered in _STATE["rt"] {(norm name, day): {name,
+# role, label, extra, date}} (saved with the week) so it can take it back off when
+# Route Tracker drops it - only while the cell still holds exactly that. A cell a
+# human changed after the sync added it goes to _STATE["rt_off"] {(norm name, day,
+# role)}: not added again while Route Tracker still has it (no flip-flop). The sync
+# never goes on the undo stack: it is patched into every saved undo snapshot
+# instead, so a dispatcher's "Undo my last change" undoes their change, not the sync.
+_RT_TIME = re.compile(r'(\d{1,2}):(\d{2})\s*([AP]M)?', re.I)
+RT_OFF_WHY = "removed by hand on the schedule — still in Route Tracker"
+
+
+def _mins(t):
+    m = _RT_TIME.search(str(t or ""))
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if m.group(3):
+        h = h % 12 + (12 if m.group(3).upper() == "PM" else 0)
+    return h * 60 + mi
+
+
+def _rt_wave(res, day, role, start):
+    """The wave a Route Tracker shift goes in: a route -> the wave equal to its
+    start (else the nearest; no start -> the earliest); a backup -> the day's most
+    common backup wave, else the earliest. None when the day has no wave times."""
+    ws = sorted(res.waves.get(day, {}), key=lambda t: _mins(t) or 0)
+    if not ws:
+        return None
+    if role == "road":
+        s = _mins(start)
+        return ws[0] if s is None else min(ws, key=lambda t: (abs((_mins(t) or 0) - s), _mins(t) or 0))
+    cnt = {t: 0 for t in ws}
+    for v in res.cell[day].values():
+        if "Backup" in v and _cell_wave(v) in cnt:
+            cnt[_cell_wave(v)] += 1
+    return max(ws, key=lambda t: (cnt[t], -(_mins(t) or 0)))
+
+
+def _rt_views(res):
+    """The live grid plus every undo snapshot, as the same shape (driver dicts with
+    prim/bk/... lists, cell, waves, routes, edits, marks). A snapshot's own "rtx"
+    {(n, day): extra?} says whether the route sync put in IT was an extra one
+    (the live grid's answer is in _STATE["rt"])."""
+    yield dict(assign=res.roster, cell=res.cell, waves=res.waves, routes=res.routes,
+               edits=_STATE["edits"], marks=_STATE["marks"], rtx=None)
+    for s in _STATE["undo"]:
+        yield dict(assign=s["assign"], cell=s["cell"], waves=s["waves"], routes=s["routes"],
+                   edits=s["edits"], marks=s.get("marks", {}), rtx=s.setdefault("rtx", {}))
+
+
+def _rt_blank(v, i, n, day):
+    a = v["assign"][i]
+    return not (any(day in a.get(k, ()) for k in ("prim", "bk", "helper", "extra", "meet", "unav"))
+                or n in v["marks"].get(day, {}) or i in v["cell"].get(day, {}))
+
+
+def _rt_holds(v, i, n, day, pv):
+    a = v["assign"][i]
+    return (day in a["prim" if pv["role"] == "road" else "bk"] and n not in v["marks"].get(day, {})
+            and v["cell"].get(day, {}).get(i) == pv["label"])
+
+
+def _rt_put(v, i, n, day, pv, desc):
+    extra = pv["extra"]
+    if v["rtx"] is not None and pv["role"] == "road":     # an undo snapshot: full there?
+        extra = sum(1 for x in v["cell"].get(day, {}).values() if "Backup" not in x
+                    and "TRAIN helper" not in x and _cell_wave(x) == pv["label"]) >= v["waves"][day].get(pv["label"], 0)
+        v["rtx"][(n, day)] = extra
+    v["assign"][i]["prim" if pv["role"] == "road" else "bk"].append(day)
+    v["cell"].setdefault(day, {})[i] = pv["label"]
+    if pv["role"] == "road" and extra:                   # a full wave gets one more route
+        v["waves"][day][pv["label"]] = v["waves"][day].get(pv["label"], 0) + 1
+        v["routes"][day] = v["routes"].get(day, 0) + 1
+    v["edits"].append(desc)
+
+
+def _rt_take(v, i, n, day, pv, desc):
+    extra = pv["extra"] if v["rtx"] is None else v["rtx"].pop((n, day), pv["extra"])
+    v["assign"][i]["prim" if pv["role"] == "road" else "bk"].remove(day)
+    v["cell"][day].pop(i, None)
+    if pv["role"] == "road" and extra:                   # the extra route it made goes too
+        w = v["waves"][day]
+        if w.get(pv["label"], 0) > 0:
+            w[pv["label"]] -= 1
+            v["routes"][day] = max(0, v["routes"].get(day, 0) - 1)
+            if not w[pv["label"]]:
+                del w[pv["label"]]
+    v["edits"].append(desc)
+
+
+def _rt_cell(res, i, dr, day):
+    """(kind, cell text) of a driver's day: blank | mark | duty | training | road |
+    backup | unavailable."""
+    mk = _STATE["marks"].get(day, {}).get(norm(dr["name"]))
+    v = res.cell.get(day, {}).get(i, "")
+    if mk:
+        return "mark", MARK_LABEL.get(mk["kind"], mk["kind"])
+    if day in dr["meet"]:
+        return "duty", dr["meet_txt"].get(day, "Meeting")
+    if day in dr["extra"]:
+        return "duty", "Dispatch"
+    if "TRAIN" in v or day in dr["helper"]:
+        return "training", v
+    if day in dr["prim"]:
+        return "road", v
+    if day in dr["bk"]:
+        return "backup", v
+    if day in dr["unav"]:
+        return "unavailable", "Unavailable"
+    return ("blank", "") if i not in res.cell.get(day, {}) else ("road", v)
+
+
+def _rt_text(pv, day):
+    w = _cell_wave(pv["label"]) or ""
+    return f"{'route' if pv['role'] == 'road' else 'backup'} {w} on {day}".replace("  ", " ")
+
+
+def sync_actual(payload_json):
+    """payload: {today: 'YYYY-MM-DD', entries: [{name, keys, tid, date: ISO,
+    role: 'backup'|'road', start?: 'HH:MM', code?}]} - EVERY driver-day Route
+    Tracker has this week through today (one this op added that is missing from
+    it is taken back off). Returns the usual report plus changed: bool and
+    data: {applied, removed, skipped, ignored}. No rule gate: those days
+    happened, and their hours already come from h_act."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        if not isinstance(p.get("entries"), list):
+            return json.dumps(dict(ok=False, kind="edit", message="sync_actual needs an entries list."))
+        _take_today(p)
+        today = _today()
+        start = res.DATEALL["Sun"]
+        byd = {v: k for k, v in res.DATEALL.items()}
+        rt = _STATE.setdefault("rt", {})
+        rt_off = _STATE.setdefault("rt_off", set())
+        was = (dict(rt), set(rt_off))
+
+        # this week's entries through today, one record per driver (TID, else name)
+        recs, ignored, by_name = {}, 0, {}
+        for e in p["entries"]:
+            if not isinstance(e, dict) or e.get("role") not in ("road", "backup"):
+                ignored += 1
+                continue
+            try:
+                d = datetime.date.fromisoformat(str(e.get("date"))[:10])
+            except Exception:  # noqa: BLE001
+                ignored += 1
+                continue
+            if not start <= d < start + 7 * ONE or d > today:
+                ignored += 1
+                continue
+            tid = str(e.get("tid") or "").strip()
+            key = ("t", tid) if tid else ("n", _fl_key(e.get("name")) or norm(str(e.get("name") or "")))
+            if not tid and key[1] in by_name:                     # same person, TID on another day
+                key = by_name[key[1]]
+            r = recs.setdefault(key, dict(name=e.get("name"), tid=tid, keys=set(), days={}))
+            r["keys"] |= {str(x) for x in (e.get("keys") or []) if x}
+            if tid:
+                by_name.setdefault(_fl_key(e.get("name")), key)
+            old = r["days"].get(d)
+            if old is None or (e["role"] == "road" and old["role"] != "road"):   # a route beats a backup
+                r["days"][d] = e
+        lst = list(recs.values())
+        for r in lst:
+            r["keys"] = sorted(r["keys"])
+        match = _matcher(lst)                                     # the same match as _apply_actual
+        hits = {}
+        for i, dr in enumerate(res.roster):
+            a = match(dr)
+            if a is not None:
+                hits.setdefault(id(a), []).append(i)
+
+        applied, removed, skipped = [], [], []
+
+        def skip(name, d, cell, e, kind, reason):
+            skipped.append(dict(name=name, date=d.isoformat(), day=byd[d], cell=cell, role=e["role"],
+                                reason=reason, kind=kind, code=e.get("code") or ""))
+
+        todo, present, present_r = [], set(), set()
+        for r in lst:
+            who = hits.get(id(r), [])
+            for d, e in sorted(r["days"].items()):
+                if not who:
+                    skip(r["name"], d, "", e, "unmatched", "not on this week's schedule (name / Transporter ID not found)")
+                elif len(who) > 1:
+                    skip(r["name"], d, "", e, "ambiguous", "matches more than one driver on the schedule")
+                else:
+                    n = norm(res.roster[who[0]]["name"])
+                    present.add((n, byd[d]))
+                    present_r.add((n, byd[d], e["role"]))
+                    todo.append((who[0], d, e))
+
+        # 1) what this op added before: a human changed the cell -> forget it (and
+        #    don't add it again while Route Tracker has it); Route Tracker dropped it
+        #    and the cell still holds it -> take it back off
+        for (n, day), pv in sorted(rt.items()):
+            i, dr = _find(res, pv["name"])
+            views = list(_rt_views(res))
+            holds = dr is not None and _rt_holds(views[0], i, n, day, pv)
+            if (n, day) in present:
+                if not holds:
+                    del rt[(n, day)]
+                    rt_off.add((n, day, pv["role"]))
+                continue
+            if holds:
+                desc = f"{dr['name']}: {_rt_text(pv, day)} removed (no longer in Route Tracker)"
+                for v in views:
+                    if _rt_holds(v, i, n, day, pv):
+                        _rt_take(v, i, n, day, pv, desc)
+                removed.append(dict(name=dr["name"], date=pv["date"], day=day, role=pv["role"],
+                                    label=pv["label"]))
+            del rt[(n, day)]
+        rt_off &= present_r                                       # Route Tracker let go of it
+
+        # 2) add what Route Tracker has where the schedule's cell is blank
+        for i, d, e in todo:
+            dr, day = res.roster[i], byd[d]
+            n = norm(dr["name"])
+            role = e["role"]
+            if day not in res.DAYS:
+                skip(dr["name"], d, "", e, "closed", "the schedule has this day closed")
+                continue
+            kind, cell = _rt_cell(res, i, dr, day)
+            if (n, day, role) in rt_off:
+                skip(dr["name"], d, cell, e, "removed_by_hand", RT_OFF_WHY)
+                continue
+            if kind == "blank":
+                w = _rt_wave(res, day, role, e.get("start"))
+                if w is None:
+                    skip(dr["name"], d, cell, e, "closed", "the day has no wave times on the schedule")
+                    continue
+                if role == "road":
+                    extra = _wave_filled(res, day, w) >= res.waves[day].get(w, 0)
+                    pv = dict(name=dr["name"], role="road", label=w, extra=extra, date=d.isoformat())
+                    more = f" - an EXTRA route ({day} is now {res.routes[day] + 1} routes)" if extra else ""
+                else:
+                    extra = _bk_filled(res, day) >= res.backup.get(day, 0)
+                    pv = dict(name=dr["name"], role="backup", label=w + " Backup", extra=extra,
+                              date=d.isoformat())
+                    more = " - one more backup than planned" if extra else ""
+                desc = f"{dr['name']}: {_rt_text(pv, day)} added from Route Tracker{more}"
+                for v in _rt_views(res):
+                    if _rt_blank(v, i, n, day):
+                        _rt_put(v, i, n, day, pv, desc)
+                rt[(n, day)] = pv
+                applied.append(dict(name=dr["name"], date=d.isoformat(), day=day, role=role,
+                                    wave=w, label=pv["label"], extra=extra, code=e.get("code") or ""))
+                continue
+            why = {"mark": f"{cell.lower()} that day",
+                   "duty": "on dispatch that day" if cell == "Dispatch" else "in a meeting that day",
+                   "training": "on a training day",
+                   "unavailable": "asked for the day off"}.get(kind)
+            if kind == "unavailable" and day in dr.get("std_added", set()):
+                why = "standing day off (from preferences)"
+            if kind == "road" and role == "backup":
+                kind, why = "conflict", "scheduled on a route; Route Tracker has them as a backup"
+            elif kind == "backup" and role == "road":
+                kind, why = "agree", "scheduled as a backup and sent out on a route (normal)"
+            elif kind in ("road", "backup"):
+                kind, why = "agree", "already on the schedule"
+            skip(dr["name"], d, cell, e, kind, why)
+
+        changed = bool(applied or removed) or was != (rt, rt_off)    # bookkeeping counts too (save it)
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        if applied or removed:
+            _save_out(res)
+        out = _report(cfg, res, chk)
+        out.update(changed=changed, data=dict(applied=applied, removed=removed, skipped=skipped,
+                                              ignored=ignored))
+        return json.dumps(out, default=str)
     except Exception:  # noqa: BLE001
         return _crash()

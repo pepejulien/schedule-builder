@@ -18,6 +18,9 @@ export function actualList(...docs) {
     if ((d.open || []).length) cur.open = [...new Set([...(cur.open || []), ...d.open])];
     // days on a route: {ISO: route code(s) or ""} (Route Tracker, Jose 2026-10-08)
     if (d.routes && Object.keys(d.routes).length) cur.routes = Object.assign(cur.routes || {}, d.routes);
+    // backup days {ISO: hours} and route clock-in {ISO: "HH:MM"} (Route Tracker, Jose 2026-10-08)
+    if (d.bk && Object.keys(d.bk).length) cur.bk = Object.assign(cur.bk || {}, d.bk);
+    if (d.start && Object.keys(d.start).length) cur.start = Object.assign(cur.start || {}, d.start);
     by.set(id, cur);
   }
   return [...by.values()];
@@ -360,6 +363,75 @@ export function routeDays(list) {
     return Object.keys(out).length ? out : null;
   };
 }
+// name -> {ISO: hours} for every day the driver was a backup (Route Tracker), or null.
+// Same matching as routeDays. (Jose 2026-10-08)
+export function backupDays(list) {
+  const find = actualIndex(list);
+  return (name) => {
+    const a = find(name);
+    return a && a.bk && Object.keys(a.bk).length ? { ...a.bk } : null;
+  };
+}
+
+// ---- "Route Tracker and the schedule don't match" (Jose 2026-10-08) ----------------------
+// The cloud writer copies Route Tracker's routes / backups onto BLANK schedule days. This lists
+// what it won't touch, so a person fixes one side: days up to today where Route Tracker has a
+// route or backup and the schedule says something else. Not listed: the two agree, a scheduled
+// backup that got a route ("sent out"), a blank day (the writer fills it).
+// -> [{name, date, day, cell, rt: 'route'|'backup', kind, why, line, onSchedule}]
+//    kind: off | mark | train | disp | meet | road | nosched
+export function rtMismatches(summary, list, today = toISODate(new Date())) {
+  if (!summary || !(list || []).length) return [];
+  const days = (summary.days || []).filter((x) => x.date <= today);
+  const md = (iso) => { const t = parseISODate(iso);
+    return `${t.toLocaleDateString('en-US', { weekday: 'short' })} ${t.getMonth() + 1}/${t.getDate()}`; };
+  // what Route Tracker has that day: 'route' (wins - they were sent out), 'backup' or null
+  const rtOn = (a, iso) => ((a.routes && iso in a.routes) || (a.open || []).includes(iso) ? 'route'
+    : a.bk && iso in a.bk ? 'backup' : null);
+  const kindOf = (v) => {
+    const s = String(v || '').trim();
+    if (!s) return 'empty';
+    if (s === 'Unavailable') return 'off';
+    if (/^(Called out|No-show|Day off)$/.test(s)) return 'mark';
+    if (/meeting/i.test(s)) return 'meet';
+    if (/TRAIN (helper|drives)/.test(s)) return 'train';
+    if (s === 'Dispatch') return 'disp';
+    if (/Backup/.test(s)) return 'bk';
+    return /^\d{1,2}:\d{2} [AP]M/.test(s) ? 'road' : 'meet';
+  };
+  const find = actualIndex(list), out = [];
+  const add = (r) => out.push({ ...r, line: `${r.name} · ${md(r.date)} — ${r.why}` });
+  for (const d of summary.drivers || []) {
+    const a = find(d.name);
+    if (!a) continue;
+    for (const x of days) {
+      const rt = rtOn(a, x.date);
+      if (!rt) continue;
+      const cell = String((d.cells || {})[x.day] || '').trim(), kind = kindOf(cell);
+      const has = rt === 'backup' ? 'has them as a backup' : 'has them on a route';
+      let why = null;
+      if (kind === 'off') why = `Route Tracker ${has}, but the day is marked Unavailable.`;
+      else if (kind === 'mark') why = `Route Tracker ${has}, but the schedule says ${cell}.`;
+      else if (kind === 'train' && rt === 'backup') why = 'Route Tracker has a backup on a training day.';
+      else if (kind === 'disp' || kind === 'meet') why = `Route Tracker has a ${rt} on a ${kind === 'disp' ? 'Dispatch' : 'meeting'} day.`;
+      else if (kind === 'road' && rt === 'backup') why = 'scheduled for a route, Route Tracker has a backup (Amazon had fewer routes?).';
+      if (why) add({ name: d.name, date: x.date, day: x.day, cell, rt, kind, why, onSchedule: true });
+    }
+  }
+  // Route Tracker people no schedule driver matches (any of their keys = a schedule name's key)
+  const schedKeys = new Set((summary.drivers || []).map((d) => flKey(d.name)).filter(Boolean));
+  for (const a of list) {
+    const keys = new Set([flKey(a.name), ...(a.keys || [])].filter(Boolean));
+    if ([...keys].some((k) => schedKeys.has(k))) continue;
+    for (const x of days) {
+      const rt = rtOn(a, x.date);
+      if (rt) add({ name: a.name, date: x.date, day: x.day, cell: '', rt, kind: 'nosched',
+        why: "in Route Tracker but not on this week's schedule.", onSchedule: false });
+    }
+  }
+  return out.sort((p, q) => p.date.localeCompare(q.date) || p.name.localeCompare(q.name));
+}
+
 // -> [{name, date, day, cell, hours, answer, by, at}] for this week's summary
 export function missingDays(summary, list, confirms, today = toISODate(new Date())) {
   if (!summary || !(list || []).length) return [];

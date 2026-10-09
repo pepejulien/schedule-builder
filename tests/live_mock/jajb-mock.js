@@ -93,6 +93,11 @@
       ['Dan Trainee', ['', '10:45 AM TRAIN drives (w/ Cara Trainer)', '', '', '10:45 AM TRAIN drives (w/ Cara Trainer)', '10:45 AM', '']],
       ['Eve Extra', ['', '', 'Unavailable', '', '', '11:25 AM', '11:25 AM']],
       ['Finn Callout', ['10:45 AM', 'Called out', '10:45 AM', '11:05 AM', '', '', '']],
+      // the "Route Tracker and the schedule don't match" card + backup overlay (2026-10-08)
+      ['Kathy Deaton', ['', 'Unavailable', '', '', '', '', '']],
+      ['Gus Fewer', ['', '10:45 AM', '', '', '', '', '']],
+      ['Hal Dispatch', ['', 'Dispatch', '', '', '', '', '']],
+      ['Ivy Blank', ['', '', '', '', '', '', '']],
     ].map(([n, c]) => ({ name: n, cls: 'free', hours: 30, cells: cells(c), worked_dates: [] }));
     const summary = { limits: { max_7day_hours: 60 }, marks: [], infeasible: [], errors: [], overridden: [],
       days: DAYS.map((d, i) => ({ day: d, date: dateOf(sunday, i), open: true, routes: 4, routes_filled: 4, backup: 1, backup_filled: 1 })),
@@ -105,9 +110,16 @@
     const d = (i) => dateOf(sunday, i), t = new Date().getDay();
     const doc = { drivers: {
       a: { name: 'Ana Road', keys: ['ana|road'], days: { [d(0)]: 10, [d(1)]: 9.5 }, routes: { [d(0)]: 'CX12', [d(1)]: 'CX14', [d(3)]: '' }, open: t >= 4 ? [d(4)] : [] },
-      b: { name: 'Ben Backup', keys: ['ben|backup'], days: { [d(2)]: 9 }, routes: { [d(2)]: 'CX20' } },
+      b: { name: 'Ben Backup', keys: ['ben|backup'], days: { [d(1)]: 2, [d(2)]: 9 }, routes: { [d(2)]: 'CX20' }, bk: { [d(1)]: 2 }, start: { [d(2)]: '10:25' } },
       c: { name: 'Cara Trainer', keys: ['cara|trainer'], days: { [d(1)]: 10 }, routes: { [d(1)]: 'CX31' } },
       e: { name: 'Eve Extra', keys: ['eve|extra'], days: { [d(1)]: 10, [d(2)]: 9 }, routes: { [d(1)]: 'CX44', [d(2)]: '' } },
+      // backups (bk) + route clock-in (start), and each mismatch case on Monday (2026-10-08)
+      dt: { name: 'Dan Trainee', keys: ['dan|trainee'], days: { [d(1)]: 2 }, bk: { [d(1)]: 2 } },
+      k: { name: 'Kathy Deaton', keys: ['kathy|deaton'], days: { [d(1)]: 2 }, bk: { [d(1)]: 2 } },
+      g: { name: 'Gus Fewer', keys: ['gus|fewer'], days: { [d(1)]: 2 }, bk: { [d(1)]: 2 } },
+      h: { name: 'Hal Dispatch', keys: ['hal|dispatch'], days: { [d(1)]: 10 }, routes: { [d(1)]: 'CX60' }, start: { [d(1)]: '10:45' } },
+      i: { name: 'Ivy Blank', keys: ['ivy|blank'], days: { [d(1)]: 2 }, bk: { [d(1)]: 2 } },
+      n: { name: 'Nora Notlisted', keys: ['nora|notlisted'], days: { [d(1)]: 10 }, routes: { [d(1)]: 'CX70' }, start: { [d(1)]: '11:05' } },
       f: { name: 'Finn Callout', keys: ['finn|callout'], days: { [d(0)]: 10, [d(1)]: 10 }, routes: { [d(0)]: '', [d(1)]: 'CX50', [d(5)]: 'CX99' } },
     } };
     put('actual/' + wk, doc);

@@ -103,7 +103,10 @@ export function editRequest(op, payload, slot = 'build') {
     const wait = op === 'load_state' ? LOAD_TIMEOUT_MS : EDIT_TIMEOUT_MS;
     timer = setTimeout(() => finish({ ok: false, error: {
       kind: 'timeout', message: 'The engine did not answer in time. Try again, or reload the page.' } }), wait);
-    w.postMessage({ type: 'edit', id, op, payload, slot });
+    // the engine's "today" is this computer's date (Pyodide's own clock can be UTC = tomorrow at night) (2026-10-08)
+    const d = new Date(), today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const p = payload && typeof payload === 'object' && !Array.isArray(payload) && !('today' in payload) ? { today, ...payload } : payload;
+    w.postMessage({ type: 'edit', id, op, payload: p, slot });
   });
 }
 
