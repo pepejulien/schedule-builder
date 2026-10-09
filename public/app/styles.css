@@ -108,6 +108,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 button.ghost { background: transparent; border-color: transparent; color: var(--navy); padding: 6px 10px; box-shadow: none; }
 button.ghost:hover { background: #ececf0; }
 button.small { padding: 5px 11px; font-size: 12.5px; border-radius: 9px; }
+/* a link drawn as a small button (the draggable Roster to Amazon bookmark) */
+a.btn-small { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; font-size: 12.5px; border-radius: 9px;
+  border: 1px solid #e1e1e6; background: #fff; color: var(--ink); font-weight: 600; text-decoration: none; cursor: grab; }
+a.btn-small:hover { background: #f2f2f5; }
 button.link { background: none; border: 0; padding: 0; color: #2f4a80; font-weight: 600; font-size: inherit; box-shadow: none; display: inline; }
 button.link:hover { color: var(--orange); background: none; }
 
