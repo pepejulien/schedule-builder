@@ -520,7 +520,7 @@ def _apply_actual(res, actual):
     match = _matcher(actual)
     start = res.DATEALL["Sun"]
     lo, hi = start - 7 * ONE, start + 7 * ONE
-    today = datetime.date.today()
+    today = _today()
     tracked = set()
     for a in actual:
         for iso, h in ((a.get("days") or {}) if isinstance(a, dict) else {}).items():
@@ -1789,6 +1789,8 @@ def load_state(payload_json):
                 if got is not None:
                     dr["h_prev"] = {datetime.date.fromisoformat(k): _num(h) for k, h in got.items()
                                     if lo <= datetime.date.fromisoformat(k) < start and h}
+        _STATE["today"] = None
+        _take_today(p)            # before the hours: "a day that's over" uses it (Jose 2026-10-08)
         _apply_actual(res, p.get("actual"))
         _STATE.update(cfg=res.cfg, res=res, edits=list(st.get("edits", [])), undo=[],
                       ovr_unav={tuple(x) for x in st.get("ovr_unav", [])},
@@ -1797,8 +1799,7 @@ def load_state(payload_json):
                       marks=st.get("marks") or {},
                       # what sync_actual added / what a human took off since (Jose 2026-10-08)
                       rt=_dec(st["rt"]) if st.get("rt") else {},
-                      rt_off=_dec(st["rt_off"]) if st.get("rt_off") else set(), today=None)
-        _take_today(p)
+                      rt_off=_dec(st["rt_off"]) if st.get("rt_off") else set())
         chk = _verify(res)
         res.infeasible = ([ln for ln in res.infeasible if not ln.startswith(("P1 ", "P2 "))]
                           + _recount_short(res, chk))
