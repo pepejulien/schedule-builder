@@ -127,7 +127,15 @@ export function assembleConfig(state) {
       const key = m[1].toUpperCase().replace(/\s+/, ' ').replace(/^0/, '');
       (waves[d] = waves[d] || {})[key] = (waves[d][key] || 0) + 1;
     }
-  } else {
+  }
+  // 2026-10-09: exact copy on, but the availability has no shifts in it (e.g. it came from Driver
+  // preferences, or the export was swapped after "Copy exactly" was clicked) -> nothing to copy:
+  // plan from the route counts like a normal build instead of an empty week.
+  const exactUsed = exactCopy && Object.keys(waves).length > 0;
+  if (exactCopy && !exactUsed) {
+    warnings.push("\"Copy Amazon's schedule exactly\" is on, but this week's availability has no shifts to copy — building from the route counts instead.");
+  }
+  if (!exactUsed) {
     for (const d of DAYS) {
       const w = dayWaves(state.demand?.[d]);
       if (Object.keys(w).length) waves[d] = w;
@@ -264,7 +272,7 @@ export function assembleConfig(state) {
     driver_rates,
     driver_tiers,
     use_premade_shifts: adv.use_premade_shifts ?? true,
-    ...(exactCopy ? { exact_copy: true, backup_per_day: exactBk, training_pairs: [], auto_training: false } : {}),
+    ...(exactUsed ? { exact_copy: true, backup_per_day: exactBk, training_pairs: [], auto_training: false } : {}),
     weekend_spread: adv.weekend_spread ?? true,
     training_pairs: trainingPairs,
     auto_training,
