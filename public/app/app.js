@@ -37,7 +37,7 @@ function StepRoutes() {
 // Five steps (Jose 2026-10-03: the old nine — with the two files uploaded in
 // separate steps — were confusing). Schedule Builder's JAJB accent is teal.
 export const STEPS = [
-  { key: 'files', title: 'Week & files', icon: 'calendar', sub: 'Drop this week\'s availability and last week\'s schedule', comp: StepFiles },
+  { key: 'files', title: 'Week & files', icon: 'calendar', sub: 'Next week\'s availability and the current week\'s schedule', comp: StepFiles },
   { key: 'tiers', title: 'Drivers', icon: 'users', sub: 'Tiers from the driver board and each driver\'s day target', comp: Step3Tiers },
   { key: 'routes', title: 'Routes & backups', icon: 'truck', sub: 'How many routes per wave each day, plus backups', comp: StepRoutes },
   { key: 'standing', title: 'Trainers & settings', icon: 'cap', sub: 'Trainers, training pairs, dispatch, exclusions', comp: Step7Standing },
@@ -99,7 +99,7 @@ const STATUS_CHIP = { done: ['open', 'Ready'], warn: ['lock', 'Check'], todo: ['
 function BuildCard() {
   const wizard = useStore((s) => s.wizard);
   const r = readiness(wizard);
-  const started = !!(wizard.availability || wizard.week?.num || wizard.build?.status === 'done');
+  const started = !!(wizard.availability || wizard.priorWeek?.source || wizard.build?.status === 'done');
   const cont = () => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); };
   const nWarn = r.warnings.length;
   return html`<div class="card buildcard">
@@ -107,7 +107,7 @@ function BuildCard() {
       <h2>Next week's build</h2>
       <p class="hint">${started
         ? html`<b>${wizard.week?.label || 'In progress'}</b> · ${r.doneCount} of ${STEPS.length} steps ready${nWarn ? ` · ${nWarn} thing${nWarn === 1 ? '' : 's'} to check` : ''}${wizard.build?.published ? ' · published' : ''}`
-        : "Not started yet. Have this week's availability export ready — last week comes from the Live board."}</p>
+        : "Not started yet. Availability comes from Driver preferences, the current week from the Live board."}</p>
     </div>
     <div class="row">${started
       ? html`<button class="primary" onClick=${cont}>Continue ${Icon('arrow', 16)}</button>
@@ -125,7 +125,7 @@ function Home() {
 function BuildHome() {
   const wizard = useStore((s) => s.wizard);
   const r = readiness(wizard);
-  const started = !!(wizard.availability || wizard.week?.num || wizard.build?.status === 'done');
+  const started = !!(wizard.availability || wizard.priorWeek?.source || wizard.build?.status === 'done');
 
   const promo = canLive() ? html`<div class="card buildcard lv-promo">
       <div><h2>Live schedule</h2>
@@ -137,8 +137,8 @@ function BuildHome() {
     return html`${promo}<div class="card hero">
       <div class="hero-ico">${Icon('calendar', 24)}</div>
       <h2>Build next week's schedule</h2>
-      <p class="hint">Five short steps. Have this week's <b>availability export</b> ready${canLive()
-        ? html` — last week comes from the Live board` : html`, plus <b>last week's schedule</b> (the Week-NN-Schedule.xlsx this app made)`}. Progress saves automatically.</p>
+      <p class="hint">Five short steps. Have next week's <b>availability export</b> ready${canLive()
+        ? html` — the current week comes from the Live board` : html`, plus <b>the current week's schedule</b> (the Week-NN-Schedule.xlsx this app made)`}. Progress saves automatically.</p>
       <button class="accent" onClick=${startFresh}>Start a new schedule ${Icon('arrow', 16)}</button>
     </div>`;
   }
@@ -204,6 +204,7 @@ function TopBar() {
   const route = useStore((s) => s.route);
   const step = useStore((s) => s.wizard.step);
   const week = useStore((s) => s.wizard.week);
+  const begun = useStore((s) => !!(s.wizard.availability || s.wizard.priorWeek?.source));
   let title = canLive() ? 'Today' : 'Overview';
   let sub = canLive() ? 'This week at a glance' : 'Where this week\'s schedule stands';
   if (route === 'settings') { title = 'Settings'; sub = 'Saved for every week'; }
@@ -215,7 +216,7 @@ function TopBar() {
       <div class="tbtitle"><h1>${title}</h1>${week?.label && route !== 'live' && route !== 'drivers' && !(route === 'home' && canLive()) ? html`<span class="wkpill">${week.label}</span>` : ''}</div>
       <div class="tbsub">${sub}</div>
     </div>
-    ${route === 'home' && !canLive() && (week?.num || step) ? html`<button class="rbtn" onClick=${() => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); }}>
+    ${route === 'home' && !canLive() && (begun || step) ? html`<button class="rbtn" onClick=${() => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); }}>
       Continue ${Icon('arrow', 16)}</button>` : ''}
   </div></header>`;
 }

@@ -1,24 +1,28 @@
-// Step 1 — the week and BOTH weekly files in one place. HR drops this week's
-// availability export and last week's schedule together (in any order); the
-// app works out which is which, fills in the week number / start Sunday, and
-// pre-fills the route demand from last week. On the JAJB site last week can
-// come straight from the Live board instead (with its midweek changes).
+// Step 1 — the week and its two inputs. The schedule is built BEFORE its week
+// starts, so the week being built is next week and "the week before" is the
+// current week. On the JAJB site both come from the Live board (Jose 2026-10-09):
+// the availability from Driver preferences + the days off asked for on next
+// week, the current week as it really ran (with its midweek changes). Or HR
+// drops the availability export and the current week's schedule together (in
+// any order); the app works out which is which, fills in the week number /
+// start Sunday, and pre-fills the route demand from the current week.
 import { html } from '../preact-setup.js';
 import { useState } from 'preact/hooks';
 import { useStore, setWizard, toast } from '../store.js';
 import { StepNav, goStep, STEPS } from '../app.js';
 import { Banner, Spinner, Icon, readFileBytes } from '../ui.js';
 import { warmup, editRequest } from '../solver-client.js';
-import { canLive, liveWeek } from '../api.js';
-import { loadEngine, prevISO } from '../live/live-model.js';
+import { canLive, canTimeoff, liveWeek } from '../api.js';
+import { loadEngine, prevISO, todayISO } from '../live/live-model.js';
 import { DAYS } from '../lib/waves.js';
-import { isSunday, weekLabel } from '../lib/weeks.js';
+import { isSunday, weekLabel, weekNumberOf, nextSunday, toISODate } from '../lib/weeks.js';
 import { inspectWorkbook, pairUp } from '../lib/file-detect.js';
 import { demandFromPrevSchedule } from '../lib/demand-prefill.js';
+import { liveAvailability } from '../lib/live-availability.js';
 
 function DayCell({ cell }) {
   if (!cell || !cell.kind) return html`<td></td>`;
-  if (cell.kind === 'unavail') return html`<td class="cell-unavail">Off</td>`;
+  if (cell.kind === 'unavail') return html`<td class="cell-unavail" title=${cell.text}>${cell.text && !/unavail/i.test(cell.text) ? cell.text : 'Off'}</td>`;
   if (cell.kind === 'meeting') return html`<td class="cell-meet" title=${cell.text}>Meeting</td>`;
   return html`<td class="cell-seed" title=${cell.text}>${cell.text}</td>`;
 }
@@ -61,7 +65,7 @@ export function StepFiles() {
 
   async function takeFiles(fileList) {
     const files = [...fileList].filter((f) => /\.xlsx$/i.test(f.name));
-    if (!files.length) { setErr('Drop .xlsx files (the availability export and last week\'s schedule).'); return; }
+    if (!files.length) { setErr('Drop .xlsx files (the availability export and the current week\'s schedule).'); return; }
     setBusy(true); setErr('');
     try {
       const items = [];
@@ -86,47 +90,83 @@ export function StepFiles() {
       }
       if (s) {
         patch.priorWeek = { bytes: s.bytes, source: 'upload', fileName: s.fileName };
-        // last week's file fills whatever the availability file didn't say
+        // the current week's file fills whatever the availability file didn't say
         if (s.weekNum != null && !(a && a.weekNum != null)) wk.num = String(s.weekNum);
         if (s.sundayISO && !(a && a.sundayISO)) wk.startISO = s.sundayISO;
-        // Route demand starts from last week's counts (edit in step 3).
+        // Route demand starts from the current week's counts (edit in step 3).
         const empty = !Object.values(demand || {}).some((rows) => (rows || []).length);
         if (empty) {
           try {
             const dem = demandFromPrevSchedule(s.bytes);
-            if (Object.keys(dem).length) { patch.demand = dem; toast("Route counts pre-filled from last week's schedule"); }
+            if (Object.keys(dem).length) { patch.demand = dem; toast("Route counts pre-filled from the current week's schedule"); }
           } catch { /* fill by hand */ }
         }
       }
       patch.week = withLabel(wk);
+      // a Live-board input made for another week is stale now
+      if (!a && avail && avail.source === 'live' && avail.weekISO !== wk.startISO) patch.availability = null;
+      if (!s && prior.weekISO && prior.weekISO !== wk.startISO) patch.priorWeek = { bytes: null, source: null };
       setWizard(patch);
     } finally {
       setBusy(false);
     }
   }
 
-  // Last week as it really ran: load it from the Live board into a spare
+  // Next week's availability from Driver preferences + the days off asked for
+  // on the Live board's future week (lib/live-availability.js).
+  async function fromPrefs(own = true) {
+    const wk = week.startISO;
+    if (own) { setBusy(true); setErr(''); }
+    try {
+      const a = await liveAvailability(wk);
+      setWizard({ availability: { ...a, source: 'live', weekISO: wk,
+        fileName: `${week.label || 'Next week'} — from Driver preferences + the Live board` } });
+      warmup();
+      return true;
+    } catch (e) {
+      setErr("Couldn't get next week's availability from Driver preferences: " + (e.message || e) + ' — drop the export instead.');
+      return false;
+    } finally {
+      if (own) setBusy(false);
+    }
+  }
+
+  // The current week as it really ran: load it from the Live board into a spare
   // engine slot and write its workbook — the same file HR would upload.
-  async function fromLive() {
-    const prev = prevISO(week.startISO);
-    setBusy(true); setErr('');
+  async function fromLive(own = true) {
+    const wk = week.startISO;
+    const prev = prevISO(wk);
+    if (own) { setBusy(true); setErr(''); }
     try {
       const d = await liveWeek(prev);
-      if (!d) { setErr(`The week before this one (starting ${prev}) isn't on the Live board — drop last week's file instead.`); return; }
+      if (!d) { setErr(`The week before ${week.label || 'this one'} (starting ${prev}) isn't on the Live board — drop its schedule file instead.`); return false; }
       await loadEngine(prev, d.engine, 'hist');
       const m = await editRequest('export_xlsx', {}, 'hist');
       if (!m.ok || !m.xlsx) throw new Error(m.error ? m.error.message : 'no workbook came back');
-      const patch = { priorWeek: { bytes: m.xlsx, source: 'upload', fileName: `${d.meta.label} — from the Live board` } };
+      const patch = { priorWeek: { bytes: m.xlsx, source: 'upload', weekISO: wk, fileName: `${d.meta.label} — from the Live board` } };
       const empty = !Object.values(demand || {}).some((rows) => (rows || []).length);
       if (empty) {
         try {
           const dem = demandFromPrevSchedule(m.xlsx);
-          if (Object.keys(dem).length) { patch.demand = dem; toast("Route counts pre-filled from last week's schedule"); }
+          if (Object.keys(dem).length) { patch.demand = dem; toast("Route counts pre-filled from the current week's schedule"); }
         } catch { /* fill by hand */ }
       }
       setWizard(patch);
+      return true;
     } catch (e) {
-      setErr('Could not read last week from the Live board: ' + (e.message || e));
+      setErr('Could not read the current week from the Live board: ' + (e.message || e));
+      return false;
+    } finally {
+      if (own) setBusy(false);
+    }
+  }
+
+  // Both at once — the usual way on the JAJB site.
+  async function fromBoth() {
+    setBusy(true); setErr('');
+    try {
+      if (!avail) await fromPrefs(false);
+      if (!prior.source) await fromLive(false);
     } finally {
       setBusy(false);
     }
@@ -143,8 +183,22 @@ export function StepFiles() {
     });
   }
 
-  const setWeek = (patch) => setWizard((w) => ({ week: withLabel({ ...w.week, ...patch }) }));
+  // A new Sunday brings its week number along, and a Live-board input made for
+  // the old week is dropped (it would be the wrong week's days off).
+  const setWeek = (patch) => setWizard((w) => {
+    const wk = { ...w.week, ...patch };
+    if (patch.startISO && isSunday(patch.startISO)) wk.num = String(weekNumberOf(patch.startISO));
+    const out = { week: withLabel(wk) };
+    if (w.availability && w.availability.source === 'live' && w.availability.weekISO !== wk.startISO) out.availability = null;
+    if (w.priorWeek && w.priorWeek.weekISO && w.priorWeek.weekISO !== wk.startISO) out.priorWeek = { bytes: null, source: null };
+    return out;
+  });
   const okDate = isSunday(week.startISO);
+  // the schedule is made before its week starts: a week already under way is most likely a mistake
+  const started = okDate && week.startISO <= todayISO();
+  const nextISO = toISODate(nextSunday());
+  const live = canLive();
+  const liveAvail = live && canTimeoff();
   const okNum = /^\d+$/.test(String(week.num).trim());
   const priorOk = prior.bytes != null || prior.source === 'none';
   const canNext = okDate && okNum && !!avail && priorOk;
@@ -152,8 +206,17 @@ export function StepFiles() {
   return html`
     <div class="card">
       <h2>Week & files</h2>
-      <p class="hint">Drop both files here at once — the order doesn't matter. The app figures out which is which,
-        reads the week from them, and pre-fills the route counts from last week.</p>
+      ${started ? html`<${Banner} kind="warn"><b>${week.label || 'This week'}</b> has already started — the schedule is built
+        for next week, before it begins.${' '}<button class="link" onClick=${() => setWeek({ startISO: nextISO })}>
+        Build Week-${weekNumberOf(nextISO)} instead</button><//>` : ''}
+      ${liveAvail && okDate && (!avail || !prior.source) ? html`<div class="card" style="margin:0 0 14px;border-left:4px solid var(--accent)">
+        <b>Get both from the Live board</b>
+        <p class="hint" style="margin:4px 0 8px">Next week's availability from Driver preferences and the days off asked for
+          on ${week.label || 'next week'}, plus the current week as it ran. No files needed.</p>
+        <button class="accent" disabled=${busy} onClick=${fromBoth}>${busy ? html`<${Spinner}/> Getting them…` : 'Get both from the Live board'}</button>
+      </div>` : ''}
+      <p class="hint">${liveAvail ? 'Or drop the files here' : 'Drop both files here at once'} — the order doesn't matter. The app figures out
+        which is which, reads the week from them, and pre-fills the route counts from the current week.</p>
 
       <label class=${'dropzone' + (drag ? ' drag' : '')}
         onDragOver=${(e) => { e.preventDefault(); setDrag(true); }}
@@ -163,21 +226,28 @@ export function StepFiles() {
           onChange=${(e) => { takeFiles(e.target.files); e.target.value = ''; }} />
         <div class="dz-ico">${Icon('upload')}</div>
         <div class="dz-title">${busy ? html`<${Spinner}/> Reading…` : 'Drop the files here, or click to choose'}</div>
-        <div class="dz-sub">This week's availability export + last week's schedule (.xlsx)</div>
+        <div class="dz-sub">Next week's availability export + the current week's schedule (.xlsx)</div>
       </label>
       ${err ? html`<${Banner} kind="err">${err}<//>` : ''}
 
       <div class="fslots">
-        <${Slot} title="This week's availability" sub="The Shifts & Availability export drivers filled in."
+        <${Slot} title="Next week's availability"
+          sub=${liveAvail ? 'From Driver preferences + days off on the Live board, or the Shifts & Availability export.'
+            : 'The Shifts & Availability export drivers filled in.'}
           file=${avail && avail.fileName}
-          detail=${avail ? `${avail.counts.drivers} drivers · ${avail.counts.unavail} days off · ${avail.counts.seed} pre-filled shifts` : ''}
-          onClear=${() => setWizard({ availability: null })} />
-        <${Slot} title="Last week's schedule" sub="The Week-NN-Schedule.xlsx this app made last week — for the 5-days-in-a-row rule."
+          detail=${!avail ? '' : avail.source === 'live'
+            ? `${avail.counts.drivers} drivers · ${avail.counts.unavail} days off so far — read again at Build, so later days off count too`
+            : `${avail.counts.drivers} drivers · ${avail.counts.unavail} days off · ${avail.counts.seed} pre-filled shifts`}
+          onClear=${() => setWizard({ availability: null })}>
+          ${!avail && liveAvail && okDate ? html`<button class="small" disabled=${busy} onClick=${() => fromPrefs()}
+            style="margin:2px 0 6px">Get it from Driver preferences</button>` : ''}
+        <//>
+        <${Slot} title="Current week's schedule" sub="The week before the one being built — for the 5-days-in-a-row rule."
           file=${prior.source === 'upload' ? prior.fileName : prior.source === 'none' ? 'None — first week' : null}
-          detail=${prior.source === 'none' ? 'The 5-days-in-a-row rule won\'t look back into last week.' : 'Used for the 5-days-in-a-row rule and last week\'s route counts.'}
+          detail=${prior.source === 'none' ? 'The 5-days-in-a-row rule won\'t look back into the current week.' : 'Used for the 5-days-in-a-row rule and the current week\'s route counts.'}
           onClear=${() => setWizard({ priorWeek: { bytes: null, source: null } })}>
-          ${!prior.source && canLive() && okDate ? html`<button class="small" disabled=${busy} onClick=${fromLive}
-            style="margin:2px 0 6px">Get last week from the Live board</button><br />` : ''}
+          ${!prior.source && live && okDate ? html`<button class="small" disabled=${busy} onClick=${() => fromLive()}
+            style="margin:2px 0 6px">Get the current week from the Live board</button><br />` : ''}
           ${!prior.source ? html`<button class="link" onClick=${() => setWizard({ priorWeek: { bytes: null, source: 'none' } })}>
             No file — this is the very first week</button>` : ''}
         <//>
@@ -195,7 +265,7 @@ export function StepFiles() {
           Copy this schedule exactly → Build</button>
         ${!okDate || !week.num ? html`<span class="muted small" style="margin-left:8px">Fill in the week number and its Sunday below first.</span>` : ''}
       </div>` : ''}
-      ${avail && prior.bytes ? html`<p class="muted" style="margin:6px 2px 0">Wrong way round?${' '}<button class="link" onClick=${swap}>Swap the two files</button></p>` : ''}
+      ${avail && avail.source !== 'live' && prior.bytes ? html`<p class="muted" style="margin:6px 2px 0">Wrong way round?${' '}<button class="link" onClick=${swap}>Swap the two files</button></p>` : ''}
 
       <h3>Week</h3>
       <div class="grid2">

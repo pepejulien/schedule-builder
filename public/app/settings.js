@@ -96,7 +96,7 @@ export function Settings() {
       <ul class="hint">
         <li>Upload the Driver-Preferences.csv above (optional).</li>
         <li>Trainers, exclusions and dispatch duty are edited in Trainers & settings of a build.</li>
-        <li>Each week, drop this week's availability and last week's schedule together in Week & files.</li>
+        <li>Each week, before it starts, set up next week in Week & files: its availability (from Driver preferences, or the export) and the current week's schedule.</li>
       </ul>
     </div>`;
 }
