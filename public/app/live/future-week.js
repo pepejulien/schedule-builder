@@ -24,11 +24,12 @@ const SAVE_ERR = "Couldn't save — check your connection and try again.";
 const FULL_DAY = { Sun: 'Sunday', Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday' };
 const openDriver = (name) => setState({ route: 'drivers', driversOpen: name });
 
-// The roster read goes through the newest published week: kept for a few minutes, so moving
-// between future weeks doesn't read it again each time.
+// The roster read goes through the newest published week and the cloud's active list (2026-10-09:
+// new hires show, people who left don't): kept for a few minutes, so moving between future weeks
+// doesn't read it again each time.
 let rosterCache = null;
 function rosterOnce() {
-  if (!rosterCache || Date.now() - rosterCache.at > 5 * 60e3) rosterCache = { at: Date.now(), p: loadDriverRoster() };
+  if (!rosterCache || Date.now() - rosterCache.at > 5 * 60e3) rosterCache = { at: Date.now(), p: loadDriverRoster({ active: true }) };
   return rosterCache.p;
 }
 
@@ -172,8 +173,10 @@ export function FutureWeek({ week, label }) {
   for (const [n, p] of Object.entries(prefs.drivers || {})) prefOf[nkey(n)] = p;
   // rows: the roster, plus anyone with a day off asked this week or a preference
   const names = new Map();
-  for (const r of roster) names.set(nkey(r.name), r.name);
-  for (const n of Object.keys(prefs.drivers || {})) if (!names.has(nkey(n))) names.set(nkey(n), n.trim());
+  // people who aren't active any more stay off (unless a day off was asked for them this week)
+  const gone = new Set(roster.filter((r) => r.active === false).map((r) => nkey(r.name)));
+  for (const r of roster) if (r.active !== false) names.set(nkey(r.name), r.name);
+  for (const n of Object.keys(prefs.drivers || {})) if (!names.has(nkey(n)) && !gone.has(nkey(n))) names.set(nkey(n), n.trim());
   for (const t of weekOff) if (!names.has(nkey(t.name))) names.set(nkey(t.name), String(t.name).trim());
   const all = [...names.values()].sort((a, b) => a.localeCompare(b));
   const rows = all.filter((n) => (!q.trim() || fold(n).includes(fold(q.trim())))

@@ -2,6 +2,7 @@
 // public/app/lib/live-availability.js.   node tests/live_availability_test.mjs
 import { writeFileSync } from 'node:fs';
 import { makeAvailability } from '../public/app/lib/live-availability.js';
+import { markActive, personKey } from '../public/app/lib/driver-prefs.js';
 import { inspectWorkbook } from '../public/app/lib/file-detect.js';
 import { weekNumberOf, nextSunday, toISODate } from '../public/app/lib/weeks.js';
 
@@ -38,6 +39,21 @@ eq('week Sunday from the headers', w.sundayISO, '2026-10-11');
 eq('week number from the name', w.weekNum, 42);
 eq('parsed names', w.parsed.drivers.map((d) => d.name), ['cara amos', 'Zed Last']);
 eq('cells blank (days off come from the build config)', w.parsed.counts.unavail, 0);
+
+// who is active (2026-10-09): the cloud's list decides; the roster keeps its spellings
+eq('personKey', [personKey('Sylvia  M. Slate'), personKey("D'Andre O'Neal"), personKey('')], ['sylvia|slate', 'd|neal', '']);
+const cur = [{ name: 'Aaron Bell', tier: 'gold', tid: 'A1' }, { name: 'Bea Cole', tier: null }, { name: 'Sam Lee', tier: null },
+  { name: 'Sam J Lee', tier: null }, { name: 'Gone Away', tier: 'free' }];
+const m = markActive(cur, ['aaron bell', 'Bea Marie Cole', 'Sylvia Slate', 'Sam Lee', '  ', 'Sylvia  Slate']);
+const by = Object.fromEntries(m.map((r) => [r.name, r]));
+eq('exact match keeps tier/tid', [by['Aaron Bell'].active, by['Aaron Bell'].tid, by['Aaron Bell'].tier], [true, 'A1', 'gold']);
+eq('middle name matches first|last', [by['Bea Cole'].active, 'Bea Marie Cole' in by], [true, false]);
+eq('new hire added once', [by['Sylvia Slate'], m.filter((r) => /sylvia/i.test(r.name)).length],
+  [{ name: 'Sylvia Slate', tier: null, active: true, isNew: true }, 1]);
+eq('shared key: only the exact one', [by['Sam Lee'].active, by['Sam J Lee'].active], [true, false]);
+eq('left: not active', by['Gone Away'].active, false);
+eq('sorted', m.map((r) => r.name), ['Aaron Bell', 'Bea Cole', 'Gone Away', 'Sam J Lee', 'Sam Lee', 'Sylvia Slate']);
+ok('input not changed', !('active' in cur[0]));
 
 if (process.argv[2]) writeFileSync(process.argv[2], Buffer.from(a.bytes));   // for the solver check
 console.log(`live_availability: ${pass} passed, ${fail} failed`);

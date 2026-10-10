@@ -1,7 +1,8 @@
-// Next week's availability without the portal export (Jose 2026-10-09): the drivers the Live
-// board knows (loadDriverRoster — the newest published week plus everyone on Driver preferences)
-// with the days they can't work that week (their preferences + the days off asked for on the
-// board's future week).
+// Next week's availability without the portal export (Jose 2026-10-09): everyone working here
+// now — the cloud's active list, the same one the dispatch report uses (loadDriverRoster with
+// active: true; falls back to the newest published week plus Driver preferences when that list
+// can't be read) — with the days they can't work that week (their preferences + the days off asked
+// for on the board's future week).
 //
 // It is written as the same "Shifts & Availability" workbook the export is, so the rest of the
 // build is unchanged — but every day cell stays BLANK: the build reads the preferences and days
@@ -61,12 +62,22 @@ export function makeAvailability(roster, unavailable, weekStartISO) {
 
 // Read the roster, preferences and the week's days off, then make the workbook. Throws when the
 // preferences or days off can't be read (better than a schedule that ignores them) or nobody's found.
+// Also says where the names came from: fromActive (the active list was read), added (active, not
+// on the newest published week or Driver preferences — new hires, or staff the export never had)
+// and left (on those but not active any more — not scheduled).
 export async function liveAvailability(weekStartISO) {
   const [{ loadDriverRoster, readDriverPrefs }, { timeoffOnce }] = await Promise.all([
     import('./driver-prefs.js'), import('../api.js')]);
-  const [roster, prefs, timeoff] = await Promise.all([
-    loadDriverRoster(), readDriverPrefs(), timeoffOnce(weekStartISO)]);
+  const [all, prefs, timeoff] = await Promise.all([
+    loadDriverRoster({ active: true }), readDriverPrefs(), timeoffOnce(weekStartISO)]);
   if (!timeoff) throw new Error("couldn't read the days off asked for that week");
-  if (!roster.length) throw new Error('no drivers found on the Live board or Driver preferences');
-  return makeAvailability(roster, weekUnavailable(prefs, timeoff, weekStartISO), weekStartISO);
+  const fromActive = all.some((r) => 'active' in r);
+  const roster = fromActive ? all.filter((r) => r.active) : all;
+  if (!roster.length) throw new Error('no drivers found');
+  return {
+    ...makeAvailability(roster, weekUnavailable(prefs, timeoff, weekStartISO), weekStartISO),
+    fromActive,
+    added: all.filter((r) => r.isNew).map((r) => r.name),
+    left: fromActive ? all.filter((r) => !r.active).map((r) => r.name) : [],
+  };
 }

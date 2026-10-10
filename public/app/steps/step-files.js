@@ -236,7 +236,7 @@ export function StepFiles() {
             : 'The Shifts & Availability export drivers filled in.'}
           file=${avail && avail.fileName}
           detail=${!avail ? '' : avail.source === 'live'
-            ? `${avail.counts.drivers} drivers · ${avail.counts.unavail} days off so far — read again at Build, so later days off count too`
+            ? `${avail.counts.drivers} drivers${avail.fromActive ? ' — everyone active, as on the dispatch report' : ''} · ${avail.counts.unavail} days off so far — read again at Build, so later days off count too`
             : `${avail.counts.drivers} drivers · ${avail.counts.unavail} days off · ${avail.counts.seed} pre-filled shifts`}
           onClear=${() => setWizard({ availability: null })}>
           ${!avail && liveAvail && okDate ? html`<button class="small" disabled=${busy} onClick=${() => fromPrefs()}
@@ -265,6 +265,15 @@ export function StepFiles() {
           Copy this schedule exactly → Build</button>
         ${!okDate || !week.num ? html`<span class="muted small" style="margin-left:8px">Fill in the week number and its Sunday below first.</span>` : ''}
       </div>` : ''}
+      ${avail && avail.source === 'live' ? html`
+        ${avail.fromActive === false ? html`<${Banner} kind="warn">Couldn't read the list of active drivers (the one the
+          dispatch report uses), so these are the current week's drivers plus Driver preferences — new hires may be
+          missing. Remove it and try again, or drop the availability export.<//>` : ''}
+        ${(avail.added || []).length ? html`<${Banner} kind="info"><b>New on the list</b> (active, not on the current week):${' '}
+          ${avail.added.join(', ')}. A new hire needs a training pair in <b>Trainers & settings</b>; anyone who
+          shouldn't drive (a dispatcher or manager) goes under the exclusions there.<//>` : ''}
+        ${(avail.left || []).length ? html`<p class="muted small" style="margin:6px 2px 0">Not active any more, so left out:${' '}
+          ${avail.left.join(', ')}.</p>` : ''}` : ''}
       ${avail && avail.source !== 'live' && prior.bytes ? html`<p class="muted" style="margin:6px 2px 0">Wrong way round?${' '}<button class="link" onClick=${swap}>Swap the two files</button></p>` : ''}
 
       <h3>Week</h3>
