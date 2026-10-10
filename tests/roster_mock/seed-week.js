@@ -1,7 +1,7 @@
 // TEST ONLY. Paste into the app's tab (http://localhost:8777, tests/live_mock/serve.py) DevTools console.
 // Writes a Live board week (2026-10-11, Week 42) matching tests/roster_mock/scheduling.html and lets
 // the mock page (http://localhost:8791) receive it (localStorage['jajb-roster-test-origin']).
-// Expected on the mock page: 9 to fill (Cara Sun route + Mon backup, Barry Tue Helper 10:25, Tina Tue
+// Expected on the mock page: 9 to fill + Lou's Tue backup to tick (Cara's Mon backup ticked after filling) (Cara Sun route + Mon backup, Barry Tue Helper 10:25, Tina Tue
 // Driver 10:25, Dan Thu Dispatcher + Sat Meeting, José Wed Driver 11:25, Sam Lee Fri Driver 10:45,
 // Kim Mon Driver 10:05); Kim Sun already there; Una Mon busy ("Unavailable"); Zed Thu no 2:00 PM
 // shift; Nora not on the page; Bea has nothing to send.
@@ -21,6 +21,7 @@
     d('Sam Lee', { Fri: '10:45 AM' }),
     d('Nora Notlisted', { Sun: '10:05 AM' }),
     d('Bea Blank', { Sun: 'Unavailable', Mon: 'Called out' }),
+    d('Lou Backup', { Tue: '10:05 AM Backup' }),
   ];
   const summary = { v: 1, week: '2026-10-11', label: 'Week-42 (Oct 11 - Oct 17, 2026)', num: 42, days, drivers,
     limits: { max_7day_hours: 60 }, marks: [], infeasible: [], errors: [], overridden: [] };

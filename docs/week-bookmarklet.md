@@ -10,7 +10,8 @@ Same structure as the Roster bookmark (docs/roster-bookmarklet.md): the bookmark
 ## What goes in (Jose: "everything")
 | Live board cell | Amazon shift (button title in the cell's menu) |
 |---|---|
-| route `10:05 AM`, trainee `… (TRAIN drives w/ …)`, backup `10:05 AM Backup` | `Driver • 10:05 AM • 9h 50m` |
+| route `10:05 AM`, trainee `… (TRAIN drives w/ …)` | `Driver • 10:05 AM • 9h 50m` |
+| backup `10:05 AM Backup` | `Driver • 10:05 AM • 9h 50m`, then **Set as backup** ticked in that shift's menu |
 | trainer `… (TRAIN helper w/ …)` | `Helper 10:05 AM` / `Helper • 10:45 AM • 10h 50m` |
 | `Dispatch` | `Dispatcher • 9:15 AM • 12h` (the first Dispatcher shift) |
 | `… Meeting` | `Meeting` |
@@ -36,6 +37,11 @@ blocks are 20 min later — that is the Roster bookmark's conversion, not this o
   There is no Save. On 2026-10-09 an Escape + outside click on an open menu left "Unavailable" in
   the cell — so the bookmark never closes a menu any other way than by picking its shift, and stops
   if a menu is open when it shouldn't be.
+
+- A filled shift: clicking its `<p>` (the time) opens ITS menu: "SHIFT", "Driver • 10:25 AM • 9h 50m",
+  trash, Repeat every week, **Auto-roster preference: (•) Standard / ☐ Set as backup**, Add a comment.
+  The bookmark ticks "Set as backup" for backups (also on backups already in as a plain Driver shift),
+  then closes the menu with its **Close** button (Amazon's menus carry one), else by clicking the shift again.
 
 ## Hand-off (window.postMessage, like the Roster bookmark)
 `schedweek.js` opens `APP?r=<time>#schedweek=<Sunday>` (window `jajbWeek`); the app

@@ -5,7 +5,9 @@
  * the Live board and hands every driver's shifts back (window.postMessage). Then it shows the plan,
  * and on "Fill" puts each shift into the driver's EMPTY day cell the way a person would: open the
  * cell's menu, click the shift ("Driver • 10:05 AM • 9h 50m", "Helper 10:25 AM", "Dispatcher • …",
- * "Meeting").
+ * "Meeting"). A backup goes in as its Driver shift and then gets "Set as backup" ticked in that
+ * shift's own menu (Auto-roster preference); a backup already in Amazon as a plain Driver shift
+ * just gets the tick (Jose 2026-10-09).
  *
  * On this page a picked shift is applied at once (unpublished) — there is no Save. The bookmark:
  *   - NEVER presses Publish, Auto-roster, Apply weekly pattern or anything else on Amazon's page;
@@ -206,6 +208,10 @@
   // the shift menu that's open now (the one with "Apply single shift"), or null
   const openMenu = () => [...document.querySelectorAll('[role="dialog"]')]
     .find((d) => visible(d) && /Apply single shift/.test(d.textContent || "")) || null;
+  // a filled shift's own menu ("SHIFT · Driver • 10:25 AM … Auto-roster preference: Standard / Set as backup")
+  const shiftMenu = () => [...document.querySelectorAll('[role="dialog"]')]
+    .find((d) => visible(d) && /Set as backup/.test(d.textContent || "")) || null;
+  const anyMenu = () => openMenu() || shiftMenu();
 
   /* ---------- the run ---------- */
   let sunday = null, payload = null, plan = null;
@@ -316,7 +322,11 @@
         const text = cellText(p.row.cells[i]);
         if (day.date < today) { it.status = "past"; }
         else if (!it.type) { it.status = "notype"; }
-        else if (text) { it.status = shows(text, sh, it.type) ? "already" : "busy"; it.why = text; }
+        else if (text) {
+          // a backup already there as a plain Driver shift: still needs "Set as backup" ticked
+          it.status = shows(text, sh, it.type) ? (sh.what === "Backup" ? "bkcheck" : "already") : "busy";
+          it.why = text;
+        }
         items.push(it);
       }
     }
@@ -336,6 +346,8 @@
     const nt = by("notype"); if (nt.length) h += `<details open><summary class="bad">Amazon has no matching shift (${nt.length})</summary>${listHtml(nt, (it) => `${who(it)}: ${esc(shiftLabel(it.sh))}`)}</details>`;
     const bz = by("busy"); if (bz.length) h += `<details><summary class="warn">Cell already has something else — left alone (${bz.length})</summary>${listHtml(bz, (it) => `${who(it)}: Amazon has “${esc(it.why)}”, schedule says ${esc(shiftLabel(it.sh))}`)}</details>`;
     const al = by("already"); if (al.length) h += `<p class="muted">Already in Amazon (fine): ${plural(al.length, "shift")}</p>`;
+    const bs = by("bkset"); if (bs.length) h += `<p class="muted">Ticked “Set as backup”: ${plural(bs.length, "backup")}</p>`;
+    const bf = by("bkfail"); if (bf.length) h += `<details open><summary class="bad">Shift is in, but “Set as backup” isn't ticked — do it by hand (${bf.length})</summary>${listHtml(bf, (it) => `${who(it)}: ${esc(it.why)}`)}</details>`;
     const pa = by("past"); if (pa.length) h += `<p class="muted">Days already over, skipped: ${plural(pa.length, "shift")}</p>`;
     if (final) {
       const fa = by("failed"); if (fa.length) h += `<details open><summary class="bad">Couldn't fill (${fa.length})</summary>${listHtml(fa, (it) => `${who(it)}: ${esc(it.why)}`)}</details>`;
@@ -351,12 +363,14 @@
     if (my !== runId) return;
     if (p.err) { stopWith(esc(p.err)); btn("Start over", run, true); return; }
     plan = p;
-    const todo = p.items.filter((it) => it.status === "todo");
+    const todo = p.items.filter((it) => it.status === "todo" || it.status === "bkcheck");
+    const nBk = p.items.filter((it) => it.status === "bkcheck").length;
     const firstWho = todo.length ? todo[0].p : null;
     const firstN = firstWho ? todo.filter((it) => it.p === firstWho).length : 0;
     const byDay = DAYS.map((dn) => [dn, todo.filter((it) => it.day === dn).length]).filter(([, n]) => n);
     let h = `<p><b>${esc(payload.label || "Week of " + short(sunday))}</b> — ${plural(todo.length, "shift")} to fill for ${plural(new Set(todo.map((it) => it.p)).size, "driver")}.</p>`;
     if (byDay.length) h += `<p class="muted">${byDay.map(([dn, n]) => `${dn} ${n}`).join(" · ")}</p>`;
+    if (nBk) h += `<p>${plural(nBk, "backup")} already in Amazon as a plain Driver shift — it will tick <b>Set as backup</b> on them.</p>`;
     h += reportHtml(false);
     h += "<p><b>Nothing has been changed on Amazon's page yet.</b> Each shift you fill goes into Amazon right away (unpublished). You press <b>Publish</b> yourself at the end.</p>";
     say(h);
@@ -380,13 +394,62 @@
     return waitFor(openMenu, 2500);
   }
 
+  // "Set as backup" in a shift's menu: {input, label} (the checkbox, or a role=checkbox)
+  function backupBox(menu) {
+    if (!menu) return null;
+    const label = [...menu.querySelectorAll("*")].find((e) => !e.children.length && one(e.textContent) === "Set as backup");
+    if (!label) return null;
+    for (let a = label, i = 0; a && a !== menu && i < 5; a = a.parentElement, i++) {
+      const inp = a.querySelector('input[type="checkbox"], [role="checkbox"]');
+      if (inp) return { input: inp, label };
+    }
+    return null;
+  }
+  const isChecked = (b) => !!b && (b.input.checked === true || b.input.getAttribute("aria-checked") === "true");
+  // close a shift's menu with its own Close button (Amazon's menus have one), else by clicking the shift again
+  async function closeShiftMenu(menu, p) {
+    const close = [...menu.querySelectorAll("button")].find((b) => /^close$/i.test(one(b.getAttribute("aria-label") || b.textContent)));
+    if (close) close.click(); else if (p) p.click();
+    if (await waitFor(() => !shiftMenu(), 1500)) return true;
+    if (close && p) { p.click(); return !!(await waitFor(() => !shiftMenu(), 1500)); }
+    return false;
+  }
+  // tick "Set as backup" on a filled Driver cell (Jose 2026-10-09)
+  async function markBackup(c) {
+    if (anyMenu()) return { ok: false, why: "a menu was already open", halt: true };
+    const p = c.querySelector("p");
+    if (!p) return { ok: false, why: "couldn't find the shift in the cell" };
+    p.click();                                                 // bubbles to the shift box's onClick
+    const menu = await waitFor(shiftMenu, 2500);
+    if (!menu) return { ok: false, why: "the shift's menu didn't open" };
+    let box = backupBox(menu);
+    if (!box) { const closed = await closeShiftMenu(menu, p); return { ok: false, why: "no “Set as backup” box in its menu", halt: !closed }; }
+    let changed = false;
+    if (!isChecked(box)) {
+      box.input.click();
+      changed = true;
+      await waitFor(() => isChecked(backupBox(shiftMenu() || menu)), 2000);
+    }
+    box = backupBox(shiftMenu() || menu) || box;
+    const okNow = isChecked(box);
+    const closed = await closeShiftMenu(shiftMenu() || menu, p);
+    if (!closed) return { ok: okNow, changed, halt: true, why: "its menu stayed open — close it by hand" };
+    return okNow ? { ok: true, changed } : { ok: false, why: "Amazon didn't keep the tick" };
+  }
+
   async function placeOne(it) {
     const cell = readRows().find((r) => r.name === it.p.row.name);
     const c = cell && cell.cells[it.i];
     if (!c) return { ok: false, why: "their row is gone from the page" };
     const now = cellText(c);
-    if (now) return shows(now, it.sh, it.type) ? { ok: true, already: true } : { ok: false, why: `the cell now has “${now}”` };
-    if (openMenu()) return { ok: false, why: "a shift menu was already open", halt: true };
+    const backup = it.sh.what === "Backup";
+    if (now) {
+      if (!shows(now, it.sh, it.type)) return { ok: false, why: `the cell now has “${now}”` };
+      if (!backup) return { ok: true, already: true };
+      const b = await markBackup(c);
+      return { ok: true, already: true, bk: b };
+    }
+    if (anyMenu()) return { ok: false, why: "a shift menu was already open", halt: true };
     const menu = await openCell(c);
     if (!menu) return { ok: false, why: "the cell's menu didn't open (nothing was changed)" };
     const pick = [...menu.querySelectorAll("button")].find((b) => one((b.querySelector("p[title]") || {}).title || "") === it.type.title);
@@ -397,6 +460,7 @@
     if (!got) return { ok: false, why: "Amazon didn't show the shift in the cell — please check it" };
     if (!shows(got, it.sh, it.type)) return { ok: false, why: `the cell shows “${got}” — please check it` };
     if (openMenu()) return { ok: true, halt: true, why: "a shift menu stayed open after picking" };
+    if (backup) { await sleep(300); return { ok: true, bk: await markBackup(c) }; }
     return { ok: true };
   }
 
@@ -406,8 +470,8 @@
     stopped = false;
     clearBtns();
     btn("Stop", () => { stopped = true; }, true);
-    const todo = plan.items.filter((it) => it.status === "todo" && (!only || it.p === only));
-    let done = 0, placed = 0, halt = "";
+    const todo = plan.items.filter((it) => (it.status === "todo" || it.status === "bkcheck") && (!only || it.p === only));
+    let done = 0, placed = 0, nBk = 0, halt = "";
     progress(0);
     for (const it of todo) {
       if (stopped || my !== runId) break;
@@ -416,6 +480,11 @@
       try { res = await placeOne(it); } catch (err) { res = { ok: false, why: "error: " + (err && err.message || err), halt: true }; }
       if (res.ok) { it.status = res.already ? "already" : "placed"; if (!res.already) placed++; }
       else { it.status = "failed"; it.why = res.why; }
+      if (res.bk) {                                           // the backup tick, after the shift
+        if (res.bk.ok) { if (res.bk.changed || it.status === "placed") nBk++; if (res.already) it.status = "bkset"; }
+        else { it.status = "bkfail"; it.why = res.bk.why; }
+        if (res.bk.halt) res = { ...res, halt: true, why: res.bk.why };
+      }
       done++;
       progress(done / todo.length);
       if (res.halt) { halt = `${who(it)}: ${res.why}`; break; }
@@ -423,7 +492,7 @@
     }
     if (my !== runId) return;
     progress(null); clearBtns();
-    let h = `<p><b>${halt ? "Stopped — " : stopped ? "Stopped. " : ""}Filled ${placed} of ${plural(todo.length, "shift")}${only ? ` (test: ${esc(only.d.name)})` : ""}.</b></p>`;
+    let h = `<p><b>${halt ? "Stopped — " : stopped ? "Stopped. " : ""}Filled ${placed} of ${plural(todo.length, "shift")}${only ? ` (test: ${esc(only.d.name)})` : ""}${nBk ? `, ${plural(nBk, "backup")} ticked` : ""}.</b></p>`;
     if (halt) h += `<p class="bad"><b>${esc(halt)}</b>. Look at that cell before going on.</p>`;
     h += reportHtml(true);
     h += "<p style=\"margin-top:8px\"><b>Check the week, then press Publish yourself.</b></p>";

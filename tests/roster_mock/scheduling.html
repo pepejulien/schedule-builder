@@ -78,13 +78,35 @@
     ["Sam Lee", "sam@x.com", {}],
     ["Sam K Lee", "samk@x.com", {}],
     ["Greyson Lee Turner", "g@x.com", { 0: "4 PM", 2: "9:15 AM" }],
+    ["Lou Backup", "lou@x.com", { 2: "10:05 AM" }],
   ];
   const fillCell = (cell, text) => {
     cell.innerHTML = "";
     let e = cell;
     for (let i = 0; i < 4; i++) { const d = document.createElement("div"); e.appendChild(d); e = d; }
-    if (text) { const p = document.createElement("p"); p.title = text; p.textContent = text; e.appendChild(p); }
+    if (text) {
+      const p = document.createElement("p"); p.title = text; p.textContent = text; e.appendChild(p);
+      // like Amazon: a filled shift opens ITS menu (Auto-roster preference: Standard / Set as backup)
+      if (/\d/.test(text)) p.addEventListener("click", (ev) => { ev.stopPropagation(); shiftMenu(cell, p); });
+    }
   };
+  const flags = new Map();                                 // cell -> backup ticked
+  function shiftMenu(cell, p) {
+    const d = document.getElementById("popover-1");
+    if (d.style.display !== "none" && d.dataset.for === "shift") { d.style.display = "none"; d.setAttribute("aria-expanded", "false"); return; }
+    d.innerHTML = ""; d.dataset.for = "shift";
+    const h = document.createElement("p"); h.textContent = "SHIFT";
+    const t = document.createElement("p"); t.textContent = "Driver • " + p.textContent + " • 9h 50m";
+    const pref = document.createElement("p"); pref.textContent = "Auto-roster preference";
+    const lab = document.createElement("label"); const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!flags.get(cell);
+    const sp = document.createElement("span"); sp.textContent = "Set as backup"; lab.append(cb, sp);
+    cb.addEventListener("change", () => { flags.set(cell, cb.checked); window.__mock.applied.push("backup:" + cb.checked + "|" + cell.dataset.who); });
+    const close = document.createElement("button"); close.type = "button"; close.textContent = "Close";
+    close.onclick = () => { d.style.display = "none"; d.setAttribute("aria-expanded", "false"); };
+    d.append(h, t, pref, lab, close);
+    d.style.display = ""; d.setAttribute("aria-expanded", "true");
+  }
+  window.__mock.flags = flags;
   const rows = document.getElementById("rows");
   for (const [name, email, pre] of PEOPLE) {
     const row = document.createElement("div"); row.className = "row";
@@ -94,7 +116,7 @@
     const days = document.createElement("div"); days.className = "days";
     const inner = document.createElement("div"); inner.className = "inner";
     for (let i = 0; i < 7; i++) {
-      const cell = document.createElement("div"); cell.className = "cell";
+      const cell = document.createElement("div"); cell.className = "cell"; cell.dataset.who = name + "|" + DAYS[i];
       fillCell(cell, pre[i] || "");
       hookCell(cell, name, i);
       inner.appendChild(cell);
@@ -119,7 +141,7 @@
   const dlg = document.getElementById("popover-1");
   function openMenu(cell, name, i) {
     if (cell.innerText.trim()) return;                    // filled cells open another menu - not needed here
-    dlg.innerHTML = "";
+    dlg.innerHTML = ""; dlg.dataset.for = "add";
     const w = document.createElement("button"); w.textContent = "Apply weekly pattern";
     w.onclick = () => log.push("Apply weekly pattern");
     const h = document.createElement("p"); h.textContent = "Apply single shift";
