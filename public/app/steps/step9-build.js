@@ -182,6 +182,8 @@ export function runConfirmed({ name, day, role, unavReasons, limits }, setUnav, 
 // [trainer, trainee, day]; "Auto-picked …" notes mark rotation picks;
 // "TRAINING: …" lines are new hires the engine couldn't place.
 const DAY_IDX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+// a list of days as text, in week order (the engine lists them alphabetically)
+const wkJoin = (days) => (days || []).slice().sort((a, b) => DAY_IDX[a] - DAY_IDX[b]).join(' ');
 
 // One row per training pair: {trainer, trainee, day, date (ISO), wave,
 // picked: 'auto'|'chosen', solo: [days]}. Shown on the card AND saved as the
@@ -297,8 +299,8 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
             const meta = TIER_META[c.cls] || TIER_META.free;
             const nDays = c.road_days.length + c.backup_days.length;
             const days = [
-              c.road_days.length ? 'Road: ' + c.road_days.join(' ') : '',
-              c.backup_days.length ? 'Bk: ' + c.backup_days.join(' ') : '',
+              c.road_days.length ? 'Road: ' + wkJoin(c.road_days) : '',
+              c.backup_days.length ? 'Bk: ' + wkJoin(c.backup_days) : '',
             ].filter(Boolean).join(' · ') || 'no days yet';
             const clickable = status !== 'blocked';
             return html`<div class=${'cand ' + status}>
@@ -453,7 +455,7 @@ export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
                 ...swap.flags })}>${c.name}</button>
             <span class="chip ${meta.chip}">${meta.short}</span>
             <span class="cand-hours">${c.hours}h → ${c.new_hours}h</span>
-            <span class="muted">Road: ${c.road_days.join(' ')}${c.backup_days.length ? ' · Bk: ' + c.backup_days.join(' ') : ''}</span>
+            <span class="muted">Road: ${wkJoin(c.road_days)}${c.backup_days.length ? ' · Bk: ' + wkJoin(c.backup_days) : ''}</span>
             ${(c.reasons || []).length ? html`<div class="cand-why">${c.reasons.join('; ')}</div>` : ''}
           </div>`;
         })}
@@ -698,6 +700,7 @@ export function Step9Build() {
   const b = wizard.build;
   const [progress, setProgress] = useState(null);
   const [editor, setEditor] = useState(null);       // {day, role, fromName, view:'table'|'list'} | null
+  const [q, setQ] = useState('');                    // Per-driver name search (Jose 2026-10-09)
   const [adder, setAdder] = useState(null);         // {name} | null — the add-a-shift modal
   const [waver, setWaver] = useState(null);         // {day, name} | null — the change-wave modal
   const [cands, setCands] = useState(null);         // {loading, error, list} for the current editor
@@ -895,7 +898,14 @@ export function Step9Build() {
   // Rows arrive sorted by hours desc, so each tier's block stays hours-sorted.
   const byTier = {};
   for (const d of (r.drivers || [])) (byTier[d.cls] = byTier[d.cls] || []).push(d);
-  const tierSections = TIER_ORDER.filter((t) => byTier[t]);
+  // Per-driver search (Jose 2026-10-09): case and accents ignored, any part of the name
+  const fold = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const qf = fold(q.trim());
+  if (qf) for (const t of Object.keys(byTier)) byTier[t] = byTier[t].filter((d) => fold(d.name).includes(qf));
+  const tierSections = TIER_ORDER.filter((t) => byTier[t] && byTier[t].length);
+  const nShown = tierSections.reduce((a, t) => a + byTier[t].length, 0);
+  // days in week order, Sun..Sat (the engine lists them alphabetically)
+  const wk = (days) => (days || []).slice().sort((a, b) => DAY_IDX[a] - DAY_IDX[b]);
 
   // In-table move mode: highlight who can take the selected slot right in the
   // per-driver rows, so the pick is made with full context in view.
@@ -958,6 +968,13 @@ export function Step9Build() {
         onPick=${pickSlot} onClose=${() => setEditor(null)}
         onListView=${() => setEditor({ ...editor, view: 'list' })}
         onWave=${() => { setWaver({ day: editor.day, name: editor.fromName }); setEditor(null); }} />` : ''}
+      <div class="row" style="margin:6px 0 8px">
+        <input type="search" placeholder="Search a driver…" value=${q} onInput=${(e) => setQ(e.target.value)}
+          aria-label="Search a driver" style="min-width:240px" />
+        ${qf ? html`<span class="muted">${nShown} match${nShown === 1 ? '' : 'es'}</span>
+          <button class="link" onClick=${() => setQ('')}>Clear</button>` : ''}
+      </div>
+      ${qf && !nShown ? html`<p class="muted">No driver matches “${q.trim()}”.</p>` : ''}
       <div class="scroll-x"><table>
         <thead><tr><th>Driver</th><th>Group</th><th>Road</th><th>Backup</th><th>Other</th><th>Hours</th></tr></thead>
         <tbody>${tierSections.map((t) => {
@@ -971,12 +988,13 @@ export function Step9Build() {
               <span class="muted"> · ${rows.length} driver${rows.length === 1 ? '' : 's'} · ${lo === hi ? lo + 'h' : lo + '–' + hi + 'h'}</span>
             </td></tr>
             ${rows.map((d) => {
-              const other = [...d.helper_days.map((x) => x + ' (train)'),
-                ...d.dispatch_days.map((x) => x + ' (disp)'),
-                ...d.meeting_days.map((x) => x + ' (mtg)')].join(', ');
+              const other = [...d.helper_days.map((x) => [x, ' (train)']),
+                ...d.dispatch_days.map((x) => [x, ' (disp)']),
+                ...d.meeting_days.map((x) => [x, ' (mtg)'])]
+                .sort((a, b) => DAY_IDX[a[0]] - DAY_IDX[b[0]]).map((x) => x.join('')).join(', ');
               // a 0h driver with submitted days off: say WHY at a glance
               const why = (!other && d.hours === 0 && (d.unavailable || []).length)
-                ? `unavailable ${d.unavailable.join(' ')}` : '';
+                ? `unavailable ${wk(d.unavailable).join(' ')}` : '';
 
               // Move-mode annotations: is this row the source, a candidate, or blocked?
               const c = candMap ? candMap.get(d.name) : null;
@@ -1012,9 +1030,9 @@ export function Step9Build() {
                   onClick=${(e) => { e.stopPropagation(); setAdder({ name: d.name }); }}>+</button>` : ''}</td>
                 <td><span class="chip ${meta.chip}">${meta.short}${d.target != null ? ':' + d.target : ''}</span></td>
                 <td>${d.road_days.length || addChip('road') || blockedWhy('road')
-                  ? html`${d.road_days.map((day) => chip(day, 'road'))}${addChip('road')}${blockedWhy('road')}` : '—'}</td>
+                  ? html`${wk(d.road_days).map((day) => chip(day, 'road'))}${addChip('road')}${blockedWhy('road')}` : '—'}</td>
                 <td>${d.backup_days.length || addChip('backup') || blockedWhy('backup')
-                  ? html`${d.backup_days.map((day) => chip(day, 'backup'))}${addChip('backup')}${blockedWhy('backup')}` : '—'}</td>
+                  ? html`${wk(d.backup_days).map((day) => chip(day, 'backup'))}${addChip('backup')}${blockedWhy('backup')}` : '—'}</td>
                 <td class="muted">${other || why || '—'}</td>
                 <td>${pickable
                   ? html`<span class=${'hours-delta' + (c.status === 'warn' || c.status === 'unavail' ? ' ' + c.status : '')}>${c.hours}h → <b>${c.new_hours}h</b></span>`
