@@ -1699,6 +1699,69 @@ def apply_wave(payload_json):
                                message=traceback.format_exc()))
 
 
+def set_counts(payload_json):
+    """payload: {day, waves: {wave: n}, backup: n}. Set how many routes each of
+    the day's waves has (and so the day's total) and how many backups -- the
+    Live board's day header (Jose 2026-10-09: adding drivers to a full wave
+    keeps raising the count, and Amazon's real number had no way back in).
+    A wave can't go below the routes already in it: take someone off or move
+    them to backup first. Waves not named keep their count."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        day = p.get("day")
+        if day not in res.DAYS:
+            return json.dumps(dict(ok=False, kind="edit", message=f"{day} is closed."))
+
+        def _whole(v):
+            return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+        want = p.get("waves") or {}
+        if not isinstance(want, dict):
+            return json.dumps(dict(ok=False, kind="edit", message="Bad wave counts."))
+        for w, n in want.items():
+            if w not in res.waves[day]:
+                return json.dumps(dict(ok=False, kind="edit",
+                                       message=f"{day} has no {w} wave."))
+            if not _whole(n):
+                return json.dumps(dict(ok=False, kind="edit",
+                                       message=f"{w}: enter a whole number, 0 or more."))
+            have = _wave_filled(res, day, w)
+            if n < have:
+                return json.dumps(dict(ok=False, kind="edit",
+                    message=f"{have} driver(s) already have a {w} route on {day} - "
+                            f"take someone off or move them to backup before going below {have}."))
+        bk = p.get("backup", res.backup.get(day, 0))
+        if not _whole(bk):
+            return json.dumps(dict(ok=False, kind="edit", message="Backups: enter a whole number, 0 or more."))
+
+        old_r, old_b = res.routes.get(day, 0), res.backup.get(day, 0)
+        new_w = {w: want.get(w, n) for w, n in res.waves[day].items()}
+        new_r = sum(new_w.values())
+        if new_w == res.waves[day] and bk == old_b:
+            return json.dumps(dict(ok=False, kind="edit", message="Nothing changed."))
+        _STATE["undo"].append(_snapshot(res))
+        changed = [f"{w} {res.waves[day][w]}->{n}" for w, n in new_w.items() if n != res.waves[day][w]]
+        res.waves[day].update(new_w)
+        res.routes[day] = new_r
+        res.backup[day] = bk
+        parts = []
+        if new_r != old_r or changed:
+            parts.append(f"{new_r} routes (was {old_r}" + (f"; {', '.join(changed)}" if changed else "") + ")")
+        if bk != old_b:
+            parts.append(f"{bk} backups (was {old_b})")
+        desc = f"Set {day} to " + " and ".join(parts)
+        _STATE["edits"].append(desc)
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
 def undo_last(payload_json):  # noqa: ARG001 - uniform (json in, json out) signature
     """Restore the state saved before the most recent edit, re-verify, and
     rewrite the xlsx."""
