@@ -365,16 +365,18 @@
     btn("Start over", run, true);
   }
 
-  // open one empty cell's menu: hover it (the "+" shows), click the "+", or the cell itself
+  // open one empty cell's menu (read on Amazon 2026-10-09): the cell's inner box has React 16
+  // onMouseEnter; hovering shows a clickable box holding <span role="img" aria-label="Assign">, and
+  // clicking that opens the menu. React 16 builds mouseenter from a "mouseover" with NO
+  // relatedTarget (one with a relatedTarget is ignored), so that is exactly what is sent.
+  const assignIcon = (cell) => cell.querySelector('[aria-label="Assign"]');
   async function openCell(cell) {
     let t = cell;
     while (t.firstElementChild) t = t.firstElementChild;
-    for (const type of ["pointerover", "mouseover", "pointerenter", "mouseenter", "mousemove"]) {
-      t.dispatchEvent(new MouseEvent(type, { bubbles: type.endsWith("over") || type === "mousemove", relatedTarget: document.body }));
-    }
-    await sleep(120);
-    const plus = cell.querySelector('button, [role="button"]');
-    (plus || t).click();
+    t.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window, relatedTarget: null }));
+    const icon = await waitFor(() => assignIcon(cell), 1500);
+    if (!icon) return null;
+    icon.click();                                              // bubbles to the box's onClick
     return waitFor(openMenu, 2500);
   }
 

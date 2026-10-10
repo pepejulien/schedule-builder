@@ -7,7 +7,8 @@
   TEST ONLY - a copy of Amazon's Scheduling week view (logistics.amazon.com/scheduling/calendar-view/week),
   as read on 2026-10-09 (docs/week-bookmarklet.md), for public/schedweek.js.
   Rows: one per associate, the name in <p title="Name <email>">, then 7 day cells (Sun..Sat).
-  Clicking an EMPTY cell opens the shift menu (role=dialog, "Apply single shift", one button per
+  An EMPTY cell shows an "Assign" icon only on hover (React 16 onMouseEnter: a "mouseover" with a
+  relatedTarget is ignored, like React 16 does for synthetic ones); clicking the ICON opens the shift menu (role=dialog, "Apply single shift", one button per
   shift with <p title="Driver • 10:05 AM • 9h 50m">); picking a shift fills the cell at once.
   ?app=http://localhost:8777/  where schedweek.js is loaded from.   ?frame=1  iframe "jajbWeek" for
   browsers without pop-ups.   window.__mock.log lists clicks on Publish / Auto-roster / Apply weekly
@@ -95,12 +96,26 @@
     for (let i = 0; i < 7; i++) {
       const cell = document.createElement("div"); cell.className = "cell";
       fillCell(cell, pre[i] || "");
-      cell.addEventListener("click", () => openMenu(cell, name, i));
+      hookCell(cell, name, i);
       inner.appendChild(cell);
     }
     days.appendChild(inner); row.append(nc, days); rows.appendChild(row);
   }
 
+  // like Amazon: cell > div > div(hover box) > div; hovering the empty box adds div{onClick} > span > span[aria-label=Assign]
+  function hookCell(cell, name, i) {
+    cell.addEventListener("mouseover", (e) => {
+      if (e.relatedTarget) return;                         // React 16 ignores a mouseover that has one
+      if (cell.innerText.trim() || cell.querySelector('[aria-label="Assign"]')) return;
+      const host = cell.firstElementChild.firstElementChild.firstElementChild;
+      const box = document.createElement("div"); box.style.cssText = "text-align:center;font-weight:bold";
+      const sp = document.createElement("span"); const ic = document.createElement("span");
+      ic.setAttribute("role", "img"); ic.setAttribute("aria-label", "Assign"); ic.textContent = "+";
+      sp.appendChild(ic); box.appendChild(sp);
+      box.addEventListener("click", (ev) => { ev.stopPropagation(); box.remove(); openMenu(cell, name, i); });
+      host.appendChild(box);
+    });
+  }
   const dlg = document.getElementById("popover-1");
   function openMenu(cell, name, i) {
     if (cell.innerText.trim()) return;                    // filled cells open another menu - not needed here

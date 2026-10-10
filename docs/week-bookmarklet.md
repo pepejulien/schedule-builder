@@ -22,8 +22,11 @@ blocks are 20 min later — that is the Roster bookmark's conversion, not this o
 ## Amazon's page (read 2026-10-09)
 - Header: `Week 42: Oct 11 - Oct 17, 2026`; day headers `Sun, Oct 11` … `Sat, Oct 17`.
 - One row per associate: the name in `<p title="First Middle Last <email>">`; the row element has
-  2 children, the second wraps a div with **7 day cells**, Sun..Sat. An empty cell is bare divs;
-  hovering shows a "+"; clicking opens the shift menu. A filled cell shows the time ("10:05 AM",
+  2 children, the second wraps a div with **7 day cells**, Sun..Sat. An empty cell is bare divs; the
+  inner box has a React 16 `onMouseEnter`: hovering adds a box with an `onClick` holding
+  `<span role="img" aria-label="Assign">` ("+"), and clicking THAT opens the shift menu (clicking the
+  cell itself does nothing). React 16 makes mouseenter from a `mouseover` with **no relatedTarget** —
+  a synthetic one with a relatedTarget is ignored (the first version's bug). A filled cell shows the time ("10:05 AM",
   "4 PM") or "Unavailable"/"Meeting", and clicking it opens a different menu (delete, repeat…).
 - The shift menu: `[role=dialog][aria-expanded=true]` (`popover-N`) with "Apply weekly pattern",
   the text "Apply single shift", and one button per shift with `<p title="Driver • 10:05 AM • 9h 50m">`.
