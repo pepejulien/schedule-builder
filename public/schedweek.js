@@ -145,8 +145,8 @@
   // the 7 day headers in page order ("Sun, Oct 11") — must read Sun..Sat
   function headerDays() {
     const seen = [];
-    for (const e of document.querySelectorAll("p, span, div, h2, h3, h4")) {
-      if (e.children.length) continue;
+    for (const e of document.querySelectorAll("body *")) {      // on Amazon they are <a> links
+      if (e.children.length || e.closest("#jajb-week")) continue;
       const m = /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat),\s*[A-Z][a-z]{2}\s+\d{1,2}$/.exec(one(e.textContent));
       if (m && !seen.includes(m[1])) seen.push(m[1]);
     }
