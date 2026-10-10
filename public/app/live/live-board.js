@@ -28,7 +28,7 @@ import {
 import {
   loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
   WAVE_COLORS, SHIFT_COLORS, ACT_LOADED, actualSig, prevISO, overRisk, runRisk, riskCardHtml, roomOn, clockOutBy, missingDays, workedSig, actualList,
-  notePrevSummary, prevTailRev,
+  notePrevSummary, prevTailRev, withRouteTracker, openTodayRisk, doneDates, HARD_RUN,
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 import { FutureWeek } from './future-week.js';
@@ -115,8 +115,12 @@ function futureWeeks(published) {
 
 // The over-the-limit card (hours in 7 days / days in a row): the same HTML the Vehicle
 // Assigner's alarm pop-up shows (limits.js riskCardHtml).
+// out on a route today with no clock-out yet (2026-10-10): the RTS time / 6th day in 7 on top
 function RiskInfo({ d, risk, iso }) {
-  return html`<div dangerouslySetInnerHTML=${{ __html: riskCardHtml(d, risk, iso) }} />`;
+  const now = risk.now && risk.now.date === iso && risk.now.texts.length ? risk.now : null;
+  return html`<div>${now ? html`<div class=${'ov-note ' + (now.level === 'warn' ? 'lv-warn' : 'lv-bad')}><b>Today: ${now.texts.join(' · ')}</b></div>` : ''}
+    <div dangerouslySetInnerHTML=${{ __html: riskCardHtml(d, risk, iso,
+      d.notScheduled ? '✓ = already worked. Not on the schedule — fix it in Route Tracker or add them to the schedule.' : undefined) }} /></div>`;
 }
 
 function Block({ v, route, bk, left }) {
@@ -242,15 +246,19 @@ const ampm = (t) => { const [h, m] = String(t || '13:00').split(':').map(Number)
 // long day could reach the max. Clock-out time: the shift's time on the schedule IS the clock-in
 // (Jose 2026-10-07; Amazon's departure is 40 min later), 30-min lunch, 30 minutes early — the
 // same result as the Vehicle Assigner, which starts from the departure minus 40.
+// Out on a route today with no clock-out yet (open_dates, 2026-10-10): today isn't "already
+// worked" (doneDates, as overRisk does), and Route Tracker's clock-in times it when there is one.
 function HoursLeft({ d, info, v, lim, today }) {
-  if (info.date < today || (d.act_dates || []).includes(info.date)) return '';
+  if (info.date < today || doneDates(d, today).has(info.date)) return '';
   const { room, max } = roomOn(d, info.date, lim);
   const full = lim.primary_hours || 10, maxDay = lim.max_day_hours || 12;
   if (room >= maxDay) return '';
   const first = d.name.split(/\s+/)[0];
   const wd = parseISODate(info.date).toLocaleDateString('en-US', { weekday: 'long' });
-  const wave = (String(v).match(/^\d{1,2}:\d{2} [AP]M/) || [])[0] || dayWaves(info)[0];
-  const by = clockOutBy(waveMins(wave), room).by;
+  const st = /^(\d{1,2}):(\d{2})/.exec(String((d.rt_start || {})[info.date] || ''));
+  const wave = st ? `${((+st[1] + 11) % 12) + 1}:${st[2]} ${+st[1] >= 12 ? 'PM' : 'AM'}`
+    : (String(v).match(/^\d{1,2}:\d{2} [AP]M/) || [])[0] || dayWaves(info)[0];
+  const by = clockOutBy(st ? +st[1] * 60 + +st[2] : waveMins(wave), room).by;
   const t = `${((Math.floor(by / 60) + 11) % 12) + 1}:${String(by % 60).padStart(2, '0')} ${by >= 720 ? 'PM' : 'AM'}`;
   const h = Math.floor(room * 2) / 2;   // whole or half hours, rounded down
   if (room <= 0.5) return html`<div class="dm-info warn"><b>No hours left on ${wd}.</b> Any work puts ${first} over ${max} hours in 7 days.</div>`;
@@ -273,7 +281,8 @@ function SevenDays({ d, info, v, lim }) {
   for (let k = 1; k <= 6; k++) prior += Number(dh[at(-k)] || 0);
   prior = r2(prior);
   const full = lim.primary_hours || 10, max = lim.max_7day_hours || 60;
-  const worked = (d.act_dates || []).includes(iso), now = Number(dh[iso] || 0);
+  // today's open route (no clock-out yet) is not "worked" yet (doneDates, 2026-10-10)
+  const worked = doneDates(d, todayISO()).has(iso), now = Number(dh[iso] || 0);
   const day = pd(iso).toLocaleDateString('en-US', { weekday: 'long' });
   const span = `${pd(at(-6)).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} – ${pd(at(-1)).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`;
   const tone = (t) => (t > max ? 'lv-bad' : t >= max - 6 ? 'lv-warn' : '');
@@ -365,7 +374,8 @@ function LeftConfirm({ d, day, view, busy, onCancel, onConfirm }) {
 const DAY_ORDER = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 // What one driver is doing on one day, and everything that can be done about it.
-function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk, note, onSaveNote, late, rec, onSaveLate, route }) {
+// rt = the same driver as the hours checks see them (withRouteTracker: today's open route), 2026-10-10
+function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk, note, onSaveNote, late, rec, onSaveLate, route, rt }) {
   const gone = mark && mark.kind === 'left';
   const v = (d.cells || {})[day] || '';
   const c = cellInfo(v);
@@ -402,9 +412,9 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
         <div class=${d.streak >= (lim.max_consecutive || 5) ? 'hot' : ''}><b>${d.streak}</b><span>days in a row (usual max ${lim.max_consecutive || 5})</span></div>
       </div>
 
-      <${SevenDays} d=${d} info=${info} v=${v} lim=${lim} />
+      <${SevenDays} d=${rt || d} info=${info} v=${v} lim=${lim} />
       ${risk && risk.hot.includes(info.date) ? html`<div class="dm-info warn dm-over"><${RiskInfo} d=${d} risk=${risk} iso=${info.date} /></div>` : ''}
-      ${info.open && kind !== 'disp' && kind !== 'meet' && kind !== 'mark' ? html`<${HoursLeft} d=${d} info=${info} v=${v} lim=${lim} today=${todayISO()} />` : ''}
+      ${info.open && kind !== 'disp' && kind !== 'meet' && kind !== 'mark' ? html`<${HoursLeft} d=${rt || d} info=${info} v=${v} lim=${lim} today=${todayISO()} />` : ''}
       ${kind === 'trainer' || kind === 'trainee' ? html`<div class="dm-info">${kind === 'trainer'
         ? html`<b>Trainer</b> — rides along with <b>${c.partner}</b> on the ${c.top} route.`
         : html`<b>Trainee</b> — drives the ${c.top} route with trainer <b>${c.partner}</b>.`}</div>` : ''}
@@ -700,6 +710,9 @@ function Board() {
   const [att, setAtt] = useState([]);               // attendance records of the week (call-offs / no-shows)
   const [lates, setLates] = useState({});           // late arrivals: {"<ISO day>|<name>": {time, by, at}}
   const autoTried = useRef(new Set());              // dispatch's records already marked (or tried) here
+  // re-checked once a minute (2026-10-10): today's RTS lines (the 12-hour day's shows an hour before)
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setNowMs(Date.now()), 60000); return () => clearInterval(t); }, []);
 
   // async work reads the newest values through refs
   const R = useRef({});
@@ -1238,12 +1251,15 @@ function Board() {
   const lim = view.limits || {};
   // who had a route each day, today and before (Route Tracker) (Jose 2026-10-08)
   const actList = actualList(actDocs.prev, actDocs.cur);
-  const routeOf = routeDays(actList);
+  const routeOf = routeDays(actList, view.drivers || []);   // shared entry paints no row (2026-10-10)
   const drvOf = new Map((view.drivers || []).map((d) => [d.name, d]));   // name -> driver, for its tid (Jose 2026-10-08)
   const routeFor = (name, iso) => { const r = iso && iso <= today ? routeOf(drvOf.get(name) || name) : null; return r && iso in r ? r[iso] : undefined; };
   // backup days (Route Tracker) - shown on blank days until the cloud writer adds them (Jose 2026-10-08)
-  const bkOf = backupDays(actList);
+  const bkOf = backupDays(actList, view.drivers || []);   // (2026-10-10)
   const bkFor = (name, iso) => { const r = iso && iso <= today ? bkOf(drvOf.get(name) || name) : null; return r && iso in r ? r[iso] : undefined; };
+  // the hours checks see every Route Tracker driver (2026-10-10): not on the schedule = a stand-in
+  // row; a route today with no clock-out yet = still ahead. Display only: the engine never sees these.
+  const viewRT = withRouteTracker(view, actList, today);
   const openRoutes = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.routes - x.routes_filled), 0);
   const openBk = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.backup - x.backup_filled), 0);
   const byName = Object.fromEntries(view.drivers.map((x) => [x.name, x]));
@@ -1261,11 +1277,15 @@ function Board() {
   // who left the company this week goes first (2026-10-09), whatever the sort
   const goneRows = shown.filter((x) => x.left).sort((a, b) => a.name.localeCompare(b.name));
   const stay = shown.filter((x) => !x.left);
+  const noSched = dayF.length || bkOnly ? [] : viewRT.drivers.filter((x) => x.notScheduled
+    && (!q.trim() || fold(x.name).includes(fold(q.trim())))).sort((a, b) => a.name.localeCompare(b.name));
   const groups = [
     ...(goneRows.length ? [{ key: 'left', meta: { label: 'Left the company — shifts to cover', chip: 'gray' }, rows: goneRows }] : []),
     ...(sortBy === 'name'
       ? [{ key: 'all', meta: goneRows.length ? { label: 'Everyone else', chip: 'gray' } : null, rows: stay.slice().sort((a, b) => a.name.localeCompare(b.name)) }]
       : TIER_ORDER.map((t) => ({ key: t, meta: TIER_META[t], rows: stay.filter((x) => x.cls === t) }))),
+    // Route Tracker drivers not on the schedule (2026-10-10): hours checks only, nothing to click
+    ...(noSched.length ? [{ key: 'nosched', meta: { label: 'Not on the schedule — on a route in Route Tracker', chip: 'gray' }, rows: noSched }] : []),
   ].filter((g) => g.rows.length);
   const todayCount = tday ? view.drivers.reduce((a, x) => {
     const k = cellInfo((x.cells || {})[tday.day]).kind;
@@ -1279,16 +1299,23 @@ function Board() {
   // day for a week that's over (an upcoming week shows its busiest 7 days)
   const lastDay = view.days[view.days.length - 1].date;
   const endISO = today < view.days[0].date ? null : today > lastDay ? lastDay : today;
-  const streakCls = (n) => (n > (lim.max_consecutive || 5) ? 'lv-bad' : n === (lim.max_consecutive || 5) ? 'lv-warn' : '');
-  const daysCls = (n) => (n > (lim.max_worked_days || 5) ? 'lv-bad' : n === (lim.max_worked_days || 5) ? 'lv-warn' : '');
+  // red only for 7 days in a row (HARD_RUN); 6 days — in a row, in the week or in 7 — is allowed
+  // but flagged: orange (2026-10-10, was red past the usual max of 5). Build rules unchanged.
+  const streakCls = (n) => (n >= HARD_RUN ? 'lv-bad' : n >= (lim.max_consecutive || 5) ? 'lv-warn' : '');
+  const daysCls = (n) => (n >= HARD_RUN ? 'lv-bad' : n >= (lim.max_worked_days || 5) ? 'lv-warn' : '');
   const maxD7 = lim.max_days_in_7 || 5;
   const nCols = view.days.length + 5;
   // over the 7-day max: the upcoming days that cause it shake; hover one for what and how to fix
   // and the days that would make 6 worked days in 7 (a safeguard: the rules lock that)
-  const risks = Object.fromEntries(view.drivers.map((x) => {
+  // ... for every Route Tracker driver too (viewRT: stand-ins + today's open route, 2026-10-10)
+  const riskBy = Object.fromEntries(viewRT.drivers.map((x) => [x.name, x]));
+  const risks = Object.fromEntries(viewRT.drivers.map((x) => {
     const hours = overRisk(x, view.days, today, lim), run = runRisk(x, view.days, today, lim);
     if (hours) hours.backupH = lim.backup_hours || 2;
-    return [x.name, hours || run ? { hours, run, hot: [...new Set([...(hours ? hours.hot : []), ...(run ? run.hot : [])])] } : null];
+    // out today with room under the max day: the "Today:" RTS line even when no limit breaks (2026-10-10)
+    const now = openTodayRisk(x, view.days, today, lim, nowMs);
+    return [x.name, hours || run || now ? { hours, run, hot: [...new Set([...(hours ? hours.hot : []), ...(run ? run.hot : [])])],
+      now } : null];
   }));
   const showPop = (e, name, iso) => {
     const b = e.currentTarget.getBoundingClientRect();
@@ -1387,7 +1414,7 @@ function Board() {
           <th title=${`Days worked this week. Usual max ${maxD7} in any 7 days in a row — last week counts ("in 7d" shows it when last week adds to it); a 6th needs the pop-up.`}>Days</th>
           <th title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
         </tr></thead>
-        <tbody>${!shown.length ? html`<tr><td colspan=${nCols} class="muted" style="text-align:left">
+        <tbody>${!shown.length && !noSched.length ? html`<tr><td colspan=${nCols} class="muted" style="text-align:left">
             ${nobody}</td></tr>` : ''}
           ${groups.map((g) => html`
             ${g.meta ? html`<tr class="tier-sep"><td colspan=${nCols}><span class="chip ${g.meta.chip}">${g.meta.label}</span>
@@ -1395,14 +1422,17 @@ function Board() {
             ${g.rows.map((x) => {
               const nWorked = (x.worked_dates || []).length;
               const tm = TIER_META[x.cls] || TIER_META.free;
+              const now = risks[x.name] && risks[x.name].now;
               return html`<tr class=${x.left ? 'lv-leftrow' : ''}>
-                <td class="lv-namecol"><button class="link lv-name" title=${x.left ? `${x.name} left the company` : 'Give ' + x.name + ' a shift'}
-                  onClick=${() => (x.left ? setCell({ name: x.name, day: x.left }) : setAdder({ name: x.name }))}>${x.name}</button>
+                <td class="lv-namecol">${x.notScheduled ? html`<b class="lv-name">${x.name}</b> <span class="chip gray" title="In Route Tracker, not on this week's schedule — hours checks only">not on the schedule</span>`
+                  : html`<button class="link lv-name" title=${x.left ? `${x.name} left the company` : 'Give ' + x.name + ' a shift'}
+                  onClick=${() => (x.left ? setCell({ name: x.name, day: x.left }) : setAdder({ name: x.name }))}>${x.name}</button>`}
                   ${x.left ? html` <span class="chip gray" title="Left the company">Left ${x.left}</span>` : ''}
                   ${sortBy === 'name' ? html` <span class="chip ${tm.chip} tier-mini">${tm.short}</span>` : ''}
                   ${(x.helper_days || []).length ? html` <span class="chip trainer-chip" title="Trains a new hire this week">Trainer</span>` : ''}
                   <div class="lv-sub">Week: ${x.clock_hours ?? x.hours}h${endISO && x.day_hours
-                    ? html` · <span class=${max7Cls(last7(x.day_hours, endISO))}>Last 7d: ${last7(x.day_hours, endISO)}h</span>` : ''}</div></td>
+                    ? html` · <span class=${max7Cls(last7(x.day_hours, endISO))}>Last 7d: ${last7(x.day_hours, endISO)}h</span>` : ''}</div>
+                  ${now && now.texts.length ? html`<div class=${'lv-sub ' + (now.level === 'warn' ? 'lv-warn' : 'lv-bad')}><b>Today: ${now.texts.join(' · ')}</b></div>` : ''}</td>
                 ${view.days.map((dd) => {
                   const v = (x.cells || {})[dd.day] || '';
                   const c = cellInfo(v);
@@ -1416,10 +1446,10 @@ function Board() {
                   const onRoute = route == null ? (rtBk != null ? 'Backup in Route Tracker — the schedule will add it\n' : '')
                     : (route ? `On route ${route} (Route Tracker)\n` : 'On a route (Route Tracker)\n');
                   return html`<td class=${'lv-cell k-' + c.kind + (dd.date === today ? ' today' : '') + (dd.open ? '' : ' closed') + (hot ? ' lv-over' : '')}
-                    title=${hot ? undefined : onRoute + (note ? `💬 ${note.text} — ${note.by || ''}\n` : '') + (c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed'))}
+                    title=${hot ? undefined : onRoute + (note ? `💬 ${note.text} — ${note.by || ''}\n` : '') + (c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (x.notScheduled ? 'Not on the schedule' : dd.open ? 'Not scheduled — click for options' : 'Closed'))}
                     onMouseEnter=${hot ? (e) => showPop(e, x.name, dd.date) : undefined}
                     onMouseLeave=${hot ? () => setPop(null) : undefined}
-                    onClick=${dd.open || note ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} route=${route} bk=${rtBk} left=${leftWas} />${
+                    onClick=${!x.notScheduled && (dd.open || note) ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} route=${route} bk=${rtBk} left=${leftWas} />${
                       note ? html`<span class="lv-notedot" aria-label="Has a comment">💬</span>` : ''}${
                       late ? html`<span class="lv-notedot" style="right:auto;left:2px" title=${'Late — ' + late.time} aria-label="Late arrival">⏰</span>` : ''}</td>`;
                 })}
@@ -1429,7 +1459,7 @@ function Board() {
                   return ifs == null ? '' : html`<div class=${'lv-ifsent ' + max7Cls(ifs)}
                     title="If every backup day still ahead becomes a full route">if sent out: ${ifs}h</div>`;
                 })()}</td>
-                <td class=${daysCls(nWorked)}>${nWorked}${(x.max_days7 ?? 0) > nWorked ? html`<div class=${'lv-ifsent' + (x.max_days7 > maxD7 ? ' lv-bad' : '')}
+                <td class=${daysCls(nWorked)}>${nWorked}${(x.max_days7 ?? 0) > nWorked ? html`<div class=${'lv-ifsent' + (x.max_days7 >= HARD_RUN ? ' lv-bad' : x.max_days7 > maxD7 ? ' lv-warn' : '')}
                   title="Most days worked in any 7 days in a row, last week included">${x.max_days7} in 7d</div>` : ''}</td>
                 <td class=${streakCls(x.streak)}>${x.streak}</td>
               </tr>`;
@@ -1446,8 +1476,8 @@ function Board() {
         <span class="lv-sw" style="background:transparent;border:2px solid #9aa3b2" title="Their shift after they left the company — the slot is open">Left the company</span>
         <span class="lv-sw lv-sw-route">Has a route (Route Tracker)</span>
       </div>
-      ${pop && risks[pop.name] && byName[pop.name] ? html`<div class="lv-pop" style=${`left:${pop.left}px;` + (pop.up != null
-        ? `top:${pop.up}px;transform:translateY(-100%)` : `top:${pop.top}px`)}><${RiskInfo} d=${byName[pop.name]} risk=${risks[pop.name]} iso=${pop.iso} /></div>` : ''}
+      ${pop && risks[pop.name] && riskBy[pop.name] ? html`<div class="lv-pop" style=${`left:${pop.left}px;` + (pop.up != null
+        ? `top:${pop.up}px;transform:translateY(-100%)` : `top:${pop.top}px`)}><${RiskInfo} d=${riskBy[pop.name]} risk=${risks[pop.name]} iso=${pop.iso} /></div>` : ''}
       <p class="hint">A shaking day would put that driver over ${max7Lim}h in 7 days or at ${maxD7 + 1} days worked in 7 — hover it to see why and how to fix it.
         Hours are scheduled on-the-clock hours. Orange = at or near a limit, red = over it.
         Locked: 12h in a day, ${max7Lim}h in any 7 days, 7 days worked in 7. A ${maxD7 + 1}th day in 7 (last week counts)
@@ -1470,7 +1500,7 @@ function Board() {
     ${cell && byName[cell.name] ? html`<${CellMenu} d=${byName[cell.name]} day=${cell.day}
       info=${view.days.find((x) => x.day === cell.day)} mark=${markOf(cell.name, cell.day)} busy=${busy}
       opt=${opts && opts.data && opts.data.name === cell.name ? (opts.data.days.find((x) => x.day === cell.day) || null) : null}
-      fills=${waveFills(view, cell.day)} view=${view} risk=${risks[cell.name]}
+      fills=${waveFills(view, cell.day)} view=${view} risk=${risks[cell.name]} rt=${riskBy[cell.name]}
       note=${notes[(view.days.find((x) => x.day === cell.day) || {}).date + '|' + cell.name]}
       route=${routeFor(cell.name, (view.days.find((x) => x.day === cell.day) || {}).date)}
       late=${lates[(view.days.find((x) => x.day === cell.day) || {}).date + '|' + cell.name]}

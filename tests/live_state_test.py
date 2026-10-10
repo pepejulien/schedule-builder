@@ -234,6 +234,12 @@ ok(next(d for d in m['drivers'] if d['name'] == a)['day_hours'].get(next(x['date
    'dispatch counts 12h on the clock')
 m = J(runner.set_duty, {'name': b, 'day': day, 'kind': 'meeting'})
 ok(m['ok'] and next(d for d in m['drivers'] if d['name'] == b)['cells'][day] == '1:00 PM Meeting', f'{b} in a 1:00 PM meeting')
+# a meeting is backup_hours (2h) on the clock and a day worked (2026-10-10): limits.js shiftHours
+# now gives the same 2h (it gave 0), so the engine and the browser agree
+mdate = next(x['date'] for x in m['days'] if x['day'] == day)
+mb = next(d for d in m['drivers'] if d['name'] == b)
+ok(mb['day_hours'].get(mdate) == m['limits']['backup_hours'] == 2, f"meeting counts 2h on the clock ({mb['day_hours'].get(mdate)})")
+ok(mdate in mb['worked_dates'], 'a meeting day is a day worked')
 nee = next(d for d in m['drivers'] if day in d['road_days'] and 'TRAIN' not in d['cells'][day])
 m = J(runner.set_duty, {'name': c, 'day': day, 'kind': 'trainer', 'with_name': nee['name']})
 ok(m['ok'], f"{c} trains {nee['name']} {day}")

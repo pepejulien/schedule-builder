@@ -239,6 +239,8 @@ export function confirmsOnce(weekISO, ms = 6000) {
 // = {week, drivers: {id: {name, keys, tid, days: {ISO: hours}}}, by, at}. Written by Route Tracker
 // a few seconds after each clock-out; read here so days already worked count their real hours.
 const canActual = () => onFirebase() && typeof window.JAJB.watch === 'function';
+// actual_hours can be read here at all (Firebase); off it the watches never answer (2026-10-10)
+export const canActualHours = () => canActual();
 export const watchActualHours = (weekISO, cb) => (canActual() ? window.JAJB.watch('actual_hours/' + weekISO, cb) : () => {});
 export function actualHoursOnce(weekISO, ms = 6000) {
   if (!canActual()) return Promise.resolve(null);

@@ -7,11 +7,13 @@ import { html } from '../preact-setup.js';
 import { useState, useEffect } from 'preact/hooks';
 import { setState, toast } from '../store.js';
 import { Banner, Spinner, Icon } from '../ui.js';
-import { liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveConfirms, watchLiveLate, saveLiveLate } from '../api.js';
+import { liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveConfirms, watchLiveLate, saveLiveLate,
+  canActualHours } from '../api.js';
 import { MissingCheck } from './missing.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 import { sundayOf, todayISO, cellInfo, WAVE_COLORS, SHIFT_COLORS, prevISO, actualList, mergeActual,
-  overRisk, runRisk, riskCardHtml, missingDays, withConfirmed } from './live-model.js';
+  overRisk, runRisk, riskCardHtml, missingDays, withConfirmed, withRouteTracker, openTodayRisk, HARD_RUN,
+  rtOnlyWeek, sharedTodayLines, actualLoadFailed, ACT_WAIT_MS } from './live-model.js';
 
 const longDate = (iso) => parseISODate(iso).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 const when = (iso) => (iso ? new Date(iso).toLocaleString('en-US',
@@ -27,6 +29,9 @@ function last7(dayHours, endISO) {
 }
 
 // Who to keep an eye on: close to (or past) a limit — and, apart, those only in overtime.
+// Colours (2026-10-10, the owner's rule: 6 days in 7 is allowed but flagged): 6 days — in a row,
+// in 7, or in the week — is amber (lvl 2); red (lvl 3) only for 7 days in a row (HARD_RUN) or over
+// the 7-day hours max. The engine's own build rules (max_consecutive etc.) are unchanged.
 function watchList(sm, endISO) {
   const lim = sm.limits || {};
   const max7 = lim.max_7day_hours || 60, maxc = lim.max_consecutive || 5, maxd = lim.max_worked_days || 5;
@@ -39,17 +44,77 @@ function watchList(sm, endISO) {
     const m7 = d.max7 ?? 0;
     if (m7 > max7) { why.push(`${m7}h in 7 days — over ${max7}h`); lvl = 3; }
     else if (m7 >= max7 - 6) { why.push(`${m7}h in 7 days (max ${max7})`); lvl = Math.max(lvl, 2); }
-    if ((d.max_days7 ?? 0) > maxd7) { why.push(`${d.max_days7} days worked in 7 (usual max ${maxd7})`); lvl = Math.max(lvl, 2); }
-    if (d.streak > maxc) { why.push(`${d.streak} days in a row`); lvl = Math.max(lvl, 3); }
+    if ((d.max_days7 ?? 0) > maxd7) { why.push(`${d.max_days7} days worked in 7 (usual max ${maxd7})`); lvl = Math.max(lvl, d.max_days7 >= HARD_RUN ? 3 : 2); }
+    if (d.streak >= HARD_RUN) { why.push(`${d.streak} days in a row`); lvl = Math.max(lvl, 3); }
+    else if (d.streak > maxc) { why.push(`${d.streak} days in a row`); lvl = Math.max(lvl, 2); }
     else if (d.streak === maxc) { why.push(`${d.streak} days in a row`); lvl = Math.max(lvl, 1); }
     const nd = (d.worked_dates || []).length;
-    if (nd > maxd) { why.push(`${nd}-day week`); lvl = Math.max(lvl, 2); }
+    if (nd > maxd) { why.push(`${nd}-day week`); lvl = Math.max(lvl, nd >= HARD_RUN ? 3 : 2); }
     const wk = d.clock_hours ?? d.hours ?? 0;
     if (why.length && wk > cap) why.push(`${wk}h this week — overtime`);
-    if (why.length) out.push({ name: d.name, why, lvl, last7: endISO && d.day_hours ? last7(d.day_hours, endISO) : null });
+    if (why.length) out.push({ name: d.name, why, lvl, last7: endISO && d.day_hours ? last7(d.day_hours, endISO) : null, notScheduled: !!d.notScheduled });
     else if (wk > cap) ot.push({ name: d.name, wk });
   }
   return { near: out.sort((a, b) => b.lvl - a.lvl || a.name.localeCompare(b.name)), ot: ot.sort((a, b) => b.wk - a.wk) };
+}
+
+// The hours checks for one week as the page shows them (2026-10-10, factored out so the Route
+// Tracker-only week runs the same code): risky = the red box — over the 7-day hours max on a day
+// still ahead, 7 days in a row (HARD_RUN), or can't work today; watch = the watch list, plus
+// anyone whose only problem is a 6th day in 7 (allowed, flagged: amber) and anyone out on a
+// route today with an RTS line (openTodayRisk; nowMs = the minute it's checked at).
+function limitChecks(sm, today, endISO, nowMs) {
+  const lim = sm.limits || {};
+  const { near: watch0, ot } = watchList(sm, endISO);
+  const dayName = (iso) => (iso === today ? 'Today' : (sm.days.find((x) => x.date === iso) || {}).day || iso);
+  const all = sm.drivers.map((d) => {
+    const hours = overRisk(d, sm.days, today, lim), run = runRisk(d, sm.days, today, lim);
+    if (hours) hours.backupH = lim.backup_hours || 2;
+    const hot = [...new Set([...(hours ? hours.hot : []), ...(run ? run.hot : [])])].sort();
+    // out on a route today, no clock-out yet (2026-10-10): the RTS time / 6th day in 7 / 7th day in a row
+    const now = openTodayRisk(d, sm.days, today, lim, nowMs);
+    if (!hot.length) return now && now.texts.length ? { d, hot, now, red: !!now.cant } : null;
+    const runMax = run && run.hot.length ? Math.max(...run.runs.map((r) => r.length)) : 0;
+    const what = [hours && hours.hot.length ? `over ${hours.max}h in 7 days (${Math.max(...hours.over.map((w) => w.total))}h)` : '',
+      runMax ? `${runMax} days worked in 7` : ''].filter(Boolean).join(' and ');
+    const red = !!(hours && hours.hot.length) || runMax >= HARD_RUN || !!(now && now.cant);
+    return { d, risk: { hours, run }, hot, what, now, red };
+  }).filter(Boolean);
+  const risky = all.filter((x) => x.red && x.hot.length)
+    .sort((a, b) => a.hot[0].localeCompare(b.hot[0]) || a.d.name.localeCompare(b.d.name));
+  // the rest: on the watch list — a 6th day in 7 ahead (amber), and/or today's RTS line
+  const watch = watch0.map((w) => ({ ...w }));
+  for (const x of all.filter((y) => !(y.red && y.hot.length))) {
+    const why = [];
+    if (x.now && x.now.texts.length) why.push(`Today: ${x.now.texts.join(' · ')}`);
+    if (x.hot.length) why.push(`would go ${x.what} (${x.hot.map(dayName).join(', ')})`);
+    // one colour rule with the Live board (openTodayRisk level, 2026-10-10): an RTS time still
+    // ahead / a 6th day in 7 = amber; past due, no hours left, can't work = red
+    const lvl = x.red || (x.now && x.now.level === 'bad') ? 3 : 2;
+    const w = watch.find((y) => y.name === x.d.name);
+    if (w) { w.why = [...why, ...w.why]; w.lvl = Math.max(w.lvl, lvl); }
+    else {
+      watch.push({ name: x.d.name, why, lvl, notScheduled: !!x.d.notScheduled,
+        last7: endISO && x.d.day_hours ? last7(x.d.day_hours, endISO) : null });
+    }
+  }
+  watch.sort((a, b) => b.lvl - a.lvl || a.name.localeCompare(b.name));
+  return { risky, watch, ot, dayName };
+}
+
+// The Route Tracker-only hours checks (this week's schedule isn't published), 2026-10-10 — used
+// when another week is shown and when no week is published at all. chk = limitChecks(rtOnlyWeek …).
+function rtOnlyCard(chk, actFail) {
+  return html`<div class="card td-alert">
+      <b>This week's schedule isn't published - hours are checked from Route Tracker only</b>
+      ${chk.risky.length || chk.watch.length ? html`<ul class="td-watch">
+        ${chk.risky.map((x) => { const w = chk.watch.find((y) => y.name === x.d.name);
+          return html`<li class="lvl3"><b>${x.d.name}</b>
+          <span>${x.now && x.now.texts.length ? `Today: ${x.now.texts.join(' · ')} · ` : ''}would go ${x.what} (${x.hot.map(chk.dayName).join(', ')})${w ? ` · ${w.why.join(' · ')}` : ''}</span></li>`; })}
+        ${chk.watch.filter((w) => !chk.risky.some((x) => x.d.name === w.name)).map((w) => html`<li class=${'lvl' + w.lvl}><b>${w.name}</b>
+          <span>${w.why.join(' · ')}${w.last7 != null ? html` <span class="muted">· last 7 days ${w.last7}h</span>` : ''}</span></li>`)}</ul>`
+        : actFail ? '' : html`<p class="muted" style="margin:6px 0 0">Nobody on a route in Route Tracker is close to a limit.</p>`}
+    </div>`;
 }
 
 // Late arrivals today (2026-10-08): the same marks as the Live board's shift menu — each goes on
@@ -91,7 +156,19 @@ export function Today({ buildCard }) {
   const [log, setLog] = useState([]);
   const [rev, setRev] = useState(null);
   const [err, setErr] = useState('');
+  const [actAt, setActAt] = useState(0);         // when the actual_hours watches started (ms)
+  const [actT, setActT] = useState({});          // today's week's actual hours {cur, prev}, when it isn't the shown week
+  const [actTAt, setActTAt] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const today = todayISO();
+  const tw = sundayOf(today);
+
+  // re-checked once a minute (2026-10-10): the 12-hour-day RTS line appears on its own an hour
+  // before, and a Route Tracker read that never answers gets flagged
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     liveWeeks(12).then((ws) => {
@@ -115,11 +192,29 @@ export function Today({ buildCard }) {
     const un2 = watchActualHours(prevISO(week.week), (d) => setAct((a) => ({ ...a, prev: d })));
     const un3 = watchLiveConfirms(week.week, (c) => setConfirms(c || {}));
     const un4 = watchLiveLate(week.week, (l) => setLates(l || {}));
-    return () => { un1(); un2(); un3(); un4(); };
+    setActAt(Date.now());
+    const t = setTimeout(() => setNowMs(Date.now()), ACT_WAIT_MS + 500);
+    return () => { un1(); un2(); un3(); un4(); clearTimeout(t); };
   }, [week && week.week]);
+
+  // this week's schedule isn't published (the page shows another week, 2026-10-10): Route
+  // Tracker's hours for today's week still run the hours checks for whoever is on a route —
+  // also when no week is published at all (week null, 2026-10-10)
+  const other = week === null || (!!week && week.week !== tw);
+  useEffect(() => {
+    if (!other) return undefined;
+    setActT({});
+    const un1 = watchActualHours(tw, (d) => setActT((a) => ({ ...a, cur: d })));
+    const un2 = watchActualHours(prevISO(tw), (d) => setActT((a) => ({ ...a, prev: d })));
+    setActTAt(Date.now());
+    const t = setTimeout(() => setNowMs(Date.now()), ACT_WAIT_MS + 500);
+    return () => { un1(); un2(); clearTimeout(t); };
+  }, [other, tw]);
   const actList = actualList(act.prev, act.cur);
   const missing = smRaw ? missingDays(smRaw, actList, confirms) : [];
-  const sm = smRaw && mergeActual(smRaw, withConfirmed(actList, missing, smRaw.limits || {}));
+  // + Route Tracker drivers not on the schedule, and today's route with no clock-out yet (2026-10-10)
+  const actC = smRaw ? withConfirmed(actList, missing, smRaw.limits || {}) : actList;
+  const sm = smRaw && withRouteTracker(mergeActual(smRaw, actC), actC, today);
 
   useEffect(() => {
     if (!week || rev == null) return;
@@ -130,8 +225,13 @@ export function Today({ buildCard }) {
 
   if (week === undefined) return html`<div class="card"><${Spinner}/> Loading this week…</div>`;
   if (!week) {
+    // nothing published at all: the Route Tracker-only checks still run for today's week (2026-10-10)
+    const rtChk0 = limitChecks(rtOnlyWeek(tw, {}, actualList(actT.prev, actT.cur), today), today, today, nowMs);
+    const actFail0 = canActualHours() && actualLoadFailed(actT, actTAt, nowMs);
     return html`<div>
       ${err ? html`<${Banner} kind="err">${err}<//>` : ''}
+      ${actFail0 ? html`<div class="card td-alert"><div class="lv-bad"><b>Route Tracker hours didn't load - check hours by hand</b></div></div>` : ''}
+      ${rtOnlyCard(rtChk0, actFail0)}
       <div class="card hero"><div class="hero-ico">${Icon('live', 24)}</div>
         <h2>No week is published yet</h2>
         <p class="hint">Build a schedule and press <b>Publish</b> on the Build step — this page then shows the week day by day.</p></div>
@@ -163,20 +263,18 @@ export function Today({ buildCard }) {
   const weekOpen = sm.days.filter((x) => x.open && x.date >= today)
     .map((x) => ({ day: x.day, date: x.date, r: Math.max(0, x.routes - x.routes_filled), b: Math.max(0, x.backup - x.backup_filled) }))
     .filter((x) => x.r || x.b);
-  const { near: watch, ot } = watchList(sm, endISO);
-  // who would break a hard limit (over the 7-day hours max / 6 days in 7) on a day still
-  // ahead — the same check and card as the Live board's shaking days
+  // who would break a hard limit (over the 7-day hours max / 7 days in a row) on a day still
+  // ahead — the same check and card as the Live board's shaking days; a 6th day in 7 and today's
+  // RTS lines go on the watch list (limitChecks, 2026-10-10)
   const lim = sm.limits || {};
-  const risky = sm.drivers.map((d) => {
-    const hours = overRisk(d, sm.days, today, lim), run = runRisk(d, sm.days, today, lim);
-    if (hours) hours.backupH = lim.backup_hours || 2;
-    const hot = [...new Set([...(hours ? hours.hot : []), ...(run ? run.hot : [])])].sort();
-    if (!hot.length) return null;
-    const what = [hours && hours.hot.length ? `over ${hours.max}h in 7 days (${Math.max(...hours.over.map((w) => w.total))}h)` : '',
-      run && run.hot.length ? `${Math.max(...run.runs.map((r) => r.length))} days worked in 7` : ''].filter(Boolean).join(' and ');
-    return { d, risk: { hours, run }, hot, what };
-  }).filter(Boolean).sort((a, b) => a.hot[0].localeCompare(b.hot[0]) || a.d.name.localeCompare(b.d.name));
-  const dayName = (iso) => (iso === today ? 'Today' : (sm.days.find((x) => x.date === iso) || {}).day || iso);
+  const { risky, watch, ot, dayName } = limitChecks(sm, today, endISO, nowMs);
+  // this week's schedule isn't published: the hours checks from Route Tracker alone (2026-10-10)
+  const rtSm = other ? rtOnlyWeek(tw, lim, actualList(actT.prev, actT.cur), today) : null;
+  const rtChk = rtSm ? limitChecks(rtSm, today, today, nowMs) : null;
+  // Route Tracker's hours didn't load (today's week): say so — the checks can't be trusted
+  const actFail = canActualHours() && (other ? actualLoadFailed(actT, actTAt, nowMs) : actualLoadFailed(act, actAt, nowMs));
+  // someone on a route today that can't be told apart from a schedule driver: no hours checks ran
+  const shared = other ? [] : sharedTodayLines(smRaw, actList, today);
   const nBk = Object.values(backups).reduce((a, l) => a + l.length, 0);
 
   return html`<div class="today">
@@ -188,6 +286,13 @@ export function Today({ buildCard }) {
       </div>
       <button class="primary" onClick=${openLive}>Open the Live schedule ${Icon('arrow', 16)}</button>
     </div>
+
+    ${actFail || shared.length ? html`<div class="card td-alert">
+      ${actFail ? html`<div class="lv-bad"><b>Route Tracker hours didn't load - check hours by hand</b></div>` : ''}
+      ${shared.map((x) => html`<div class="lv-bad"><b>${x.line}</b></div>`)}
+    </div>` : ''}
+
+    ${rtChk ? rtOnlyCard(rtChk, actFail) : ''}
 
     ${!day.open ? html`<div class="card"><p class="muted" style="margin:0">The station is closed ${day.day}.</p></div>` : html`
     <div class="stats">
@@ -203,12 +308,13 @@ export function Today({ buildCard }) {
         <svg viewBox="0 0 100 90" width="44" height="40" aria-hidden="true"><polygon points="50,4 96,86 4,86" fill="#d62d20" stroke="#8f1b12" stroke-width="3" stroke-linejoin="round"/>
           <rect x="45" y="30" width="10" height="32" rx="4" fill="#fff"/><circle cx="50" cy="73" r="6.5" fill="#fff"/></svg>
         <div><div class="td-risk-title">${risky.length === 1 ? '1 driver would break a limit' : `${risky.length} drivers would break a limit`}</div>
-          <div class="muted">Over ${lim.max_7day_hours || 60}h in 7 days, or 6 days worked in 7. Fix it before they go out — each one shows how.</div></div>
+          <div class="muted">Over ${lim.max_7day_hours || 60}h in 7 days, or ${HARD_RUN} days in a row. Fix it before they go out — each one shows how.</div></div>
         <button class="primary" onClick=${openLive}>Fix it on the Live schedule ${Icon('arrow', 16)}</button>
       </div>
       ${risky.map((x, i) => html`<details class="td-risk-one" open=${i === 0}>
-        <summary><b>${x.d.name}</b> — would go ${x.what}
-          <span class="td-risk-days">${x.hot.map((iso) => html`<span class=${'td-open' + (iso === today ? ' now' : '')}>${dayName(iso)}</span>`)}</span></summary>
+        <summary><b>${x.d.name}</b>${x.d.notScheduled ? html` <span class="chip gray">not on the schedule</span>` : ''} — would go ${x.what}
+          <span class="td-risk-days">${x.hot.map((iso) => html`<span class=${'td-open' + (iso === today ? ' now' : '')}>${dayName(iso)}</span>`)}</span>
+          ${x.now && x.now.texts.length ? html` <b class=${x.now.level === 'warn' ? 'lv-warn' : 'lv-bad'}>${x.now.texts.join(' · ')}</b>` : ''}</summary>
         <div class="td-risk-body" dangerouslySetInnerHTML=${{ __html: riskCardHtml(x.d, x.risk, null,
           '✓ = already worked. On the Live schedule these days shake — click one to change it.') }} />
       </details>`)}
@@ -264,9 +370,9 @@ export function Today({ buildCard }) {
       <div class="card">
         <h2>Watch list</h2>
         <p class="hint">Close to a limit this week: ${sm.limits?.max_7day_hours || 60}h in 7 days, days in a row, 6 days in 7.
-          Red = at or over it. Anyone who would break a limit is in the red box at the top.</p>
+          Orange = close, or 6 days (allowed, flagged). Red = over ${sm.limits?.max_7day_hours || 60}h or ${HARD_RUN} days in a row. Anyone who would break a limit is in the red box at the top.</p>
         ${!watch.length ? html`<p class="muted">Nobody is close to a limit.</p>` : html`<ul class="td-watch">
-          ${watch.map((w) => html`<li class=${'lvl' + w.lvl}><b>${w.name}</b>
+          ${watch.map((w) => html`<li class=${'lvl' + w.lvl}><b>${w.name}</b>${w.notScheduled ? html` <span class="chip gray">not on the schedule</span>` : ''}
             <span>${w.why.join(' · ')}${w.last7 != null ? html` <span class="muted">· last 7 days ${w.last7}h</span>` : ''}</span></li>`)}</ul>`}
         ${ot.length ? html`<details class="td-ot"><summary>${ot.length} more in overtime only (over ${sm.limits?.weekly_hours_cap || 40}h this week)</summary>
           <div class="td-otlist">${ot.map((o) => html`<span class="td-pill">${o.name} · ${o.wk}h</span>`)}</div></details>` : ''}

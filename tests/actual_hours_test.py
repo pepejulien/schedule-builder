@@ -132,5 +132,80 @@ if other:
 else:
     ok(True, '(no second Tuesday driver - skipped)')
 
+print('Transporter IDs separate two people with one name (2026-10-10)')
+m = runner._matcher([{'name': 'John Smith', 'tid': 'B2', 'days': {}}])
+ok(m({'name': 'John Smith', 'tid': 'A1'}) is None, 'same key, different TIDs (both set): no match')
+ok(m({'name': 'John Smith', 'tid': ''}) is not None, 'no TID on the schedule side: the key still matches')
+blank = {'name': 'John Smith', 'tid': '', 'days': {}}
+b2 = {'name': 'John Smith', 'tid': 'B2', 'days': {}}
+ok(runner._matcher([b2, blank])({'name': 'John Smith', 'tid': 'A1'}) is blank, 'B2 ruled out: the blank-TID record is the only one left')
+ok(runner._matcher([b2, blank])({'name': 'John Smith', 'tid': ''}) is None, 'no TID + two records: never guessed')
+a1 = {'name': 'John Smith', 'tid': 'A1', 'days': {}}
+ok(runner._matcher([b2, a1])({'name': 'John Smith', 'tid': 'A1'}) is a1, 'A1 found by TID among two John Smiths')
+dupt = [{'name': 'John Smith', 'tid': 'A1', 'days': {}}, {'name': 'Jane Doe', 'tid': 'A1', 'days': {}}]
+ok(runner._matcher(dupt)({'name': 'Jane Doe', 'tid': 'A1'}) is dupt[1], 'a TID two records carry: falls back to the name')
+print('one TID-less record two roster drivers share a key with: neither gets it (2026-10-10)')
+js_a = {'name': 'John Smith', 'tid': 'A1'}
+js_b = {'name': 'John Smith', 'tid': 'B2'}
+rec = {'name': 'John Smith', 'tid': '', 'days': {}}
+mr = runner._matcher([rec], [js_a, js_b])
+ok(mr(js_a) is None and mr(js_b) is None, 'picked by two drivers: used for neither')
+ok(runner._matcher([rec], [js_a])(js_a) is rec, 'one roster John Smith: still matched by name')
+ok(runner._matcher([dict(rec, tid='B2')], [js_a, js_b])(js_b) is not None, 'the record with B2: B2 only')
+# through _apply_actual: neither driver's planned hours change
+sun_d = datetime.date(2026, 10, 4)
+DA = {dd: sun_d + datetime.timedelta(days=i) for i, dd in enumerate(('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'))}
+ros = [dict(js_a, prim=['Mon'], bk=[], helper=[], extra=set(), meet=set(), w_prev=set()),
+       dict(js_b, prim=['Tue'], bk=[], helper=[], extra=set(), meet=set(), w_prev=set())]
+fake = runner.Result(roster=ros, DATEALL=DA, PH=10)
+runner._STATE['today'] = datetime.date(2026, 10, 8)
+napplied = runner._apply_actual(fake, [dict(rec, days={'2026-10-05': 13, '2026-10-06': 13})])
+runner._STATE['today'] = None
+ok(napplied == 0 and not ros[0].get('h_act') and not ros[1].get('h_act'), '_apply_actual: no hours laid on either')
+
+if d['tid']:
+    runner.use_slot('live')
+    other_tid = [{'name': name, 'keys': [f'{first}|{last}'], 'tid': d['tid'] + 'X', 'days': {mon: 3}}]
+    l5 = J(runner.load_state, {'state': st['state'], 'out': os.path.join(tmp, 'live5.xlsx'), 'actual': other_tid})
+    r7 = next(x for x in l5['drivers'] if x['name'] == name)
+    ok(r7['act_dates'] == [] and r7['day_hours'].get(mon) == 10, f"{name}: Route Tracker's same-name driver with another TID is not merged")
+else:
+    ok(True, '(driver has no tid - skipped)')
+
+print('a past meeting / Dispatch day with no clock-out keeps its hours (2026-10-10)')
+runner.use_slot('live')
+J(runner.load_state, {'state': st['state'], 'out': os.path.join(tmp, 'live6.xlsx')})
+DAYS7 = ('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat')
+duty = None
+for x in built['drivers']:
+    free = [dd for dd in DAYS7 if not x['cells'].get(dd) and dd in runner._STATE['res'].DAYS]
+    if len(free) >= 2 and x['name'] != name:
+        duty, (dm, dd2) = x, free[:2]
+        break
+if duty:
+    cf = {'confirm_unavailable': True, 'confirm_limits': True}
+    r_m = J(runner.set_duty, dict(cf, name=duty['name'], day=dm, kind='meeting'))
+    r_d = J(runner.set_duty, dict(cf, name=duty['name'], day=dd2, kind='dispatch'))
+    ok(r_m.get('ok') is not False and r_d.get('ok') is not False, f"meeting {dm} + dispatch {dd2} for {duty['name']}")
+    st6 = J(runner.export_state)
+    df, dl = duty['name'].lower().split()[0], duty['name'].lower().split()[-1]
+    # Route Tracker tracked both days (someone else clocked out); it knows `duty` (last Saturday) but
+    # has no clock-out for them on the meeting / dispatch day - it doesn't track those
+    act6 = [{'name': name, 'keys': [f'{first}|{last}'], 'days': {days[dm]: 10, days[dd2]: 10}},
+            {'name': duty['name'], 'keys': [f'{df}|{dl}'], 'days': {prev_sat: 8}}]
+    l6 = J(runner.load_state, {'state': st6['state'], 'out': os.path.join(tmp, 'live6b.xlsx'), 'actual': act6})
+    r8 = next(x for x in l6['drivers'] if x['name'] == duty['name'])
+    ok(r8['day_hours'].get(days[dm]) == 2, f'meeting {dm}: keeps 2h (was zeroed)')
+    ok(r8['day_hours'].get(days[dd2]) == 12, f'dispatch {dd2}: keeps 12h (was zeroed)')
+    ok(days[dm] in r8['worked_dates'] and days[dd2] in r8['worked_dates'], 'both stay worked days')
+    ok(days[dm] not in r8['act_dates'] and days[dd2] not in r8['act_dates'], 'and are not marked as actual hours')
+    # a real clock-out on the dispatch day still wins
+    act7 = [act6[0], dict(act6[1], days={prev_sat: 8, days[dd2]: 11})]
+    l7 = J(runner.load_state, {'state': st6['state'], 'out': os.path.join(tmp, 'live7.xlsx'), 'actual': act7})
+    r9 = next(x for x in l7['drivers'] if x['name'] == duty['name'])
+    ok(r9['day_hours'].get(days[dd2]) == 11, 'a real clock-out on the dispatch day wins')
+else:
+    ok(True, '(no driver with two free days - skipped)')
+
 print('\nFAIL: ' + '; '.join(fails) if fails else '\nPASS')
 sys.exit(1 if fails else 0)

@@ -12,8 +12,50 @@ import { liveWeek, saveLiveWeek, actualHoursOnce, confirmsOnce, liveSummaryOnce 
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 // the limit checks + actual-hours merge live in limits.js (no app imports), so the
 // Vehicle Assigner can load them too
-import { actualList, missingDays, withConfirmed } from './limits.js';
-export { actualList, flKey, mergeActual, overRisk, runRisk, riskCardHtml, roomOn, clockOutBy, missingDays, withConfirmed } from './limits.js';
+import { actualList, missingDays, withConfirmed, addUnscheduled, withOpenDays, rtMismatches } from './limits.js';
+export { actualList, flKey, mergeActual, overRisk, runRisk, riskCardHtml, roomOn, clockOutBy, missingDays, withConfirmed,
+  addUnscheduled, withOpenDays, openTodayRisk, doneDates, HARD_RUN } from './limits.js';
+
+// The week as the hours checks see it on screen (2026-10-10): the summary (or the engine's
+// report) plus a "not on the schedule" stand-in for every Route Tracker driver no schedule row
+// matches, and today's route with no clock-out yet counted as still ahead. Live board + Today
+// page only — the rules engine and the saved week never get these rows.
+export function withRouteTracker(summary, list, today = todayISO()) {
+  return withOpenDays(addUnscheduled(summary, list, today), list);
+}
+
+// Today's week with no published schedule (2026-10-10): an empty week (7 open days, no schedule
+// drivers, the limits given) with a stand-in for every Route Tracker driver who worked or is out
+// this week — so drivers on a route today still get the hours checks (overRisk / runRisk /
+// openTodayRisk). list = actualList(...) of that week and the one before.
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+export function rtOnlyWeek(weekISO, limits, list, today = todayISO()) {
+  const days = DAY_NAMES.map((day, i) => ({ day, date: toISODate(addDays(parseISODate(weekISO), i)), open: true,
+    routes: 0, backup: 0, routes_filled: 0, backup_filled: 0, waves: {} }));
+  const empty = { v: 1, week: weekISO, label: '', days, limits: limits || {}, drivers: [], marks: [], rtOnly: true };
+  return withRouteTracker(empty, withConfirmed(list || [], [], limits || {}), today);
+}
+
+// Route Tracker people on a route today that can't be told apart from a schedule driver (a name /
+// key or Transporter ID two people share, rtMismatches kind 'shared'): no hours checks run for
+// them, so the Today page says so in red (2026-10-10). -> [{name, code, line}]
+export function sharedTodayLines(summary, list, today = todayISO()) {
+  return rtMismatches(summary, list, today).filter((r) => r.kind === 'shared' && r.date === today && r.rt === 'route')
+    .map((r) => ({ name: r.name, code: r.code || '',
+      line: `Can't tell which driver ${r.name} (${r.code ? `route ${r.code}` : 'on a route'}) is - check their hours by hand` }));
+}
+
+// Route Tracker's hours didn't load (2026-10-10), the Vehicle Assigner's rule (hoursLoadLines):
+// JAJB.watch answers a read error with null, the same as a missing doc, so — no answer for this
+// week's or last week's actual_hours within waitMs of the watches starting, or both answered
+// null (Route Tracker always has last week's once anyone worked it). act = {cur, prev} as the
+// watches answered (a key missing = no answer yet); startedAt / now = ms.
+export const ACT_WAIT_MS = 20000;
+export function actualLoadFailed(act, startedAt, now = Date.now(), waitMs = ACT_WAIT_MS) {
+  const a = act || {};
+  const got = 'cur' in a && 'prev' in a;
+  return (!got && now - startedAt > waitMs) || (got && !a.cur && !a.prev);
+}
 
 export const prevISO = (iso) => toISODate(addDays(parseISODate(iso), -7));
 export const todayISO = () => toISODate(new Date());

@@ -497,29 +497,52 @@ def _fl_key(name):
     return t[0] + "|" + t[-1] if len(t) > 1 else t[0]
 
 
-def _matcher(recs):
+def _matcher(recs, roster=None):
     """Route Tracker records -> fn(roster driver) -> its record or None: Transporter
-    Id first, then first|last key; a key two records share is never guessed."""
-    by_tid, by_key, dup = {}, {}, set()
+    Id first, then first|last key; a key two records share is never guessed.
+    Same key but DIFFERENT Transporter Ids (both set) = two different people, never
+    matched (2026-10-10): the key only picks among records whose Id is blank or the
+    same as the driver's, and only when exactly one is left - "can't tell" only when
+    the Ids can't separate them. A Transporter Id two records carry is not used
+    (the same as limits.js actualIndex).
+    roster (optional, 2026-10-10): a record 2+ roster drivers would pick (two drivers
+    share a key, each with their own Id, and the record has none) can't be tied to
+    either - it is used for none of them (the mirror of two records vs one driver)."""
+    by_tid, dup_tid, by_key = {}, set(), {}
     for a in recs:
         if not isinstance(a, dict):
             continue
-        if a.get("tid"):
-            by_tid[str(a["tid"]).strip()] = a
+        t = str(a.get("tid") or "").strip()
+        if t:
+            if t in by_tid and by_tid[t] is not a:
+                dup_tid.add(t)
+            by_tid[t] = a
         for k in {_fl_key(a.get("name"))} | {str(x) for x in (a.get("keys") or []) if x}:
             if not k:
                 continue
-            if k in by_key and by_key[k] is not a:
-                dup.add(k)
-            by_key[k] = a
+            lst = by_key.setdefault(k, [])
+            if not any(x is a for x in lst):
+                lst.append(a)
 
     def match(dr):
-        a = by_tid.get(str(dr.get("tid")).strip()) if dr.get("tid") else None
-        if a is None:
-            k = _fl_key(dr["name"])
-            a = None if k in dup else by_key.get(k)
-        return a
-    return match
+        t = str(dr.get("tid") or "").strip()
+        if t and t not in dup_tid and t in by_tid:
+            return by_tid[t]
+        cands = [a for a in by_key.get(_fl_key(dr["name"]), [])
+                 if not (t and str(a.get("tid") or "").strip() and str(a.get("tid") or "").strip() != t)]
+        return cands[0] if len(cands) == 1 else None
+    if roster is None:
+        return match
+    picks = {}
+    for dr in roster:
+        a = match(dr)
+        if a is not None:
+            picks[id(a)] = picks.get(id(a), 0) + 1
+
+    def match_one(dr):
+        a = match(dr)
+        return None if a is None or picks.get(id(a), 0) > 1 else a
+    return match_one
 
 
 def _apply_actual(res, actual):
@@ -527,7 +550,7 @@ def _apply_actual(res, actual):
     Returns how many roster drivers got actual hours."""
     if not actual:
         return 0
-    match = _matcher(actual)
+    match = _matcher(actual, res.roster)      # a record two drivers would pick: neither (2026-10-10)
     start = res.DATEALL["Sun"]
     lo, hi = start - 7 * ONE, start + 7 * ONE
     today = _today()
@@ -561,7 +584,12 @@ def _apply_actual(res, actual):
                 open_days.add(datetime.date.fromisoformat(iso))
             except Exception:  # noqa: BLE001
                 pass
-        for d in tracked - open_days:        # tracked days without them: they didn't work
+        # a meeting or Dispatch day isn't something Route Tracker tracks (2026-10-10): no
+        # clock-out there is not "didn't work" - it keeps its scheduled hours (meeting 2h,
+        # Dispatch 12h) and stays a worked day
+        duty = {res.DATEALL[x] for x in set(dr.get("meet") or ()) | set(dr.get("extra") or ())
+                if x in res.DATEALL}
+        for d in tracked - open_days - duty:  # tracked days without them: they didn't work
             if start <= d:
                 act.setdefault(d, 0)
             else:
