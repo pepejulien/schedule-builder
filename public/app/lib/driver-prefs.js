@@ -204,11 +204,52 @@ export async function saveDriverPref(name, pref) {
   return doc;
 }
 
-// Names for the Drivers page and future weeks: [{name, tier | null, tid?}] sorted by name
-// (tid = Amazon Transporter ID, when the published week has it).
+// first|last, letters only — how the other JAJB apps match one person across spellings
+// ("Sylvia M Slate" = "Sylvia Slate"); a key two people share matches nobody.
+export const personKey = (s) => {
+  const t = String(s || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean);
+  return t.length ? t[0] + '|' + t[t.length - 1] : '';
+};
+
+// Mark who is working here now (2026-10-09). `list` = the cloud's active names (activeDriversOnce).
+// Each roster entry gets active: true / false; an active name nobody on the roster matches is added
+// (a new hire) with active: true and isNew: true. A name on the roster keeps its spelling (the
+// schedule, the prefs doc and Route Tracker already use it). Pure, for the tests.
+export function markActive(roster, list) {
+  const out = roster.map((r) => ({ ...r, active: false }));
+  const byKey = new Map(), dup = new Set();
+  for (const r of out) {
+    const k = personKey(r.name);
+    if (byKey.has(k)) dup.add(k); else byKey.set(k, r);
+  }
+  for (const raw of list || []) {
+    const n = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!n) continue;
+    const exact = out.find((r) => fold(r.name) === fold(n));
+    const k = personKey(n);
+    const hit = exact || (!dup.has(k) ? byKey.get(k) : null);
+    if (hit) hit.active = true;
+    else {
+      const add = { name: n, tier: null, active: true, isNew: true };
+      out.push(add);
+      if (!byKey.has(k)) byKey.set(k, add); else dup.add(k);
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Names for the Drivers page and future weeks: [{name, tier | null, tid?, active?, isNew?}] sorted
+// by name (tid = Amazon Transporter ID, when the published week has it).
 // Firebase: the newest published week's drivers; Netlify: this build's availability roster.
 // Either way plus everyone in the prefs doc. A read that fails just leaves those names out.
-export async function loadDriverRoster() {
+// { active: true } (2026-10-09): also read the cloud's active list (dispatch/lists, the one the
+// dispatch report uses) and mark everyone active / not (markActive) — new hires come in from it.
+// No `active` field on any entry = the active list couldn't be read.
+export async function loadDriverRoster({ active = false } = {}) {
+  let activeP = Promise.resolve(null);
+  if (active) {
+    try { const api = await import('../api.js'); activeP = api.activeDriversOnce(); } catch { /* no list */ }
+  }
   const by = new Map();
   const add = (name, tier, tid) => {
     const n = String(name || '').trim();
@@ -242,5 +283,8 @@ export async function loadDriverRoster() {
     }
   } catch { /* names from the prefs doc only */ }
   for (const name of Object.keys((await loadDriverPrefs()).drivers)) add(name, null);
-  return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const roster = [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
+  let list = null;
+  try { list = await activeP; } catch { list = null; }
+  return list ? markActive(roster, list) : roster;
 }

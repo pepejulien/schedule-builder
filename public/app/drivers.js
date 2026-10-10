@@ -267,7 +267,10 @@ export function Drivers() {
     (async () => {
       const doc = await loadDriverPrefs();
       let names = [];
-      try { names = await loadDriverRoster(); } catch { names = []; }
+      // everyone active (2026-10-09), plus anyone who left but still has preferences saved
+      try { names = await loadDriverRoster({ active: true }); } catch { names = []; }
+      const hasPref = new Set(Object.keys(doc.drivers).map(fold));
+      names = names.filter((r) => r.active !== false || hasPref.has(fold(r.name)));
       if (!names.length) names = Object.keys(doc.drivers).sort((a, b) => a.localeCompare(b)).map((name) => ({ name }));
       if (!live) return;
       setPrefs(doc.drivers);

@@ -250,6 +250,31 @@ export function actualHoursOnce(weekISO, ms = 6000) {
   });
 }
 
+// Everyone working here now (2026-10-09, Jose: "it should have all the people that are active"):
+// Firestore dispatch/lists.drivers — the cloud roster's list the dispatch report picks from (on
+// the job and on Amazon, plus dispatchers and managers), rebuilt by the cloud every minute.
+// -> [name] | null (no answer / not readable). The offline cache can answer first with an old
+// copy, so this keeps the newest snapshot until none has come for `settle` ms.
+export const canActiveRoster = canActual;
+export function activeDriversOnce(ms = 6000, settle = 1500) {
+  if (!canActiveRoster()) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let done = false, un = null, last = null, quiet = null;
+    const finish = () => {
+      if (done) return;
+      done = true; clearTimeout(t); clearTimeout(quiet); setTimeout(() => un && un(), 0);
+      const list = last && Array.isArray(last.drivers) ? last.drivers.filter((n) => typeof n === 'string' && n.trim()) : null;
+      resolve(list && list.length ? list : null);
+    };
+    const t = setTimeout(finish, ms);
+    un = window.JAJB.watch('dispatch/lists', (d) => {
+      if (!d) { finish(); return; }     // missing or not allowed
+      last = d;
+      clearTimeout(quiet); quiet = setTimeout(finish, settle);
+    });
+  });
+}
+
 // A published week's summary doc on its own, kept current (2026-10-08): {json, rev} | null. Another
 // dispatcher's save reaches the Live board's grid through this — no need to read the week (and its
 // big engine state) again before showing it. Same generic watch as actual_hours.
