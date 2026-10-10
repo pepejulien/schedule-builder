@@ -1,17 +1,18 @@
 // Minimal reactive store for the wizard — no framework beyond Preact hooks.
 import { useState, useEffect } from 'preact/hooks';
-import { nextSunday, toISODate } from './lib/weeks.js';
+import { nextSunday, toISODate, weekNumberOf, weekLabel } from './lib/weeks.js';
 import { saveDraft, clearDraft } from './draft.js';
 
 function freshWizard() {
+  const startISO = toISODate(nextSunday());  // next week: it's built before it starts
   return {
     flow: 2,                       // 2 = the 5-step flow (2026-10); drafts without it used 9 steps
     step: 0,                       // 0..4 wizard steps
-    week: { num: '', startISO: toISODate(nextSunday()), label: '' },
-    availability: null,            // { fileName, bytes(ArrayBuffer), drivers, counts, rosterNames }
+    week: { num: String(weekNumberOf(startISO)), startISO, label: weekLabel(weekNumberOf(startISO), startISO) },
+    availability: null,            // { fileName, bytes(ArrayBuffer), drivers, counts, rosterNames, source?: 'live' }
     tierByDriver: {},              // rosterName -> { tier, routes, rate, groupValue, conflict }
     tierMeta: { asof: null, fetched: false, warnings: [] },
-    priorWeek: { bytes: null, source: null }, // source: 'blobs'|'upload'|'none'
+    priorWeek: { bytes: null, source: null }, // the week before (= the current week): source 'blobs'|'upload'|'none'
     demand: {},                    // day -> [{ portalTime, count }]
     demandConfirmedClosed: {},     // day -> bool (explicit closed confirmation)
     backups: { mode: 'pct', pct: 0.15, perDay: {} },

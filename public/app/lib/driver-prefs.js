@@ -204,18 +204,23 @@ export async function saveDriverPref(name, pref) {
   return doc;
 }
 
-// Names for the Drivers page and future weeks: [{name, tier | null}] sorted by name.
+// Names for the Drivers page and future weeks: [{name, tier | null, tid?}] sorted by name
+// (tid = Amazon Transporter ID, when the published week has it).
 // Firebase: the newest published week's drivers; Netlify: this build's availability roster.
 // Either way plus everyone in the prefs doc. A read that fails just leaves those names out.
 export async function loadDriverRoster() {
   const by = new Map();
-  const add = (name, tier) => {
+  const add = (name, tier, tid) => {
     const n = String(name || '').trim();
     if (!n) return;
     const f = fold(n);
     const cur = by.get(f);
-    if (!cur) by.set(f, { name: n, tier: tier || null });
-    else if (!cur.tier && tier) cur.tier = tier;
+    const t = String(tid || '').trim();
+    if (!cur) by.set(f, t ? { name: n, tier: tier || null, tid: t } : { name: n, tier: tier || null });
+    else {
+      if (!cur.tier && tier) cur.tier = tier;
+      if (!cur.tid && t) cur.tid = t;
+    }
   };
   try {
     const api = await import('../api.js');
@@ -226,7 +231,7 @@ export async function loadDriverRoster() {
           const d = await api.liveWeek(w.week);
           const s = d && d.summary ? JSON.parse(d.summary) : null;
           if (s && Array.isArray(s.drivers) && s.drivers.length) {
-            for (const x of s.drivers) add(x && x.name, (x && (x.cls || x.tier)) || null);
+            for (const x of s.drivers) add(x && x.name, (x && (x.cls || x.tier)) || null, x && x.tid);
             break;
           }
         } catch { /* try the week before */ }

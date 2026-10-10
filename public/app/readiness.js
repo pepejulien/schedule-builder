@@ -20,8 +20,8 @@ export function readiness(wizard) {
   const weekOk = !!(w.week?.num && isSunday(w.week?.startISO));
   const priorOk = !!(w.priorWeek?.bytes || w.priorWeek?.source === 'none');
   const filesStatus = weekOk && w.availability && priorOk ? (w.priorWeek?.source === 'none' ? 'warn' : 'done') : 'todo';
-  const filesDetail = !w.availability ? 'availability not uploaded'
-    : !priorOk ? "last week's schedule not uploaded"
+  const filesDetail = !w.availability ? "next week's availability not set"
+    : !priorOk ? "the current week's schedule not set"
     : !weekOk ? 'week number / date not set'
     : `${w.week.label || 'week set'} · ${w.availability.counts.drivers} drivers`;
   const steps = [

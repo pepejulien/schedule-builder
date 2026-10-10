@@ -21,11 +21,11 @@ export function isSunday(iso) {
   return parseISODate(iso).getDay() === 0; // 0 = Sunday
 }
 
-// The next Sunday on/after today (used as the default start date).
+// The next Sunday AFTER today: the default week to build, since the schedule is
+// made before its week starts (on a Sunday the week under way is already running).
 export function nextSunday(from = new Date()) {
   const d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-  const add = (7 - d.getDay()) % 7; // 0 if today is Sunday
-  d.setDate(d.getDate() + (add === 0 ? 0 : add));
+  d.setDate(d.getDate() + (7 - d.getDay()));
   return d;
 }
 
@@ -42,4 +42,14 @@ export function weekLabel(weekNum, startISO) {
   const s = `${MONTHS[start.getMonth()]} ${start.getDate()}`;
   const e = `${MONTHS[end.getMonth()]} ${end.getDate()}`;
   return `Week-${weekNum} (${s} - ${e}, ${end.getFullYear()})`;
+}
+
+// Amazon week number of the Sun..Sat week starting sundayISO: Week 1 is the week
+// holding Jan 1 of the year its Saturday falls in (2026-10-04 -> 41). null if not a Sunday.
+export function weekNumberOf(sundayISO) {
+  if (!isSunday(sundayISO)) return null;
+  const start = parseISODate(sundayISO);
+  const jan1 = new Date(addDays(start, 6).getFullYear(), 0, 1);
+  const week1 = addDays(jan1, -jan1.getDay());
+  return Math.round((start - week1) / (7 * 86400000)) + 1;
 }
