@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scheduling (TEST COPY)</title>
+<!--
+  TEST ONLY - a copy of Amazon's Scheduling week view (logistics.amazon.com/scheduling/calendar-view/week),
+  as read on 2026-10-09 (docs/week-bookmarklet.md), for public/schedweek.js.
+  Rows: one per associate, the name in <p title="Name <email>">, then 7 day cells (Sun..Sat).
+  Clicking an EMPTY cell opens the shift menu (role=dialog, "Apply single shift", one button per
+  shift with <p title="Driver • 10:05 AM • 9h 50m">); picking a shift fills the cell at once.
+  ?app=http://localhost:8777/  where schedweek.js is loaded from.   ?frame=1  iframe "jajbWeek" for
+  browsers without pop-ups.   window.__mock.log lists clicks on Publish / Auto-roster / Apply weekly
+  pattern (schedweek.js must leave it empty).
+-->
+<script>window.__jajbWeekTest = true;</script>
+<style>
+  body{font:13px Arial,sans-serif;margin:0;color:#111}
+  .top{display:flex;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid #ddd}
+  .grid{display:flex}
+  .side{width:230px;padding:8px;border-right:1px solid #ddd}
+  .main{flex:1}
+  .hdr,.row{display:flex;border-bottom:1px solid #eee}
+  .namecol{width:200px;padding:6px}
+  .days{flex:1}
+  .inner{display:flex}
+  .cell{flex:1;min-height:38px;border-left:1px solid #eee;position:relative;cursor:pointer}
+  .cell p{margin:4px;border:1px solid #ccc;padding:4px}
+  .dh{flex:1;padding:6px;font-weight:bold}
+  [role=dialog]{position:fixed;background:#fff;border:1px solid #888;padding:8px;width:300px;z-index:10}
+  [role=dialog] button{display:block;width:100%;text-align:left;margin:2px 0}
+</style>
+</head>
+<body>
+<div class="top">
+  <b>Scheduling (TEST COPY)</b>
+  <span id="weeklabel">Week 42: Oct 11 - Oct 17, 2026</span>
+  <button id="publish">Publish until 10/17 (0)</button>
+  <button id="runbm" style="background:#df7332;color:#fff">Run the bookmark (test)</button>
+</div>
+<div class="grid">
+  <div class="side"><b>Shifts</b><div id="shifts"></div></div>
+  <div class="main">
+    <div class="hdr"><div class="namecol"><input placeholder="Search asso..."></div><div class="days"><div class="inner" id="dayhdr"></div></div></div>
+    <div id="rows"></div>
+  </div>
+</div>
+<div role="dialog" id="popover-1" aria-expanded="false" style="display:none"></div>
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const APP = params.get("app") || "http://localhost:8777/";
+  const log = [];
+  window.__mock = { log, applied: [] };
+  const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  ["Sun, Oct 11", "Mon, Oct 12", "Tue, Oct 13", "Wed, Oct 14", "Thu, Oct 15", "Fri, Oct 16", "Sat, Oct 17"].forEach((t) => {
+    const d = document.createElement("div"); d.className = "dh"; const p = document.createElement("p"); p.textContent = t; d.appendChild(p);
+    document.getElementById("dayhdr").appendChild(d);
+  });
+  const SHIFTS = ["Unavailable", "Closer", "Dispatcher • 9:15 AM • 12h", "Driver • 10:05 AM • 9h 50m", "Driver • 10:25 AM • 9h 50m",
+    "Driver • 10:45 AM • 9h 50m", "Driver • 11:05 AM • 9h 50m", "Driver • 11:25 AM • 9h 50m", "Helper 10:05 AM", "Helper 10:25 AM",
+    "Helper • 10:45 AM • 10h 50m", "Meeting"];
+  const shownAs = (t) => t === "Unavailable" || t === "Closer" || t === "Meeting" ? t
+    : (t.match(/(\d{1,2}(?::\d{2})?\s*[AP]M)/) || [t])[0];
+  for (const t of ["Unplanned", ...SHIFTS]) { const p = document.createElement("p"); p.title = t; p.textContent = t; document.getElementById("shifts").appendChild(p); }
+
+  // name, email, {dayIdx: text already in Amazon}
+  const PEOPLE = [
+    ["Cara Lea Amos", "cara@x.com", {}],
+    ["Barry Len Hughes", "barry@x.com", {}],
+    ["Tina Marie Trainee", "tina@x.com", {}],
+    ["Dan Disp", "dan@x.com", {}],
+    ["Una Off", "una@x.com", { 1: "Unavailable" }],
+    ["José Núñez", "jose@x.com", {}],
+    ["Kim Already", "kim@x.com", { 0: "10:05 AM" }],
+    ["Zed Late", "zed@x.com", {}],
+    ["Sam Lee", "sam@x.com", {}],
+    ["Sam K Lee", "samk@x.com", {}],
+    ["Greyson Lee Turner", "g@x.com", { 0: "4 PM", 2: "9:15 AM" }],
+  ];
+  const fillCell = (cell, text) => {
+    cell.innerHTML = "";
+    let e = cell;
+    for (let i = 0; i < 4; i++) { const d = document.createElement("div"); e.appendChild(d); e = d; }
+    if (text) { const p = document.createElement("p"); p.title = text; p.textContent = text; e.appendChild(p); }
+  };
+  const rows = document.getElementById("rows");
+  for (const [name, email, pre] of PEOPLE) {
+    const row = document.createElement("div"); row.className = "row";
+    const nc = document.createElement("div"); nc.className = "namecol";
+    const p = document.createElement("p"); p.title = `${name} <${email}>`;
+    const a = document.createElement("a"); a.setAttribute("role", "button"); a.textContent = name; p.appendChild(a); nc.appendChild(p);
+    const days = document.createElement("div"); days.className = "days";
+    const inner = document.createElement("div"); inner.className = "inner";
+    for (let i = 0; i < 7; i++) {
+      const cell = document.createElement("div"); cell.className = "cell";
+      fillCell(cell, pre[i] || "");
+      cell.addEventListener("click", () => openMenu(cell, name, i));
+      inner.appendChild(cell);
+    }
+    days.appendChild(inner); row.append(nc, days); rows.appendChild(row);
+  }
+
+  const dlg = document.getElementById("popover-1");
+  function openMenu(cell, name, i) {
+    if (cell.innerText.trim()) return;                    // filled cells open another menu - not needed here
+    dlg.innerHTML = "";
+    const w = document.createElement("button"); w.textContent = "Apply weekly pattern";
+    w.onclick = () => log.push("Apply weekly pattern");
+    const h = document.createElement("p"); h.textContent = "Apply single shift";
+    dlg.append(w, h);
+    for (const t of SHIFTS) {
+      const b = document.createElement("button"); b.type = "button";
+      const p = document.createElement("p"); p.title = t; p.textContent = t; b.appendChild(p);
+      b.onclick = (e) => {
+        e.stopPropagation();
+        dlg.style.display = "none"; dlg.setAttribute("aria-expanded", "false");
+        setTimeout(() => { fillCell(cell, shownAs(t)); window.__mock.applied.push(`${name}|${DAYS[i]}|${t}`); }, 40);
+      };
+      dlg.appendChild(b);
+    }
+    const r = cell.getBoundingClientRect();
+    dlg.style.left = r.left + "px"; dlg.style.top = (r.bottom + 4) + "px";
+    setTimeout(() => { dlg.style.display = ""; dlg.setAttribute("aria-expanded", "true"); }, 30);
+  }
+
+  document.getElementById("publish").onclick = () => log.push("Publish");
+  if (params.get("frame") === "1") {
+    const f = document.createElement("iframe");
+    f.name = "jajbWeek"; f.title = "app window (test)";
+    f.style.cssText = "position:fixed;left:8px;bottom:8px;width:440px;height:260px;border:2px dashed #7a1f1f;background:#fff;z-index:5";
+    document.body.appendChild(f);
+  }
+  document.getElementById("runbm").onclick = () => {
+    const s = document.createElement("script");
+    s.src = APP + "schedweek.js?" + Date.now();
+    document.body.appendChild(s);
+  };
+})();
+</script>
+</body>
+</html>

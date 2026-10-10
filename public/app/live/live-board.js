@@ -38,6 +38,10 @@ import { FutureWeek } from './future-week.js';
 const ROSTER_BOOKMARK = () => `javascript:(function(){var s=document.createElement('script');s.src='${
   new URL('roster.js', location.href.split('#')[0]).href}?'+Date.now();document.body.appendChild(s);})();`;
 const ROSTER_HOWTO = 'Drag this button onto your bookmarks bar. Then on Amazon: Dispatch → pick the day → Edit route assignment → click the bookmark. It fills the DA boxes; you check and press Save changes.';
+// Week bookmark (2026-10-09, docs/week-bookmarklet.md): same idea, schedweek.js on Amazon's Scheduling week view.
+const WEEK_BOOKMARK = () => `javascript:(function(){var s=document.createElement('script');s.src='${
+  new URL('schedweek.js', location.href.split('#')[0]).href}?'+Date.now();document.body.appendChild(s);})();`;
+const WEEK_HOWTO = 'Drag this button onto your bookmarks bar. Then on Amazon: Scheduling → Week view → go to the week → click the bookmark. It fills each driver’s empty days with their shifts from the Live board (applied in Amazon right away, unpublished); you check and press Publish.';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 // the discipline engine's driver key: first|last, letters only (attendance records use it)
 const nameKey = (s) => { const t = String(s || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean); return t.length ? t[0] + '|' + t[t.length - 1] : ''; };
@@ -681,6 +685,7 @@ function Board() {
   const [confirm, setConfirm] = useState(null);
   const [limit, setLimit] = useState(null);     // the overtime pop-up
   const [rosterTip, setRosterTip] = useState(false);   // the Roster to Amazon how-to (2026-10-09)
+  const [weekTip, setWeekTip] = useState(false);       // the Week to Amazon how-to (2026-10-09)
   const [opts, setOpts] = useState(null);       // add_options for the driver whose day/week is open
   const [finder, setFinder] = useState({ day: null, role: 'road' });
   const [showLog, setShowLog] = useState(false);
@@ -1335,10 +1340,13 @@ function Board() {
           <button class="small" onClick=${() => download(new TextEncoder().encode(driverCsv(view, data.meta.label)).buffer,
             `Week-${data.meta.num}-Driver-Notices.csv`, 'text/csv')}>${Icon('download', 15)} Driver notices</button>
           <a class="btn-small" href=${ROSTER_BOOKMARK()} title=${ROSTER_HOWTO} draggable="true"
-            onClick=${(e) => { e.preventDefault(); setRosterTip((t) => !t); }}>🧾 Roster to Amazon</a>
+            onClick=${(e) => { e.preventDefault(); setRosterTip((t) => !t); setWeekTip(false); }}>🧾 Roster to Amazon</a>
+          <a class="btn-small" href=${WEEK_BOOKMARK()} title=${WEEK_HOWTO} draggable="true"
+            onClick=${(e) => { e.preventDefault(); setWeekTip((t) => !t); setRosterTip(false); }}>📅 Week to Amazon</a>
         </div>
       </div>
       ${rosterTip ? html`<${Banner} kind="info">${ROSTER_HOWTO}<//>` : ''}
+      ${weekTip ? html`<${Banner} kind="info">${WEEK_HOWTO}<//>` : ''}
 
       <div class="row lv-tools">
         <input type="search" placeholder="Search a driver…" value=${q} onInput=${(e) => setQ(e.target.value)}

@@ -29,3 +29,10 @@ limit" warning and that box is cleared; Nora Notlisted not in Amazon's list; Dor
 left over; Sam Lee ambiguous (Sam Lee / Sam K Lee); Mike Rowe matched to "Michael  Rowe" by
 Transporter ID (fake React `daPool`); Jose Nunez matched to "José Núñez"; Zed Late's
 11:25 AM wave doesn't exist on the page.
+
+## Week bookmark (schedweek.js) — same servers
+1. In the http://localhost:8777 tab, paste `seed-week.js` into the console (week 2026-10-11 + the test origin).
+2. Open http://localhost:8791/scheduling.html?frame=1 and click **Run the bookmark (test)**.
+Expected: 9 to fill (Test: Cara only = 2), Nora not on the page, Zed has no 2:00 PM shift, Una's
+Monday "Unavailable" left alone, Kim's Sunday already there; `window.__mock.applied` lists what was
+picked and `window.__mock.log` (Publish / Apply weekly pattern clicks) stays empty.
