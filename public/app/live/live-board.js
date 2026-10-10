@@ -41,9 +41,9 @@ const ROSTER_HOWTO = 'Drag this button onto your bookmarks bar. Then on Amazon: 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 // the discipline engine's driver key: first|last, letters only (attendance records use it)
 const nameKey = (s) => { const t = String(s || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean); return t.length ? t[0] + '|' + t[t.length - 1] : ''; };
-const MUT = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'set_role', 'set_duty', 'clear_duty', 'set_counts']);
+const MUT = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'set_role', 'set_duty', 'clear_duty', 'set_counts', 'set_left', 'clear_left']);
 const KIND = { apply: 'edit', apply_add: 'extra', apply_wave: 'wave', undo: 'undo', apply_mark: 'mark', clear_mark: 'mark',
-  set_role: 'edit', set_duty: 'duty', clear_duty: 'duty', set_counts: 'edit' };
+  set_role: 'edit', set_duty: 'duty', clear_duty: 'duty', set_counts: 'edit', set_left: 'mark', clear_left: 'mark' };
 const MARKS = [
   ['callout', 'Called out', 'They called in and won\'t work.'],
   ['noshow', 'No-show', 'They didn\'t show up and didn\'t call.'],
@@ -115,7 +115,13 @@ function RiskInfo({ d, risk, iso }) {
   return html`<div dangerouslySetInnerHTML=${{ __html: riskCardHtml(d, risk, iso) }} />`;
 }
 
-function Block({ v, route, bk }) {
+function Block({ v, route, bk, left }) {
+  // left the company (2026-10-09): the shift they had, border only — the slot is open to cover
+  if (left) {
+    const w = cellInfo(left);
+    return html`<div class="lv-blk b-left" style=${`border-color:${w.bg || SHIFT_COLORS.other}`}
+      title=${`Left the company — was ${left}. The slot is open.`}><span>${w.top || left}</span><small>${w.sub ? w.sub + ' · ' : ''}Left</small></div>`;
+  }
   const c = cellInfo(v);
   const rtTitle = route ? `On route ${route} (Route Tracker)` : 'On a route (Route Tracker)';
   // Unavailable / a mark with a route in Route Tracker: keep the call-off visible, plus a small
@@ -320,8 +326,43 @@ function LateBox({ late, rec, busy, onSave }) {
 // "13:05" → "1:05 PM"; anything else as typed
 const fmtTime = (v) => { const m = /^(\d{1,2}):(\d{2})$/.exec(v || ''); if (!m) return v; const h = +m[1]; return `${(h % 12) || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`; };
 
+// "Left the company" (2026-10-09): which day they stop, what comes off, a note.
+function LeftConfirm({ d, day, view, busy, onCancel, onConfirm }) {
+  const open = view.days.filter((x) => x.open);
+  const [from, setFrom] = useState(day);
+  const [note, setNote] = useState('');
+  const idx = (x) => DAY_ORDER.indexOf(x);
+  const off = open.filter((x) => idx(x.day) >= idx(from) && (d.cells || {})[x.day]
+    && !/^(Unavailable|Called out|No-show|Day off)$/.test(d.cells[x.day]));
+  const first = d.name.split(/\s+/)[0];
+  return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+    <div class="edit-modal card" style="width:460px">
+      <h3>${d.name} left the company</h3>
+      <p class="hint">Quit or fired. From the day you pick, every shift ${first} has comes off the schedule and stops counting
+        (hours, routes filled, the rules). Their name moves to the top, and those days show as an empty outline so you
+        can see what to cover. Earlier days stay as they are.</p>
+      <label class="fld"><span>First day they don't work</span>
+        <select value=${from} onChange=${(e) => setFrom(e.target.value)}>
+          ${open.map((x) => html`<option value=${x.day}>${x.day} ${shortDate(x.date)}</option>`)}
+        </select></label>
+      <p style="margin:8px 0">${off.length
+        ? html`Comes off: ${off.map((x, i) => html`${i ? ', ' : ''}<b>${x.day}</b> ${d.cells[x.day]}`)}.`
+        : html`<span class="muted">No shifts from ${from} on — nothing to take off.</span>`}</p>
+      <label class="fld"><span>Note (optional)</span>
+        <input type="text" maxlength="200" value=${note} placeholder="e.g. quit by text / let go"
+          onInput=${(e) => setNote(e.target.value)} /></label>
+      <div class="row" style="margin-top:12px">
+        <button class="accent" disabled=${busy} onClick=${() => onConfirm(from, note.trim())}>${busy ? html`<${Spinner}/> Saving…` : 'Take them off the schedule'}</button>
+        <button disabled=${busy} onClick=${onCancel}>Cancel</button>
+      </div>
+    </div>
+  </div>`;
+}
+const DAY_ORDER = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
 // What one driver is doing on one day, and everything that can be done about it.
 function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, risk, note, onSaveNote, late, rec, onSaveLate, route }) {
+  const gone = mark && mark.kind === 'left';
   const v = (d.cells || {})[day] || '';
   const c = cellInfo(v);
   const kind = c.kind;
@@ -331,7 +372,7 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
   const lim = view.limits || {};
   const [mtime, setMtime] = useState('13:00');
   const [rideWith, setRideWith] = useState('');
-  const free = info.open && (kind === 'empty' || kind === 'off');
+  const free = info.open && (kind === 'empty' || kind === 'off') && !gone;
   const duties = (opt && opt.duties) || {};
   // who drives a plain route that day — a trainer rides along with one of them
   const drivers = view.drivers.filter((x) => x.name !== d.name && cellInfo((x.cells || {})[day]).kind === 'road')
@@ -345,7 +386,8 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
           <div class="dm-name">${d.name}</div>
           <div class="dm-date">${date}</div>
         </div>
-        <div class="dm-now">${kind === 'empty' && route == null ? html`<span class="muted">Not scheduled</span>` : html`<${Block} v=${v} route=${route} />`}</div>
+        <div class="dm-now">${gone && mark.was ? html`<${Block} left=${mark.was} />`
+          : kind === 'empty' && route == null ? html`<span class="muted">${gone ? 'Left the company' : 'Not scheduled'}</span>` : html`<${Block} v=${v} route=${route} />`}</div>
         <button class="dm-x" aria-label="Close" onClick=${onClose}>×</button>
       </div>
 
@@ -399,8 +441,13 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
       ${kind === 'disp' || kind === 'meet' ? html`<div class="dm-grid one">
         <${Act} icon="−" title=${kind === 'disp' ? 'Take off dispatch' : 'Take out of the meeting'} sub="The day becomes free"
           tone="dm-danger" busy=${busy} onClick=${() => act('unduty', { name: d.name, day })} /></div>` : ''}
-      ${mark ? html`<div class="dm-grid one"><${Act} icon="↺" title="Clear this mark" sub="Doesn't put the shift back"
+      ${mark && !gone ? html`<div class="dm-grid one"><${Act} icon="↺" title="Clear this mark" sub="Doesn't put the shift back"
         busy=${busy} onClick=${() => act('clear', { name: d.name, day })} /></div>` : ''}
+      ${gone ? html`
+        <p class="hint" style="margin:10px 0 6px">${first} left the company${d.left ? ` — off the schedule from ${d.left}` : ''}.
+          ${mark.was ? `This ${mark.was.toLowerCase().includes('backup') ? 'backup' : 'shift'} is open: give it to someone from “Who can work extra?”.` : ''}${mark.note ? ` Note: ${mark.note}` : ''}</p>
+        <div class="dm-grid one"><${Act} icon="↺" title="Put back on the schedule" sub="Marked by mistake, or they came back — their shifts aren't put back"
+          busy=${busy} onClick=${() => act('unleft', { name: d.name })} /></div>` : ''}
 
       ${free ? html`
         <div class="dm-sec">Put ${first} on a route</div>
@@ -438,6 +485,9 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
             onClick=${() => act('mark', { name: d.name, day, kind: 'off' })} /></div>` : ''}` : ''}
 
       ${kind === 'disp' || kind === 'meet' || kind === 'trainer' || kind === 'trainee' || role || mark || free ? '' : html`<p class="muted">Nothing to change here.</p>`}
+      ${info.open && !d.left ? html`<div class="dm-sec">${first} left the company</div>
+        <div class="dm-grid one"><${Act} icon="⏏" title="Quit or fired" sub=${`Every shift from ${day} on comes off — the slots open up`}
+          tone="dm-danger" busy=${busy} onClick=${() => act('left', { name: d.name, day })} /></div>` : ''}
       ${busy ? html`<p class="muted" style="margin-top:10px"><${Spinner}/> Saving…</p>` : ''}
     </div>
   </div>`;
@@ -627,6 +677,7 @@ function Board() {
   const [mover, setMover] = useState(null);    // {day, role, fromName}
   const [moverCands, setMoverCands] = useState(null);
   const [marker, setMarker] = useState(null);  // {name, day, kind}
+  const [lefter, setLefter] = useState(null);  // {name, day}: the "left the company" dialog
   const [confirm, setConfirm] = useState(null);
   const [limit, setLimit] = useState(null);     // the overtime pop-up
   const [rosterTip, setRosterTip] = useState(false);   // the Roster to Amazon how-to (2026-10-09)
@@ -1086,6 +1137,12 @@ function Board() {
     if (what === 'move') setMover(p);
     else if (what === 'wave') setWaver(p);
     else if (what === 'mark') setMarker(p);
+    else if (what === 'left') setLefter(p);
+    else if (what === 'unleft') {
+      if (!window.confirm(`Put ${p.name} back on the schedule? Their old shifts aren't put back — give them shifts again.`)) return;
+      const m = await run('clear_left', p);
+      if (!m.ok) toast(m.error.message, 'err');
+    }
     else if (what === 'add') setAdder(p);
     else if (what === 'wave-add') addWave(p.name, p.day, p.wave, p.road);
     else if (what === 'role') runAsking('set_role', p, { name: p.name, day: p.day, role: p.to === 'road' ? 'road' : 'backup' });
@@ -1196,10 +1253,15 @@ function Board() {
     : `${q.trim() ? `No driver matches “${q}” on backup` : 'Nobody on backup'} ${dayF.length ? dayF.join(' + ') : 'this week'}.`;
   const toggleDay = (day) => setDayF((f) => (f.includes(day) ? f.filter((y) => y !== day)
     : view.days.map((y) => y.day).filter((y) => y === day || f.includes(y))));
-  const groups = sortBy === 'name'
-    ? [{ key: 'all', rows: shown.slice().sort((a, b) => a.name.localeCompare(b.name)) }]
-    : TIER_ORDER.map((t) => ({ key: t, meta: TIER_META[t], rows: shown.filter((x) => x.cls === t) }))
-      .filter((g) => g.rows.length);
+  // who left the company this week goes first (2026-10-09), whatever the sort
+  const goneRows = shown.filter((x) => x.left).sort((a, b) => a.name.localeCompare(b.name));
+  const stay = shown.filter((x) => !x.left);
+  const groups = [
+    ...(goneRows.length ? [{ key: 'left', meta: { label: 'Left the company — shifts to cover', chip: 'gray' }, rows: goneRows }] : []),
+    ...(sortBy === 'name'
+      ? [{ key: 'all', meta: goneRows.length ? { label: 'Everyone else', chip: 'gray' } : null, rows: stay.slice().sort((a, b) => a.name.localeCompare(b.name)) }]
+      : TIER_ORDER.map((t) => ({ key: t, meta: TIER_META[t], rows: stay.filter((x) => x.cls === t) }))),
+  ].filter((g) => g.rows.length);
   const todayCount = tday ? view.drivers.reduce((a, x) => {
     const k = cellInfo((x.cells || {})[tday.day]).kind;
     return a + (k === 'road' || k === 'trainee' ? 1 : 0);
@@ -1325,9 +1387,10 @@ function Board() {
             ${g.rows.map((x) => {
               const nWorked = (x.worked_dates || []).length;
               const tm = TIER_META[x.cls] || TIER_META.free;
-              return html`<tr>
-                <td class="lv-namecol"><button class="link lv-name" title=${'Give ' + x.name + ' a shift'}
-                  onClick=${() => setAdder({ name: x.name })}>${x.name}</button>
+              return html`<tr class=${x.left ? 'lv-leftrow' : ''}>
+                <td class="lv-namecol"><button class="link lv-name" title=${x.left ? `${x.name} left the company` : 'Give ' + x.name + ' a shift'}
+                  onClick=${() => (x.left ? setCell({ name: x.name, day: x.left }) : setAdder({ name: x.name }))}>${x.name}</button>
+                  ${x.left ? html` <span class="chip gray" title="Left the company">Left ${x.left}</span>` : ''}
                   ${sortBy === 'name' ? html` <span class="chip ${tm.chip} tier-mini">${tm.short}</span>` : ''}
                   ${(x.helper_days || []).length ? html` <span class="chip trainer-chip" title="Trains a new hire this week">Trainer</span>` : ''}
                   <div class="lv-sub">Week: ${x.clock_hours ?? x.hours}h${endISO && x.day_hours
@@ -1340,13 +1403,15 @@ function Board() {
                   const late = lates[dd.date + '|' + x.name];
                   const route = routeFor(x.name, dd.date);
                   const rtBk = c.kind === 'empty' && route == null ? bkFor(x.name, dd.date) : undefined;
+                  const lm = x.left ? markOf(x.name, dd.day) : null;
+                  const leftWas = lm && lm.kind === 'left' && lm.was ? lm.was : null;
                   const onRoute = route == null ? (rtBk != null ? 'Backup in Route Tracker — the schedule will add it\n' : '')
                     : (route ? `On route ${route} (Route Tracker)\n` : 'On a route (Route Tracker)\n');
                   return html`<td class=${'lv-cell k-' + c.kind + (dd.date === today ? ' today' : '') + (dd.open ? '' : ' closed') + (hot ? ' lv-over' : '')}
                     title=${hot ? undefined : onRoute + (note ? `💬 ${note.text} — ${note.by || ''}\n` : '') + (c.partner ? `${v} — ${c.kind === 'trainer' ? 'training' : 'trainer'}: ${c.partner}` : v || (dd.open ? 'Not scheduled — click for options' : 'Closed'))}
                     onMouseEnter=${hot ? (e) => showPop(e, x.name, dd.date) : undefined}
                     onMouseLeave=${hot ? () => setPop(null) : undefined}
-                    onClick=${dd.open || note ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} route=${route} bk=${rtBk} />${
+                    onClick=${dd.open || note ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} route=${route} bk=${rtBk} left=${leftWas} />${
                       note ? html`<span class="lv-notedot" aria-label="Has a comment">💬</span>` : ''}${
                       late ? html`<span class="lv-notedot" style="right:auto;left:2px" title=${'Late — ' + late.time} aria-label="Late arrival">⏰</span>` : ''}</td>`;
                 })}
@@ -1370,6 +1435,7 @@ function Board() {
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.meet}`}>Meeting</span>
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.off}`}>Unavailable</span>
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.mark}`}>Called out / No-show</span>
+        <span class="lv-sw" style="background:transparent;border:2px solid #9aa3b2" title="Their shift after they left the company — the slot is open">Left the company</span>
         <span class="lv-sw lv-sw-route">Has a route (Route Tracker)</span>
       </div>
       ${pop && risks[pop.name] && byName[pop.name] ? html`<div class="lv-pop" style=${`left:${pop.left}px;` + (pop.up != null
@@ -1430,6 +1496,9 @@ function Board() {
       info=${view.days.find((x) => x.day === counter)} fills=${waveFills(view, counter)} busy=${busy}
       onClose=${() => setCounter(null)}
       onSave=${async (p) => { const m = await run('set_counts', p); if (m.ok) setCounter(null); else toast(m.error.message, 'err'); }} />` : ''}
+    ${lefter && byName[lefter.name] ? html`<${LeftConfirm} d=${byName[lefter.name]} day=${lefter.day} view=${view} busy=${busy}
+      onCancel=${() => setLefter(null)}
+      onConfirm=${async (day, note) => { const m = await run('set_left', { name: lefter.name, day, note }); if (m.ok) setLefter(null); else toast(m.error.message, 'err'); }} />` : ''}
     ${waver ? html`<${WaveEditor} day=${waver.day} name=${waver.name} req=${req}
       onClose=${() => setWaver(null)} onApplied=${() => setWaver(null)} />` : ''}
     ${adder && byName[adder.name] ? html`<${WeekShifts} d=${byName[adder.name]} view=${view} busy=${busy}

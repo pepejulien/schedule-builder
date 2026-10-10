@@ -92,7 +92,10 @@ def use_slot(name):
     return name
 
 
-MARK_LABEL = {'callout': 'Called out', 'noshow': 'No-show', 'off': 'Day off'}
+MARK_LABEL = {'callout': 'Called out', 'noshow': 'No-show', 'off': 'Day off', 'left': 'Left the company'}
+# 'left' (2026-10-09): set_left marks every open day from the one they stop on. Its cells read
+# BLANK in the summary - every JAJB app already reads a blank cell as "not working" - and the
+# board draws the shift they had (the mark's `was`) as an empty outline.
 
 
 def _classify(dr, res):
@@ -125,7 +128,7 @@ def _driver_rows(res):
             if d in res.cell and i in res.cell[d]:
                 cells[d] = res.cell[d][i]
             elif mk:
-                cells[d] = MARK_LABEL.get(mk["kind"], mk["kind"])
+                cells[d] = "" if mk["kind"] == "left" else MARK_LABEL.get(mk["kind"], mk["kind"])
             elif d in dr["meet"]:
                 cells[d] = dr["meet_txt"].get(d, "Meeting")
             elif d in dr["extra"]:
@@ -134,8 +137,10 @@ def _driver_rows(res):
                 cells[d] = "Unavailable"
             else:
                 cells[d] = ""
+        left = [d for d in ALL_DAYS if (_STATE["marks"].get(d, {}).get(n) or {}).get("kind") == "left"]
         rows.append(dict(
             name=dr["name"],
+            left=left[0] if left else None,   # the first day they don't work any more (set_left)
             # Amazon Transporter ID: the board matches Route Tracker by it first, like _matcher (Jose 2026-10-08)
             tid=str(dr.get("tid") or "").strip(),
             cls=_classify(dr, res),
@@ -777,7 +782,10 @@ def _assess(res, dr, day, role):
         blocks.append("on dispatch duty that day")
     elif n in _STATE["marks"].get(day, {}):
         mk = _STATE["marks"][day][n]
-        unav.append(f"{MARK_LABEL.get(mk['kind'], mk['kind']).lower()} that day")
+        if mk["kind"] == "left":
+            blocks.append("left the company")
+        else:
+            unav.append(f"{MARK_LABEL.get(mk['kind'], mk['kind']).lower()} that day")
     elif day in dr["unav"]:
         unav.append(_unav_reason(dr, day, "marked Unavailable that day"))
     if day in dr["prim"] or day in dr["helper"]:
@@ -1941,7 +1949,7 @@ def apply_mark(payload_json):
         if res is None:
             return _no_state()
         day, kind = p.get("day"), p.get("kind")
-        if day not in res.DAYS or kind not in MARK_LABEL:
+        if day not in res.DAYS or kind not in MARK_LABEL or kind == "left":
             return json.dumps(dict(ok=False, kind="edit", message=f"Bad mark: {day} / {kind}"))
         i, dr = _find(res, p.get("name") or "")
         if dr is None:
@@ -2003,6 +2011,102 @@ def clear_mark(payload_json):
             del _STATE["marks"][day]
         _STATE["edits"].append(f"Cleared {mk['name']}'s "
                                f"{MARK_LABEL.get(mk['kind'], mk['kind']).lower()} mark on {day}")
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def set_left(payload_json):
+    """payload: {name, day, note?}. The driver left the company (quit / fired, Jose
+    2026-10-09): from `day` on, every shift they had comes off and its slot is left OPEN,
+    so nothing of it counts (hours, fills, rules). Each open day gets a 'left' mark that
+    keeps the shift it took (`was`) - the board draws it as an empty outline so dispatch
+    sees what to cover - and blocks giving them anything new. Days before `day` stay as
+    they are. A training-pair day can't come off this way (a rebuild changes those)."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        start = p.get("day")
+        if start not in ALL_DAYS:
+            return json.dumps(dict(ok=False, kind="edit", message=f"Bad day: {start}"))
+        i, dr = _find(res, p.get("name") or "")
+        if dr is None:
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"Driver not found: {p.get('name')}"))
+        n = norm(dr["name"])
+        days = [d for d in ALL_DAYS[ALL_DAYS.index(start):] if d in res.DAYS]
+        if days and all((_STATE["marks"].get(d, {}).get(n) or {}).get("kind") == "left" for d in days):
+            return json.dumps(dict(ok=False, kind="edit",
+                message=f"{dr['name']} is already marked as left from {start}."))
+        train = [d for d in days if "TRAIN" in res.cell[d].get(i, "")]
+        if train:
+            return json.dumps(dict(ok=False, kind="edit",
+                message=f"{dr['name']} has a training-pair day on {', '.join(train)} - "
+                        "training days can only be changed by a rebuild."))
+        _STATE["undo"].append(_snapshot(res))
+        note = str(p.get("note") or "").strip()[:200]
+        took = []
+        for d in days:
+            label = res.cell[d].get(i, "")
+            was = ""
+            if d in dr["prim"]:
+                dr["prim"].remove(d)
+                was = f"{label} route" if label else "Route"
+            elif d in dr["bk"]:
+                dr["bk"].remove(d)
+                was = label or "Backup"
+            if d in dr["extra"]:
+                dr["extra"].discard(d)
+                was = was or "Dispatch"
+            if d in dr["meet"]:
+                dr["meet"].discard(d)
+                was = was or dr["meet_txt"].pop(d, "Meeting")
+            res.cell[d].pop(i, None)
+            old = _STATE["marks"].get(d, {}).get(n)
+            if old and not was:
+                was = old.get("was") or ""          # a call-out's freed shift: still theirs to cover
+            _STATE["marks"].setdefault(d, {})[n] = dict(name=dr["name"], kind="left", was=was, note=note)
+            if was:
+                took.append(f"{d} {was}")
+        desc = f"{dr['name']} left the company - off the schedule from {start}"
+        desc += f" ({', '.join(took)} taken off - slots left open)" if took else " (no shifts left to take off)"
+        if note:
+            desc += f" - {note}"
+        _STATE["edits"].append(desc)
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def clear_left(payload_json):
+    """payload: {name}. Undo "left the company" (marked by mistake, or they came back): the
+    'left' marks go; the shifts they freed are NOT put back - assign them again."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        n = norm(p.get("name") or "")
+        hit = [d for d in ALL_DAYS if (_STATE["marks"].get(d, {}).get(n) or {}).get("kind") == "left"]
+        if not hit:
+            return json.dumps(dict(ok=False, kind="edit",
+                message=f"{p.get('name')} isn't marked as left."))
+        _STATE["undo"].append(_snapshot(res))
+        name = _STATE["marks"][hit[0]][n]["name"]
+        for d in hit:
+            del _STATE["marks"][d][n]
+            if not _STATE["marks"][d]:
+                del _STATE["marks"][d]
+        _STATE["edits"].append(f"{name} is back on the schedule (no longer marked as left) - "
+                               "their old shifts were not put back")
         chk = _verify(res)
         res.infeasible = _recount_short(res, chk)
         _save_out(res)
