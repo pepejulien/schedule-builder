@@ -94,7 +94,7 @@ export function StepFiles() {
         if (s.weekNum != null && !(a && a.weekNum != null)) wk.num = String(s.weekNum);
         if (s.sundayISO && !(a && a.sundayISO)) wk.startISO = s.sundayISO;
         // Route demand starts from the current week's counts (edit in step 3).
-        const empty = !Object.values(demand || {}).some((rows) => (rows || []).length);
+        const empty = !Object.values(demand || {}).some((rows) => (rows || []).some((r) => (parseInt(r.count, 10) || 0) > 0));
         if (empty) {
           try {
             const dem = demandFromPrevSchedule(s.bytes);
@@ -119,8 +119,10 @@ export function StepFiles() {
     if (own) { setBusy(true); setErr(''); }
     try {
       const a = await liveAvailability(wk);
-      setWizard({ availability: { ...a, source: 'live', weekISO: wk,
-        fileName: `${week.label || 'Next week'} — from Driver preferences + the Live board` } });
+      // no shifts in it to copy: "Copy Amazon's schedule exactly" can't apply to this availability
+      setWizard((w) => ({ availability: { ...a, source: 'live', weekISO: wk,
+        fileName: `${week.label || 'Next week'} — from Driver preferences + the Live board` },
+        ...(w.advanced && w.advanced.exact_copy ? { advanced: { ...w.advanced, exact_copy: false } } : {}) }));
       warmup();
       return true;
     } catch (e) {
@@ -144,7 +146,7 @@ export function StepFiles() {
       const m = await editRequest('export_xlsx', {}, 'hist');
       if (!m.ok || !m.xlsx) throw new Error(m.error ? m.error.message : 'no workbook came back');
       const patch = { priorWeek: { bytes: m.xlsx, source: 'upload', weekISO: wk, fileName: `${d.meta.label} — from the Live board` } };
-      const empty = !Object.values(demand || {}).some((rows) => (rows || []).length);
+      const empty = !Object.values(demand || {}).some((rows) => (rows || []).some((r) => (parseInt(r.count, 10) || 0) > 0));
       if (empty) {
         try {
           const dem = demandFromPrevSchedule(m.xlsx);

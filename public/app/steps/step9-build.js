@@ -788,6 +788,13 @@ export function Step9Build() {
       if (h && typeof h === 'object') trainerHistory = h;
     } catch { /* use the cached copy */ }
     const { config } = assembleFromWizard({ ...wizard, trainerHistory });
+    // no route counts made it into the week (2026-10-09): say so plainly instead of the engine's error
+    if (!Object.keys(config.waves || {}).length) {
+      setProgress(null);
+      setWizard({ build: { status: 'error', report: null, xlsx: null,
+        error: { kind: 'noroutes', message: 'No routes made it into this week.' } } });
+      return;
+    }
     // last week's REAL hours (Route Tracker clock-outs) for the 12h / 60h checks across the weeks
     if (wizard.week?.startISO) {
       try {
@@ -860,7 +867,12 @@ export function Step9Build() {
     const e = b.error || {};
     return html`<div class="card">
       <h2>The build could not complete</h2>
-      ${e.kind === 'config'
+      ${e.kind === 'noroutes' || (e.kind === 'config' && /'waves' must be a non-empty/.test(e.message || ''))
+        ? html`<${Banner} kind="err">No route counts reached the build. Check <b>Routes & backups</b> (step 3) has counts,
+            and that <b>"Copy Amazon's schedule exactly"</b> is off under Advanced settings unless the availability file
+            already has Amazon's shifts in it.<//>
+          <button class="small" style="margin-bottom:10px" onClick=${() => { setWizard({ build: { status: 'idle', report: null, xlsx: null, error: null } }); goStep(2); }}>Open Routes & backups</button>`
+        : e.kind === 'config'
         ? html`<${Banner} kind="err">There's a problem with the inputs:<pre class="log">${e.message}</pre><//>`
         : e.kind === 'runtime'
         ? html`<${Banner} kind="err">${e.message}<//>`
