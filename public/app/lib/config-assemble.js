@@ -76,6 +76,9 @@ export function trainerRotation(trainers, history, currentWeekISO) {
     .map((x) => ({ name: x.t, lastWeek: last[x.t] || null, times: count[x.t] || 0 }));
 }
 
+// "Copy Amazon's schedule exactly" needs a real schedule in the file: at least this many route shifts.
+export const EXACT_MIN = 10;
+
 // Build waves for one day from its portal-time rows -> {scheduleTime: totalCount}.
 function dayWaves(rows) {
   const out = {};
@@ -130,10 +133,13 @@ export function assembleConfig(state) {
   }
   // 2026-10-09: exact copy on, but the availability has no shifts in it (e.g. it came from Driver
   // preferences, or the export was swapped after "Copy exactly" was clicked) -> nothing to copy:
-  // plan from the route counts like a normal build instead of an empty week.
-  const exactUsed = exactCopy && Object.keys(waves).length > 0;
+  // plan from the route counts like a normal build instead of an empty week. Same with only a stray
+  // cell or two filled in (Jose's Week-42 export had 1): that's no schedule to copy.
+  const copied = Object.values(waves).reduce((t, w) => t + Object.values(w).reduce((a, n) => a + n, 0), 0);
+  const exactUsed = exactCopy && copied >= EXACT_MIN;
   if (exactCopy && !exactUsed) {
-    warnings.push("\"Copy Amazon's schedule exactly\" is on, but this week's availability has no shifts to copy — building from the route counts instead.");
+    warnings.push(`"Copy Amazon's schedule exactly" is on, but this week's availability has ${copied ? `only ${copied} route shift${copied === 1 ? '' : 's'}` : 'no shifts'} to copy — building from the route counts instead.`);
+    for (const d of Object.keys(waves)) delete waves[d];
   }
   if (!exactUsed) {
     for (const d of DAYS) {

@@ -19,6 +19,7 @@ import { isSunday, weekLabel, weekNumberOf, nextSunday, toISODate } from '../lib
 import { inspectWorkbook, pairUp } from '../lib/file-detect.js';
 import { demandFromPrevSchedule } from '../lib/demand-prefill.js';
 import { liveAvailability } from '../lib/live-availability.js';
+import { EXACT_MIN } from '../lib/config-assemble.js';
 
 function DayCell({ cell }) {
   if (!cell || !cell.kind) return html`<td></td>`;
@@ -254,7 +255,11 @@ export function StepFiles() {
             No file — this is the very first week</button>` : ''}
         <//>
       </div>
-      ${avail && avail.counts.seed > 0 ? html`<div class="card" style="margin-top:12px;border-left:4px solid var(--accent)">
+      ${avail && avail.counts.seed > 0 && avail.counts.seed < EXACT_MIN && exact ? html`<${Banner} kind="warn">
+        "Copy Amazon's schedule exactly" is on, but this file has only ${avail.counts.seed} shift${avail.counts.seed === 1 ? '' : 's'}
+        filled in — the build will use the route counts instead.${' '}
+        <button class="link" onClick=${() => setWizard((w) => ({ advanced: { ...w.advanced, exact_copy: false } }))}>Turn it off</button><//>` : ''}
+      ${avail && avail.counts.seed >= EXACT_MIN ? html`<div class="card" style="margin-top:12px;border-left:4px solid var(--accent)">
         <b>Already scheduled in Amazon?</b>
         <p class="hint" style="margin:4px 0 8px">This file has ${avail.counts.seed} shifts filled in. Copy them onto the
           Live board exactly as they are — same people, same days, same times — instead of building a new schedule.
