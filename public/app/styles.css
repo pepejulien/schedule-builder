@@ -411,11 +411,19 @@ select.lv-wksel option { font-size: 13.5px; font-weight: 500; }
      at the grid's end the wheel goes on to scroll the page */
   .layout.lv-wide .lv-wrap.lv-tall { max-height: max(420px, calc(100vh - 52px - 24px)); }   /* shrinks when a search leaves few rows */
   .layout.lv-wide .lv-jump {
-    display: inline-flex; position: fixed; right: 24px; bottom: 30px; z-index: 30; height: 36px; padding: 0 14px;
+    display: inline-flex; position: fixed; right: 16px; bottom: 72px; z-index: 30;   /* above the hub's ⌂ Home button */ height: 36px; padding: 0 14px;
     border-radius: 999px; border: 0; background: var(--navy); color: #fff; font-size: 12.5px; font-weight: 600;
     box-shadow: 0 4px 14px rgba(36,55,98,.28);
   }
   .layout.lv-wide .lv-jump:hover { background: var(--navy-h); }
+  /* bigger grid on a computer (Jose 2026-10-11): the name column only as wide as the names, so the days get the
+     room; taller blocks and a bigger font (about 16-18 rows on a screen instead of 22) */
+  .layout.lv-wide table.lv-grid { font-size: 13.5px; }
+  .layout.lv-wide .lv-grid th.lv-namecol, .layout.lv-wide .lv-grid td.lv-namecol { width: 1%; padding-right: 18px; }
+  .layout.lv-wide .lv-grid td.lv-namecol .lv-sub { white-space: normal; font-size: 11.5px; }
+  .layout.lv-wide .lv-grid td.lv-cell { padding: 4px; }
+  .layout.lv-wide .lv-blk { min-height: 44px; padding: 7px 9px; font-size: 13px; }
+  .layout.lv-wide .lv-blk small { font-size: 11.5px; }
 }
 table.lv-grid { font-size: 12.5px; }
 .lv-grid th { text-align: center; white-space: nowrap; z-index: 2; }
