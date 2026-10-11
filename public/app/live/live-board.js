@@ -32,6 +32,7 @@ import {
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 import { FutureWeek } from './future-week.js';
+import { DayList, DayPills, firstDay } from './day-list.js';
 
 // Roster bookmark (2026-10-09, docs/roster-bookmarklet.md): the link only injects roster.js (next to
 // index.html, absolute, cache-busted), so fixing roster.js fixes every computer's bookmark.
@@ -61,6 +62,26 @@ const fold = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g,
 const SORT_KEY = 'lv_sort2';
 const readSort = () => { try { return localStorage.getItem(SORT_KEY) === 'tier' ? 'tier' : 'name'; } catch { return 'name'; } };
 const saveSort = (v) => { try { localStorage.setItem(SORT_KEY, v); } catch { /* private window */ } };
+// a phone (2026-10-11): Day view (one day's list) or the Week grid; the pick is remembered.
+// Folded phone width starts on Day, wider starts on Week. A computer always gets the grid.
+const MODE_KEY = 'jajb-live-mode';
+const SMALL = '(max-width: 1000px)';
+const readMode = () => {
+  try { const v = localStorage.getItem(MODE_KEY); if (v === 'day' || v === 'week') return v; } catch { /* private window */ }
+  return window.matchMedia && window.matchMedia('(max-width: 700px)').matches ? 'day' : 'week';
+};
+const saveMode = (v) => { try { localStorage.setItem(MODE_KEY, v); } catch { /* private window */ } };
+function useSmall() {
+  const mq = window.matchMedia ? window.matchMedia(SMALL) : null;
+  const [small, setSmall] = useState(() => !!(mq && mq.matches));
+  useEffect(() => {
+    if (!mq) return undefined;
+    const on = () => setSmall(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return small;
+}
 // "Working" for the day filter (Jose 2026-10-07): any shift on the clock — route, backup,
 // trainer / trainee, dispatch, meeting. Not: blank, Unavailable, called out / no-show.
 const WORKING = new Set(['road', 'bk', 'trainee', 'trainer', 'disp', 'meet']);
@@ -704,6 +725,9 @@ function Board() {
   const [q, setQ] = useState('');                   // name search
   const [dayF, setDayF] = useState([]);             // day filter: only drivers working every picked day
   const [bkOnly, setBkOnly] = useState(false);      // "Backups only": on backup every picked day (no day: any day)
+  const [mode, setMode] = useState(readMode);       // a phone: 'day' (one day's list) | 'week' (the grid)
+  const [pday, setPday] = useState(null);           // the day the Day view shows (null: firstDay)
+  const small = useSmall();
   const [pop, setPop] = useState(null);             // the over-60 card: {name, iso, left, top, up}
   const [notes, setNotes] = useState({});           // comments on shifts: {"<ISO day>|<name>": {text, by, at}}
   const [confirms, setConfirms] = useState({});     // "not in Route Tracker" answers
@@ -1329,9 +1353,14 @@ function Board() {
     setTimeout(() => { const el = document.getElementById('lv-finder'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }, 30);
   };
   const canUndo = ready && rep && rep.can_undo;
+  const dayMode = small && mode === 'day';
+  const vday = pday && view.days.some((x) => x.day === pday) ? pday : firstDay(view, today);
+  const pickMode = (m) => { setMode(m); saveMode(m); };
+  const subLine = (x) => html`<div class="lv-sub">Week: ${x.clock_hours ?? x.hours}h${endISO && x.day_hours
+    ? html` · <span class=${max7Cls(last7(x.day_hours, endISO))}>Last 7d: ${last7(x.day_hours, endISO)}h</span>` : ''}</div>`;
 
   return html`<div>
-    <div class="stats">
+    <div class="stats lv-stats">
       <div class="stat"><div class="big">${todayCount == null ? '—' : todayCount}</div>
         <div class="muted">${tday ? `on routes today (${tday.day})` : 'not this week'}</div></div>
       <div class="stat"><div class=${'big' + (openRoutes ? ' lv-bad' : '')}>${openRoutes}</div><div class="muted">open routes this week</div></div>
@@ -1357,19 +1386,19 @@ function Board() {
       <div class="row" style="justify-content:space-between">
         <div>
           ${weekNav}
-          <p class="hint" style="margin-bottom:0">Click any day to change it — call-outs, moves, extra shifts. Click a name to give that
-            driver another shift. Hours are scheduled hours (route ${lim.primary_hours || 10}h, backup ${lim.backup_hours || 2}h).
+          <p class="hint" style="margin-bottom:0"><span class="lv-deskonly">Click any day to change it — call-outs, moves, extra shifts. Click a name to give that
+            driver another shift. Hours are scheduled hours (route ${lim.primary_hours || 10}h, backup ${lim.backup_hours || 2}h).</span>
             ${!ready && eng.status !== 'error' ? html` <span class="muted"><${Spinner}/> loading the rules engine…</span>` : ''}</p>
           <p class="muted lv-pub">Published by ${data.meta.publishedBy || '—'} · last change by ${data.meta.by || '—'}</p>
         </div>
         <div class="row">
           ${canUndo ? html`<button class="small" disabled=${busy} onClick=${async () => { const m = await run('undo', {}); if (!m.ok) toast(m.error.message, 'err'); }}>Undo my last change</button>` : ''}
-          <button class="small" disabled=${!ready} onClick=${downloadXlsx}>${Icon('download', 15)} Workbook</button>
-          <button class="small" onClick=${() => download(new TextEncoder().encode(driverCsv(view, data.meta.label)).buffer,
+          <button class="small lv-deskonly" disabled=${!ready} onClick=${downloadXlsx}>${Icon('download', 15)} Workbook</button>
+          <button class="small lv-deskonly" onClick=${() => download(new TextEncoder().encode(driverCsv(view, data.meta.label)).buffer,
             `Week-${data.meta.num}-Driver-Notices.csv`, 'text/csv')}>${Icon('download', 15)} Driver notices</button>
-          <a class="btn-small" href=${ROSTER_BOOKMARK()} title=${ROSTER_HOWTO} draggable="true"
+          <a class="btn-small lv-deskonly" href=${ROSTER_BOOKMARK()} title=${ROSTER_HOWTO} draggable="true"
             onClick=${(e) => { e.preventDefault(); setRosterTip((t) => !t); setWeekTip(false); }}>🧾 Roster to Amazon</a>
-          <a class="btn-small" href=${WEEK_BOOKMARK()} title=${WEEK_HOWTO} draggable="true"
+          <a class="btn-small lv-deskonly" href=${WEEK_BOOKMARK()} title=${WEEK_HOWTO} draggable="true"
             onClick=${(e) => { e.preventDefault(); setWeekTip((t) => !t); setRosterTip(false); }}>📅 Week to Amazon</a>
         </div>
       </div>
@@ -1377,14 +1406,25 @@ function Board() {
       ${weekTip ? html`<${Banner} kind="info">${WEEK_HOWTO}<//>` : ''}
 
       <div class="row lv-tools">
+        ${small ? html`<div class="seg lv-mode" role="group" aria-label="Day or week view">
+          <button class=${dayMode ? 'on' : ''} aria-pressed=${dayMode} onClick=${() => pickMode('day')}>Day</button>
+          <button class=${dayMode ? '' : 'on'} aria-pressed=${!dayMode} onClick=${() => pickMode('week')}>Week</button>
+        </div>` : ''}
         <input type="search" placeholder="Search a driver…" value=${q} onInput=${(e) => setQ(e.target.value)}
           aria-label="Search a driver by name" />
-        <div class="seg" role="group" aria-label="Sort drivers">
+        ${dayMode ? '' : html`<div class="seg" role="group" aria-label="Sort drivers">
           <button class=${sortBy === 'name' ? 'on' : ''} onClick=${() => { setSortBy('name'); saveSort('name'); }}>A–Z</button>
           <button class=${sortBy === 'tier' ? 'on' : ''} onClick=${() => { setSortBy('tier'); saveSort('tier'); }}>By tier</button>
-        </div>
-        ${filtered ? html`<span class="muted">${shown.length} of ${view.drivers.length} drivers</span>` : ''}
+        </div>`}
+        ${filtered && !dayMode ? html`<span class="muted">${shown.length} of ${view.drivers.length} drivers</span>` : ''}
       </div>
+      ${dayMode ? html`
+      <${DayPills} view=${view} day=${vday} today=${today} onPick=${setPday} />
+      <${DayList} view=${view} viewRT=${viewRT} day=${vday} searching=${!!q.trim()}
+        match=${(n) => !q.trim() || fold(n).includes(fold(q.trim()))}
+        Block=${Block} subLine=${subLine} routeFor=${routeFor} bkFor=${bkFor} markOf=${markOf} notes=${notes} lates=${lates}
+        risks=${risks} ready=${ready} busy=${busy} onCell=${(name, day) => setCell({ name, day })}
+        onCounts=${setCounter} onFind=${goFind} />` : html`
       <div class="row lv-dayf">
         <span class="muted">Working on:</span>
         <div class="seg" role="group" aria-label="Show only drivers working on these days">
@@ -1410,10 +1450,10 @@ function Board() {
               <span class=${x.routes_filled < x.routes ? 'lv-bad' : ''}>${x.routes_filled}/${x.routes}</span>
               <span class=${x.backup_filled < x.backup ? 'lv-warnc' : ''}> · bk ${x.backup_filled}/${x.backup}</span></button>`
               : html`<div class="lv-fill">closed</div>`}</th>`)}
-          <th title="On the clock this week (scheduled)">Week</th>
-          <th title=${`Most hours on the clock in any 7 days in a row, last week included (max ${max7Lim}h). A backup counts 2h; "if sent out" counts each backup day still ahead as a full route.`}>Max 7d</th>
-          <th title=${`Days worked this week. Usual max ${maxD7} in any 7 days in a row — last week counts ("in 7d" shows it when last week adds to it); a 6th needs the pop-up.`}>Days</th>
-          <th title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
+          <th class="lv-stat" title="On the clock this week (scheduled)">Week</th>
+          <th class="lv-stat" title=${`Most hours on the clock in any 7 days in a row, last week included (max ${max7Lim}h). A backup counts 2h; "if sent out" counts each backup day still ahead as a full route.`}>Max 7d</th>
+          <th class="lv-stat" title=${`Days worked this week. Usual max ${maxD7} in any 7 days in a row — last week counts ("in 7d" shows it when last week adds to it); a 6th needs the pop-up.`}>Days</th>
+          <th class="lv-stat" title=${`Longest run of days in a row, last week included (max ${lim.max_consecutive || 5})`}>In a row</th>
         </tr></thead>
         <tbody>${!shown.length && !noSched.length ? html`<tr><td colspan=${nCols} class="muted" style="text-align:left">
             ${nobody}</td></tr>` : ''}
@@ -1431,8 +1471,7 @@ function Board() {
                   ${x.left ? html` <span class="chip gray" title="Left the company">Left ${x.left}</span>` : ''}
                   ${sortBy === 'name' ? html` <span class="chip ${tm.chip} tier-mini">${tm.short}</span>` : ''}
                   ${(x.helper_days || []).length ? html` <span class="chip trainer-chip" title="Trains a new hire this week">Trainer</span>` : ''}
-                  <div class="lv-sub">Week: ${x.clock_hours ?? x.hours}h${endISO && x.day_hours
-                    ? html` · <span class=${max7Cls(last7(x.day_hours, endISO))}>Last 7d: ${last7(x.day_hours, endISO)}h</span>` : ''}</div>
+                  ${subLine(x)}
                   ${now && now.texts.length ? html`<div class=${'lv-sub ' + (now.level === 'warn' ? 'lv-warn' : 'lv-bad')}><b>Today: ${now.texts.join(' · ')}</b></div>` : ''}</td>
                 ${view.days.map((dd) => {
                   const v = (x.cells || {})[dd.day] || '';
@@ -1454,19 +1493,19 @@ function Board() {
                       note ? html`<span class="lv-notedot" aria-label="Has a comment">💬</span>` : ''}${
                       late ? html`<span class="lv-notedot" style="right:auto;left:2px" title=${'Late — ' + late.time} aria-label="Late arrival">⏰</span>` : ''}</td>`;
                 })}
-                <td class=${hoursCls(x.clock_hours ?? x.hours)}>${x.clock_hours ?? x.hours}h</td>
-                <td class=${max7Cls(x.max7 ?? 0)}>${x.max7 ?? '—'}${x.max7 != null ? 'h' : ''}${(() => {
+                <td class=${'lv-stat ' + hoursCls(x.clock_hours ?? x.hours)}>${x.clock_hours ?? x.hours}h</td>
+                <td class=${'lv-stat ' + max7Cls(x.max7 ?? 0)}>${x.max7 ?? '—'}${x.max7 != null ? 'h' : ''}${(() => {
                   const ifs = max7IfSent(x, view.days, today, lim);
                   return ifs == null ? '' : html`<div class=${'lv-ifsent ' + max7Cls(ifs)}
                     title="If every backup day still ahead becomes a full route">if sent out: ${ifs}h</div>`;
                 })()}</td>
-                <td class=${daysCls(nWorked)}>${nWorked}${(x.max_days7 ?? 0) > nWorked ? html`<div class=${'lv-ifsent' + (x.max_days7 >= HARD_RUN ? ' lv-bad' : x.max_days7 > maxD7 ? ' lv-warn' : '')}
+                <td class=${'lv-stat ' + daysCls(nWorked)}>${nWorked}${(x.max_days7 ?? 0) > nWorked ? html`<div class=${'lv-ifsent' + (x.max_days7 >= HARD_RUN ? ' lv-bad' : x.max_days7 > maxD7 ? ' lv-warn' : '')}
                   title="Most days worked in any 7 days in a row, last week included">${x.max_days7} in 7d</div>` : ''}</td>
-                <td class=${streakCls(x.streak)}>${x.streak}</td>
+                <td class=${'lv-stat ' + streakCls(x.streak)}>${x.streak}</td>
               </tr>`;
             })}`)}</tbody>
-      </table></div>
-      <div class="lv-legend" id="lv-below">
+      </table></div>`}
+      <div class=${'lv-legend' + (dayMode ? ' lv-hide' : '')} id="lv-below">
         ${Object.entries(WAVE_COLORS).map(([w, bg]) => html`<span class="lv-sw" style=${`background:${bg}`}>${w}</span>`)}
         <span class="lv-sw" style=${`background:${WAVE_COLORS['10:25']}`}>10:25 <small>Backup</small></span>
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.trainer}`}>Trainer</span>
@@ -1479,7 +1518,7 @@ function Board() {
       </div>
       ${pop && risks[pop.name] && riskBy[pop.name] ? html`<div class="lv-pop" style=${`left:${pop.left}px;` + (pop.up != null
         ? `top:${pop.up}px;transform:translateY(-100%)` : `top:${pop.top}px`)}><${RiskInfo} d=${riskBy[pop.name]} risk=${risks[pop.name]} iso=${pop.iso} /></div>` : ''}
-      <p class="hint">A shaking day would put that driver over ${max7Lim}h in 7 days or at ${maxD7 + 1} days worked in 7 — hover it to see why and how to fix it.
+      <p class="hint lv-deskonly">A shaking day would put that driver over ${max7Lim}h in 7 days or at ${maxD7 + 1} days worked in 7 — hover it to see why and how to fix it.
         Hours are scheduled on-the-clock hours. Orange = at or near a limit, red = over it.
         Locked: 12h in a day, ${max7Lim}h in any 7 days, 7 days worked in 7. A ${maxD7 + 1}th day in 7 (last week counts)
         or overtime goes through after a pop-up — that driver's days then shake until it's fixed.</p>
