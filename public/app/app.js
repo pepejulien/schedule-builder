@@ -1,6 +1,6 @@
 import { html } from './preact-setup.js';
 import { createContext } from 'preact';
-import { useEffect, useState, useContext } from 'preact/hooks';
+import { useEffect, useState, useContext, useRef } from 'preact/hooks';
 import { getState, setState, setWizard, useStore, startFresh, continueWizard, hydrateWizard } from './store.js';
 import { checkAuth, login, logout, whoAmI, canLive } from './api.js';
 import { loadDraft } from './draft.js';
@@ -169,35 +169,81 @@ function BuildHome() {
     </div>`;
 }
 
-function Sidebar() {
+// The pages both navs list: the sidebar, and the Live schedule's top nav (Jose 2026-10-11).
+function useNavItems() {
   const route = useStore((s) => s.route);
   const step = useStore((s) => s.wizard.step);
   const wizard = useStore((s) => s.wizard);
   const r = readiness(wizard);
-  const nav = (on, icon, label, onClick, extra) => html`
-    <a class=${'nv' + (on ? ' on' : '')} onClick=${onClick}>${Icon(icon)}<span>${label}</span>${extra || ''}</a>`;
+  return {
+    pages: [
+      { on: route === 'home', icon: 'home', label: canLive() ? 'Today' : 'Overview', onClick: () => setState({ route: 'home' }) },
+      { on: route === 'live', icon: 'live', label: 'Live schedule', onClick: () => setState({ route: 'live' }) },
+      { on: route === 'drivers', icon: 'users', label: 'Driver preferences', onClick: () => setState({ route: 'drivers' }) },
+    ],
+    steps: STEPS.map((s, i) => ({ on: route === 'wizard' && step === i, icon: s.icon, label: `${i + 1}. ${s.title}`,
+      onClick: () => { continueWizard(); goStep(i); }, done: r.steps[i]?.status === 'done' })),
+    settings: { on: route === 'settings', icon: 'settings', label: 'Settings', onClick: () => setState({ route: 'settings' }) },
+  };
+}
+const signOut = async () => { await logout(); setState({ auth: 'out' }); };
+const doneMark = (it) => (it.done ? html`<span class="nvok">${Icon('check', 14)}</span>` : '');
+
+function Sidebar() {
+  const { pages, steps, settings } = useNavItems();
+  const nav = (it) => html`
+    <a class=${'nv' + (it.on ? ' on' : '')} onClick=${it.onClick}>${Icon(it.icon)}<span>${it.label}</span>${doneMark(it)}</a>`;
   return html`<aside class="sidebar">
     <div class="sblogo"><img src="assets/logo.png" alt="" />
       <div><div class="sbname">Schedule Builder</div><div class="sbsub">JAJB Logistics · WWV9</div></div></div>
     <nav>
-      ${nav(route === 'home', 'home', canLive() ? 'Today' : 'Overview', () => setState({ route: 'home' }))}
-      ${nav(route === 'live', 'live', 'Live schedule', () => setState({ route: 'live' }))}
-      ${nav(route === 'drivers', 'users', 'Driver preferences', () => setState({ route: 'drivers' }))}
+      ${pages.map((it) => nav(it))}
       <div class="sbgroup">Build a week</div>
-      ${STEPS.map((s, i) => {
-        const st = r.steps[i]?.status;
-        return nav(route === 'wizard' && step === i, s.icon, `${i + 1}. ${s.title}`,
-          () => { continueWizard(); goStep(i); },
-          st === 'done' ? html`<span class="nvok">${Icon('check', 14)}</span>` : '');
-      })}
+      ${steps.map((it) => nav(it))}
       <div class="sbgroup">App</div>
-      ${nav(route === 'settings', 'settings', 'Settings', () => setState({ route: 'settings' }))}
+      ${nav(settings)}
     </nav>
     <div class="sbfoot">
       ${whoAmI() ? html`<div class="sbwho">Signed in as ${whoAmI()}</div>` : ''}
-      <a class="nv" onClick=${async () => { await logout(); setState({ auth: 'out' }); }}>${Icon('logout')}<span>Sign out</span></a>
+      <a class="nv" onClick=${signOut}>${Icon('logout')}<span>Sign out</span></a>
     </div>
   </aside>`;
+}
+
+// The Live schedule takes the whole screen on a computer (Jose 2026-10-11): this slim bar stands
+// in for the sidebar + top bar there. Hidden below 1000px (the phone layout stays as it was).
+function TopNav() {
+  const { pages, steps, settings } = useNavItems();
+  const [open, setOpen] = useState(false);   // the "Build a week" list
+  const dropRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const away = (e) => { if (dropRef.current && !dropRef.current.contains(e.target)) setOpen(false); };
+    const esc = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [open]);
+  const item = (it) => html`
+    <a class=${'tn' + (it.on ? ' on' : '')} onClick=${it.onClick}>${Icon(it.icon, 16)}<span>${it.label}</span></a>`;
+  return html`<header class="topnav">
+    <div class="tnlogo"><img src="assets/logo.png" alt="" /><span>Schedule Builder</span></div>
+    <nav class="tnnav">
+      ${pages.map((it) => item(it))}
+      <div class="tndrop" ref=${dropRef}>
+        <a class=${'tn' + (open ? ' open' : '')} aria-haspopup="menu" aria-expanded=${open ? 'true' : 'false'}
+          onClick=${() => setOpen((o) => !o)}><span>Build a week ▾</span></a>
+        ${open ? html`<div class="tnmenu" role="menu">${steps.map((it) => html`
+          <a class=${'nv' + (it.on ? ' on' : '')} role="menuitem" onClick=${() => { setOpen(false); it.onClick(); }}>${Icon(it.icon)}<span>${it.label}</span>${doneMark(it)}</a>`)}
+        </div>` : ''}
+      </div>
+      ${item(settings)}
+    </nav>
+    <div class="tnright">
+      ${whoAmI() ? html`<span class="tnwho">Signed in as ${whoAmI()}</span>` : ''}
+      <a class="tn" onClick=${signOut}>${Icon('logout', 16)}<span>Sign out</span></a>
+    </div>
+  </header>`;
 }
 
 function TopBar() {
@@ -233,7 +279,7 @@ function MobileSteps() {
     <button class=${'mstep' + (route === 'wizard' && i === step ? ' on' : '')}
       onClick=${() => { continueWizard(); goStep(i); }}>${i + 1}. ${s.title}</button>`)}
     <button class=${'mstep' + (route === 'settings' ? ' on' : '')} onClick=${() => setState({ route: 'settings' })}>Settings</button>
-    <button class="mstep" onClick=${async () => { await logout(); setState({ auth: 'out' }); }}>Sign out</button>
+    <button class="mstep" onClick=${signOut}>Sign out</button>
   </div>`;
 }
 
@@ -274,10 +320,14 @@ export function App() {
   else if (route === 'wizard') { const Comp = STEPS[Math.min(step, STEPS.length - 1)].comp; body = html`<${Comp}/>`; }
   else body = html`<${Home}/>`;
 
+  // Live schedule (Jose 2026-10-11): on a computer the top nav replaces the sidebar + top bar
+  // (the top bar stays in the page for the phone layout; CSS hides it from 1001px up)
+  const wide = route === 'live';
   return html`
-    <div class="layout">
-      <${Sidebar}/>
+    <div class=${'layout' + (wide ? ' lv-wide' : '')}>
+      ${wide ? '' : html`<${Sidebar}/>`}
       <div class="maincol">
+        ${wide ? html`<${TopNav}/>` : ''}
         <${TopBar}/>
         <${MobileSteps}/>
         <main>${body}</main>

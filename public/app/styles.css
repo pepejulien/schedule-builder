@@ -361,9 +361,62 @@ li.edit-override { color: #8a231c; font-weight: 600; }
 /* ---- Live schedule (2026-10-06) ---- */
 .lv-promo { border-left-color: var(--navy); }
 .lv-head { padding: 14px 20px; }
-.lv-head select { min-width: 260px; max-width: 100%; }
-.lv-pub { font-size: 12px; }
+.lv-pub { font-size: 12px; margin: 2px 0 0; }
+/* ◀ week ▶ as the week card's title (Jose 2026-10-11): the select reads like the h2 */
+.card h2.lv-weeknav { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; }
+.lv-wkbtn { width: 28px; height: 28px; padding: 0; border-radius: 999px; justify-content: center; font-size: 11px; flex: none; }
+select.lv-wksel {
+  font: inherit; color: var(--ink); max-width: 100%; min-width: 0; cursor: pointer; field-sizing: content;   /* as wide as the week shown (Chromium) */
+  border: 1px solid transparent; background-color: transparent; border-radius: 9px; padding: 2px 26px 2px 8px;
+  -webkit-appearance: none; -moz-appearance: none; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2386868b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 9px center;
+}
+select.lv-wksel:hover { border-color: #dcdce1; background-color: #fff; }
+select.lv-wksel:focus { border-color: var(--navy); background-color: #fff; }
+select.lv-wksel option { font-size: 13.5px; font-weight: 500; }
 .lv-wrap { margin-top: 12px; max-height: 70vh; overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+
+/* ---- Live schedule on a computer: the whole screen (Jose 2026-10-11) ----
+   app.js swaps the sidebar + top bar for .topnav on the live route; below 1000px none of this applies. */
+.topnav, .lv-jump { display: none; }
+@media (min-width: 1001px) {
+  .layout.lv-wide .topbar { display: none; }
+  .layout.lv-wide main { max-width: none; padding: 12px 16px 24px; }
+  .topnav {
+    display: flex; align-items: center; gap: 14px; height: 52px; padding: 0 16px;
+    position: sticky; top: 0; z-index: 20; background: rgba(245,245,247,.82);
+    backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 1px solid #e6e6ea;
+  }
+  .tnlogo { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 700; color: var(--navy); letter-spacing: -.01em; white-space: nowrap; }
+  .tnlogo img { width: 28px; height: 28px; object-fit: contain; border-radius: 7px; }
+  .tnnav { display: flex; align-items: center; gap: 2px; min-width: 0; }
+  .tn {
+    display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 9px; white-space: nowrap;
+    font-size: 13px; font-weight: 500; color: var(--ink2); cursor: pointer; transition: background .12s;
+  }
+  .tn .ic { color: var(--muted2); }
+  .tn:hover, .tn.open { background: #ececf0; color: var(--ink2); }
+  .tn.on { background: #fff; color: var(--navy); box-shadow: 0 1px 3px rgba(36,55,98,.10); }
+  .tn.on .ic { color: var(--accent); }
+  .tndrop { position: relative; }
+  .tnmenu {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 25; min-width: 230px; display: flex; flex-direction: column; gap: 3px;
+    background: #fbfbfd; border: 1px solid var(--line); border-radius: 12px; padding: 6px; box-shadow: 0 10px 34px rgba(36,55,98,.18);
+  }
+  .tnright { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .tnwho { font-size: 11.5px; color: var(--muted2); white-space: nowrap; }
+  /* the grid scroller is as tall as the screen under the top nav. No overscroll-behavior on purpose:
+     at the grid's end the wheel goes on to scroll the page */
+  .layout.lv-wide .lv-wrap.lv-tall { max-height: none; height: calc(100vh - 52px - 24px); min-height: 420px; }
+  .layout.lv-wide .lv-jump {
+    display: inline-flex; position: fixed; right: 20px; bottom: 20px; z-index: 30; height: 36px; padding: 0 14px;
+    border-radius: 999px; border: 0; background: var(--navy); color: #fff; font-size: 12.5px; font-weight: 600;
+    box-shadow: 0 4px 14px rgba(36,55,98,.28);
+  }
+  .layout.lv-wide .lv-jump:hover { background: var(--navy-h); }
+}
 table.lv-grid { font-size: 12.5px; }
 .lv-grid th { text-align: center; white-space: nowrap; z-index: 2; }
 .lv-grid th.lv-namecol, .lv-grid td.lv-namecol { text-align: left; position: sticky; left: 0; background: #fff; z-index: 1; }

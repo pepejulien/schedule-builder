@@ -56,9 +56,10 @@ const MARKS = [
 
 // Name search ignores case and accents ("jose" finds "José").
 const fold = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-// The sort choice is a per-device convenience (Jose 2026-10-06).
-const SORT_KEY = 'lv_sort';
-const readSort = () => { try { return localStorage.getItem(SORT_KEY) === 'name' ? 'name' : 'tier'; } catch { return 'tier'; } };
+// The sort choice is a per-device convenience (Jose 2026-10-06). A-Z is the default (Jose 2026-10-11):
+// the new key puts everyone back on it once.
+const SORT_KEY = 'lv_sort2';
+const readSort = () => { try { return localStorage.getItem(SORT_KEY) === 'tier' ? 'tier' : 'name'; } catch { return 'name'; } };
 const saveSort = (v) => { try { localStorage.setItem(SORT_KEY, v); } catch { /* private window */ } };
 // "Working" for the day filter (Jose 2026-10-07): any shift on the clock — route, backup,
 // trainer / trainee, dispatch, meeting. Not: blank, Unavailable, called out / no-show.
@@ -1220,16 +1221,16 @@ function Board() {
 
   const idx = allWeeks.findIndex((w) => w.week === sel);
   const thisWeek = sundayOf(todayISO());
-  const picker = html`<div class="card lv-head">
-    <div class="row">
-      <button class="small" disabled=${idx >= allWeeks.length - 1} title="Older week" onClick=${() => setSel(allWeeks[idx + 1].week)}>◀</button>
-      <select value=${sel || ''} onChange=${(e) => setSel(e.target.value)}>
-        ${allWeeks.map((w) => html`<option value=${w.week}>${w.label || w.week}${w.week === thisWeek ? ' — this week' : w.week > thisWeek && !w.future ? ' — upcoming' : ''}${w.future ? ' — not built yet' : ''}</option>`)}
-      </select>
-      <button class="small" disabled=${idx <= 0} title="Newer week" onClick=${() => setSel(allWeeks[idx - 1].week)}>▶</button>
-      <span class="muted lv-pub">${data && !futSel ? `Published by ${data.meta.publishedBy || '—'} · last change by ${data.meta.by || '—'}` : ''}</span>
-    </div>
-  </div>`;
+  // ◀ week ▶ is the week card's title (Jose 2026-10-11); with no week card (not built yet, loading,
+  // load error) it sits in a card of its own so the week can always be changed
+  const weekNav = html`<h2 class="lv-weeknav">
+    <button class="lv-wkbtn" disabled=${idx >= allWeeks.length - 1} title="Older week" aria-label="Older week" onClick=${() => setSel(allWeeks[idx + 1].week)}>◀</button>
+    <select class="lv-wksel" value=${sel || ''} aria-label="Week" onChange=${(e) => setSel(e.target.value)}>
+      ${allWeeks.map((w) => html`<option value=${w.week}>${w.label || w.week}${w.week === thisWeek ? ' — this week' : w.week > thisWeek && !w.future ? ' — upcoming' : ''}${w.future ? ' — not built yet' : ''}</option>`)}
+    </select>
+    <button class="lv-wkbtn" disabled=${idx <= 0} title="Newer week" aria-label="Newer week" onClick=${() => setSel(allWeeks[idx - 1].week)}>▶</button>
+  </h2>`;
+  const picker = html`<div class="card lv-head">${weekNav}</div>`;
 
   // a week not built yet: its days off only (the published board's state isn't read for it)
   if (futSel) {
@@ -1329,8 +1330,6 @@ function Board() {
   const canUndo = ready && rep && rep.can_undo;
 
   return html`<div>
-    ${picker}
-
     <div class="stats">
       <div class="stat"><div class="big">${todayCount == null ? '—' : todayCount}</div>
         <div class="muted">${tday ? `on routes today (${tday.day})` : 'not this week'}</div></div>
@@ -1353,13 +1352,14 @@ function Board() {
     ${(view.overridden || []).length ? html`<details class="banner warn"><summary><b>${view.overridden.length} approved override${view.overridden.length === 1 ? '' : 's'}</b></summary>
       <ul>${view.overridden.map((l) => html`<li>${translateOverride(l)}</li>`)}</ul></details>` : ''}
 
-    <div class="card">
+    <div class="card" id="lv-gridcard">
       <div class="row" style="justify-content:space-between">
         <div>
-          <h2>${data.meta.label}</h2>
+          ${weekNav}
           <p class="hint" style="margin-bottom:0">Click any day to change it — call-outs, moves, extra shifts. Click a name to give that
             driver another shift. Hours are scheduled hours (route ${lim.primary_hours || 10}h, backup ${lim.backup_hours || 2}h).
             ${!ready && eng.status !== 'error' ? html` <span class="muted"><${Spinner}/> loading the rules engine…</span>` : ''}</p>
+          <p class="muted lv-pub">Published by ${data.meta.publishedBy || '—'} · last change by ${data.meta.by || '—'}</p>
         </div>
         <div class="row">
           ${canUndo ? html`<button class="small" disabled=${busy} onClick=${async () => { const m = await run('undo', {}); if (!m.ok) toast(m.error.message, 'err'); }}>Undo my last change</button>` : ''}
@@ -1379,8 +1379,8 @@ function Board() {
         <input type="search" placeholder="Search a driver…" value=${q} onInput=${(e) => setQ(e.target.value)}
           aria-label="Search a driver by name" />
         <div class="seg" role="group" aria-label="Sort drivers">
-          <button class=${sortBy === 'tier' ? 'on' : ''} onClick=${() => { setSortBy('tier'); saveSort('tier'); }}>By tier</button>
           <button class=${sortBy === 'name' ? 'on' : ''} onClick=${() => { setSortBy('name'); saveSort('name'); }}>A–Z</button>
+          <button class=${sortBy === 'tier' ? 'on' : ''} onClick=${() => { setSortBy('tier'); saveSort('tier'); }}>By tier</button>
         </div>
         ${filtered ? html`<span class="muted">${shown.length} of ${view.drivers.length} drivers</span>` : ''}
       </div>
@@ -1399,7 +1399,7 @@ function Board() {
         ${dayF.length > 1 ? html`<span class="muted">${bkOnly ? 'on backup' : 'working'} all ${dayF.length} days</span>` : ''}
       </div>
 
-      <div class="scroll-x lv-wrap"><table class="lv-grid">
+      <div class="scroll-x lv-wrap lv-tall"><table class="lv-grid">
         <thead><tr>
           <th class="lv-namecol">Driver</th>
           ${view.days.map((x) => html`<th class=${(x.date === today ? 'today ' : x.date < today ? 'past ' : '') + (x.open ? '' : 'closed') + (dayF.includes(x.day) ? ' lv-dayon' : '')}>
@@ -1465,7 +1465,7 @@ function Board() {
               </tr>`;
             })}`)}</tbody>
       </table></div>
-      <div class="lv-legend">
+      <div class="lv-legend" id="lv-below">
         ${Object.entries(WAVE_COLORS).map(([w, bg]) => html`<span class="lv-sw" style=${`background:${bg}`}>${w}</span>`)}
         <span class="lv-sw" style=${`background:${WAVE_COLORS['10:25']}`}>10:25 <small>Backup</small></span>
         <span class="lv-sw" style=${`background:${SHIFT_COLORS.trainer}`}>Trainer</span>
@@ -1546,5 +1546,27 @@ function Board() {
       onConfirm=${() => { const q = confirm; setConfirm(null); q.run(); }} />` : ''}
     ${limit ? html`<${LimitConfirm} req=${limit} onCancel=${() => setLimit(null)}
       onConfirm=${() => { const q = limit; setLimit(null); q.run(); }} />` : ''}
+    <${JumpPill} />
   </div>`;
+}
+
+// The grid is as tall as the screen on a computer (Jose 2026-10-11), so this pill gets past it to
+// what's below (legend, finder, change log) and back. Hidden below 1000px (styles.css).
+const TOPNAV_H = 52;
+function JumpPill() {
+  const [below, setBelow] = useState(false);   // the first section under the grid is on screen
+  useEffect(() => {
+    const el = document.getElementById('lv-below');
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver(([e]) => setBelow(e.isIntersecting));
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  const go = () => {
+    const el = document.getElementById(below ? 'lv-gridcard' : 'lv-below');
+    if (!el) return;
+    const top = el.getBoundingClientRect().top + window.scrollY - (below ? TOPNAV_H : TOPNAV_H + 12);
+    window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  };
+  return html`<button class="lv-jump" onClick=${go}>${below ? '↑ Back to the schedule' : '↓ Below the schedule'}</button>`;
 }
