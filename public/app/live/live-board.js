@@ -1141,12 +1141,13 @@ function Board() {
   // a pick from "Who can work extra?"
   function finderPick(c, hasOpen) {
     const { day, role } = finder;
-    // a full day just gets one more route (Jose 2026-10-06: Amazon may have
-    // handed out routes the app doesn't know yet) — the change log says so
+    // a full day still takes the driver (Jose 2026-10-06: Amazon may have handed out
+    // routes the app doesn't know yet), but the day's count stays put — it only
+    // changes by hand (2026-10-11), so the header shows e.g. 35/34
     runConfirmed({ name: c.name, day, role, unavReasons: c.status === 'unavail' ? c.reasons : null, limits: c.limits },
       setConfirm, setLimit, async (flags) => {
         const m = hasOpen ? await run('apply', { day, role, to_name: c.name, ...flags })
-          : await run('apply_add', { name: c.name, day, role, ...(role === 'road' ? { extra_route: true } : {}), ...flags });
+          : await run('apply_add', { name: c.name, day, role, ...(role === 'road' ? { extra_route: true, keep_counts: true } : {}), ...flags });
         if (!m.ok) toast(m.error.message, 'err');
       });
   }

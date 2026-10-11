@@ -246,7 +246,7 @@ ok(day(r1, 'Mon')['routes'] == day(built, 'Mon')['routes'], 'Mon route count unc
 ok(got[(fill_mon, 'Mon')]['code'] == 'CX12', 'route code carried')
 ok(c1[road_wed]['Wed'] == w_wed and got[(road_wed, 'Wed')]['extra'],
    f'start 3 min off -> nearest wave {w_wed}; full wave -> EXTRA')
-ok(day(r1, 'Wed')['routes'] == day(built, 'Wed')['routes'] + 1, 'Wed is one route more')
+ok(day(r1, 'Wed')['routes'] == day(built, 'Wed')['routes'], 'Wed count unchanged - set only by hand (2026-10-11)')
 ok(c1[nostart]['Tue'] == waves('Tue')[0], f'no start -> earliest wave ({c1[nostart]["Tue"]})')
 ok(c1[future]['Sat'] == '', 'a date after today is not applied')
 ok(data['ignored'] == 2, f"future + other-week entries ignored ({data['ignored']})")
@@ -304,10 +304,10 @@ cu2 = cells(u2)
 ok(cu2[vic]['Mon'] == vic_wave, f'undo puts {vic} back on Mon')
 ok(cu2[fill_mon]['Mon'] == vic_wave and all(cu2[x][d] == c1[x][d] for (x, d) in got),
    'the Route Tracker adds are still there')
-ok(day(u2, 'Mon')['routes'] == day(built, 'Mon')['routes'] + 1 and day(u2, 'Mon')['routes_filled'] == day(u2, 'Mon')['routes'],
-   'in that snapshot the Mon add is an extra route (count +1, no overfill)')
+ok(day(u2, 'Mon')['routes'] == day(built, 'Mon')['routes'] and day(u2, 'Mon')['routes_filled'] == day(u2, 'Mon')['routes'] + 1,
+   'in that snapshot the Mon add is one over (count unchanged - set only by hand)')
 ok(not u2['can_undo'], 'nothing left to undo: sync never pushed an undo step')
-ok(runner._STATE['rt'][(runner.norm(fill_mon), 'Mon')]['extra'] is True, 'provenance knows it is an extra now')
+ok(runner._STATE['rt'][(runner.norm(fill_mon), 'Mon')]['extra'] is False, 'provenance: no count was raised to take back')
 
 print('  Route Tracker drops entries')
 keep = [e for e in entries if e['name'] not in (bk_sun, fill_mon)

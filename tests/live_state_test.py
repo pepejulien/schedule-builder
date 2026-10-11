@@ -204,14 +204,16 @@ who = next(x for x in J(runner.candidates, {'day': dd['day'], 'role': 'road'})['
 a = J(runner.apply_add, {'name': who['name'], 'day': dd['day'], 'role': 'road', 'wave': wave})
 ok(a['ok'], f"{who['name']} put on {dd['day']} {wave} although the day was full")
 nd = next(x for x in a['days'] if x['day'] == dd['day'])
-ok(nd['routes'] == dd['routes'] + 1 and nd['waves'][wave] == dd['waves'][wave] + 1, 'that wave got one more route')
+ok(nd['routes'] == dd['routes'] and nd['waves'][wave] == dd['waves'][wave]
+   and nd['routes_filled'] == dd['routes_filled'] + 1, 'the count stays put; the day shows one over (2026-10-11)')
 ok(next(x for x in a['drivers'] if x['name'] == who['name'])['cells'][dd['day']] == wave, 'in exactly that wave')
 ok('EXTRA route' in a['edits'][-1], 'the log says it was an extra route')
 ok(not a['check']['errors'], 'no rule errors after the extra route')
 b = J(runner.set_role, {'name': who['name'], 'day': dd['day'], 'to': 'backup'})
 ok(b['ok'] and next(x for x in b['drivers'] if x['name'] == who['name'])['cells'][dd['day']] == wave + ' Backup',
    'route turned into a backup in the same wave')
-ok(any(f"P1 INFEASIBLE {dd['day']}" in l for l in b['infeasible']), 'its route slot is left open')
+ok(not any(f"P1 INFEASIBLE {dd['day']}" in l for l in b['infeasible']),
+   'the day is back to exactly its count - no open slot (the count never went up)')
 c2 = J(runner.set_role, {'name': who['name'], 'day': dd['day'], 'to': 'road'})
 ok(c2['ok'] and next(x for x in c2['drivers'] if x['name'] == who['name'])['cells'][dd['day']] == wave,
    'and back into a route')
@@ -258,8 +260,8 @@ ok(m['ok'] and next(d for d in m['drivers'] if d['name'] == a)['cells'][day] == 
 u = J(runner.undo_last)
 ok(u['ok'] and next(d for d in u['drivers'] if d['name'] == a)['cells'][day] == 'Dispatch', 'undo puts dispatch back')
 nw = J(runner.apply_add, {'name': free(u, day)[-1]['name'] if free(u, day) else b, 'day': day, 'role': 'road', 'wave': '11:25 AM'})
-ok(nw['ok'] and next(x for x in nw['days'] if x['day'] == day)['waves'].get('11:25 AM') == 1 and not nw['check']['errors'],
-   'a route in a wave the day had no routes in')
+ok(nw['ok'] and next(x for x in nw['days'] if x['day'] == day)['waves'].get('11:25 AM') == 0 and not nw['check']['errors'],
+   'a route in a wave the day had no routes in (shows at 0 - counts set by hand)')
 
 print()
 print('PASS' if not fails else f'{len(fails)} FAILED')

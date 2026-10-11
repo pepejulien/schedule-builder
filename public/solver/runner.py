@@ -985,9 +985,10 @@ def _verify(res):
     keep, ovr = [], []
     for e in chk["errors"]:
         # a wave SHORT of its count is an open slot (call-out, removed shift),
-        # already reported by _recount_short -- not a broken rule
-        m = _WAVE_SHORT.match(e)
-        if m and int(m.group(1)) < int(m.group(2)):
+        # already reported by _recount_short -- not a broken rule. OVER its count is
+        # an extra driver (Jose 2026-10-11: counts only change by hand) -- the day's
+        # header shows it, e.g. 35/34
+        if _WAVE_SHORT.match(e):
             continue
         hit = False
         for rx, kind in _OVR_RES:
@@ -1399,13 +1400,16 @@ def apply_add(payload_json):
         elif extra_route:
             _STATE["undo"].append(_snapshot(res))
             label = _fill_label(res, day, "road")
-            if label in res.waves[day]:
-                res.waves[day][label] += 1
-            res.routes[day] += 1
+            # Live board (Jose 2026-10-11): the day's route count only moves when
+            # set by hand -- one more driver shows as e.g. 35/34
+            if not p.get("keep_counts"):
+                if label in res.waves[day]:
+                    res.waves[day][label] += 1
+                res.routes[day] += 1
             to_dr["prim"].append(day)
             res.cell[day][i_to] = label
             desc = (f"Added a {day} route for {to_dr['name']} as an EXTRA route "
-                    f"({day} is now {res.routes[day]} routes)")
+                    f"({day} is now {_routes_filled(res, day)}/{res.routes[day]} routes)")
         else:
             if _routes_filled(res, day) >= res.routes[day]:
                 return json.dumps(dict(ok=False, kind="edit", full=True,
@@ -1439,16 +1443,16 @@ def _wave_filled(res, day, wave):
 
 
 def _put_route(res, i, dr, day, wave):
-    """Give dr a route in `wave`; a full wave gets one more route. Returns the
-    change-log text."""
+    """Give dr a route in `wave` (Live board only). A full wave keeps its count
+    (Jose 2026-10-11: counts only change by hand) -- the day just shows over,
+    e.g. 35/34. Returns the change-log text."""
     extra = _wave_filled(res, day, wave) >= res.waves[day].get(wave, 0)
-    if extra:
-        res.waves[day][wave] = res.waves[day].get(wave, 0) + 1
-        res.routes[day] += 1
+    res.waves[day].setdefault(wave, 0)       # a new wave shows in the counts, at 0
     dr["prim"].append(day)
     res.cell[day][i] = wave
     return (f"Added a {day} {wave} route for {dr['name']}"
-            + (f" - an EXTRA route ({day} is now {res.routes[day]} routes)" if extra else ""))
+            + (f" - an EXTRA route ({day} is now {_routes_filled(res, day)}/{res.routes[day]} routes)"
+               if extra else ""))
 
 
 def _short(name):
@@ -2216,21 +2220,18 @@ def _rt_holds(v, i, n, day, pv):
 
 
 def _rt_put(v, i, n, day, pv, desc):
-    extra = pv["extra"]
-    if v["rtx"] is not None and pv["role"] == "road":     # an undo snapshot: full there?
-        extra = sum(1 for x in v["cell"].get(day, {}).values() if "Backup" not in x
-                    and "TRAIN helper" not in x and _cell_wave(x) == pv["label"]) >= v["waves"][day].get(pv["label"], 0)
-        v["rtx"][(n, day)] = extra
+    if v["rtx"] is not None and pv["role"] == "road":     # an undo snapshot: no count raised there either
+        v["rtx"][(n, day)] = False
     v["assign"][i]["prim" if pv["role"] == "road" else "bk"].append(day)
     v["cell"].setdefault(day, {})[i] = pv["label"]
-    if pv["role"] == "road" and extra:                   # a full wave gets one more route
-        v["waves"][day][pv["label"]] = v["waves"][day].get(pv["label"], 0) + 1
-        v["routes"][day] = v["routes"].get(day, 0) + 1
+    # a full wave keeps its count (Jose 2026-10-11: counts only change by hand)
     v["edits"].append(desc)
 
 
 def _rt_take(v, i, n, day, pv, desc):
-    extra = pv["extra"] if v["rtx"] is None else v["rtx"].pop((n, day), pv["extra"])
+    # older syncs (before 2026-10-11, no "kept") raised the count -- that comes back off
+    bumped = pv["extra"] and not pv.get("kept")
+    extra = bumped if v["rtx"] is None else v["rtx"].pop((n, day), bumped)
     v["assign"][i]["prim" if pv["role"] == "road" else "bk"].remove(day)
     v["cell"][day].pop(i, None)
     if pv["role"] == "road" and extra:                   # the extra route it made goes too
@@ -2440,8 +2441,10 @@ def sync_actual(payload_json):
                     continue
                 if role == "road":
                     extra = _wave_filled(res, day, w) >= res.waves[day].get(w, 0)
-                    pv = dict(name=dr["name"], role="road", label=w, extra=extra, date=d.isoformat())
-                    more = f" - an EXTRA route ({day} is now {res.routes[day] + 1} routes)" if extra else ""
+                    # kept: the count wasn't raised, so taking it back lowers nothing
+                    pv = dict(name=dr["name"], role="road", label=w, extra=extra, kept=True, date=d.isoformat())
+                    more = (f" - an EXTRA route ({day} is now {_routes_filled(res, day) + 1}/{res.routes[day]} routes)"
+                            if extra else "")
                 else:
                     extra = _bk_filled(res, day) >= res.backup.get(day, 0)
                     pv = dict(name=dr["name"], role="backup", label=w + " Backup", extra=extra,

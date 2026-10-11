@@ -44,11 +44,17 @@ D, waves = day['day'], day['waves']
 w0 = sorted(waves)[0]
 print(f'{D}: {waves}, backups {day["backup"]}')
 
-# a full wave gets an extra route when someone is added to it -> the count grows
+# someone added to a full wave -> the count stays put, only set by hand (2026-10-11)
 free = next(x for x in built['drivers'] if not x['cells'].get(D) and D not in x['unavailable'])
 r = J(runner.apply_add, {'name': free['name'], 'day': D, 'role': 'road', 'wave': w0,
                          'confirm_limits': True, 'confirm_unavailable': True})
 ok(r.get('ok'), 'added a driver to a full wave')
+d1 = next(d for d in r['days'] if d['day'] == D)
+ok(d1['routes'] == day['routes'] and d1['waves'][w0] == waves[w0], 'the count stayed put')
+ok(d1['routes_filled'] == day['routes_filled'] + 1, 'the day shows one over')
+# raise it by hand to match
+r = J(runner.set_counts, {'day': D, 'waves': {**waves, w0: waves[w0] + 1}})
+ok(r.get('ok'), 'raised the count by hand')
 d1 = next(d for d in r['days'] if d['day'] == D)
 ok(d1['routes'] == day['routes'] + 1 and d1['waves'][w0] == waves[w0] + 1, 'the count went up by one')
 
