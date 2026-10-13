@@ -209,6 +209,57 @@
       delete all[day + '|' + nm];
       put('timeoff/' + week, all); fire();
     },
+    // VET / VTO offers (Driver App SPEC-v2 §6, 2026-10-12): schedule_offers/{id} in 'offers', takes in
+    // 'offertakes/{id}' — same fields and checks as jajb.js (timestamps as ms). Drivers' takes come from
+    // __mock.takeOffer below (the Driver App's server makes them for real).
+    watchScheduleOffers: (week, cb) => listen('offers', () => {
+      const from = new Date(); from.setDate(from.getDate() - 14);
+      return Object.values(get('offers') || {})
+        .filter((o) => (week ? o.week === String(week) : o.date >= iso(from)))
+        .sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.at - b.at);
+    }, cb),
+    watchOfferTakes: (id, cb) => listen('offertakes/' + id, () => Object.values(get('offertakes/' + id) || {})
+      .sort((a, b) => a.at - b.at), cb),
+    saveScheduleOffer: async (f) => {
+      await delay(LAT);
+      f = f || {};
+      if (f.kind !== 'vet' && f.kind !== 'vto') throw new Error('kind must be vet or vto');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(f.date || ''))) throw new Error('date must be YYYY-MM-DD');
+      const slots = Number(f.slots);
+      if (!Number.isInteger(slots) || slots < 1 || slots > 50) throw new Error('spots must be 1 to 50');
+      const t = new Date(f.date + 'T12:00:00'), sun = new Date(t); sun.setDate(t.getDate() - t.getDay());
+      const tiers = (x) => (Array.isArray(x) ? x : []).map(String).filter(Boolean).slice(0, 10);
+      const hrs = (h, d) => (h == null || h === '' ? d : Math.max(0, Math.min(168, Number(h) || 0)));
+      const a = f.audience || {}, mode = f.mode === 'window' ? 'window' : 'fcfs', at = Date.now();
+      const id = 'of' + at.toString(36) + Math.random().toString(36).slice(2, 6);
+      const o = { id, v: 1, kind: f.kind, week: iso(sun), date: f.date, day: DAYS[t.getDay()], wave: String(f.wave || ''),
+        slots, status: 'open', taken: 0, audience: { tiers: tiers(a.tiers), maxWeekHours: hrs(a.maxWeekHours, null) },
+        mode, note: String(f.note || '').trim().slice(0, 300), by: name, at, decideAt: 0, closedAt: 0 };
+      if (f.kind === 'vet') o.role = f.role === 'backup' ? 'backup' : 'road';
+      if (mode === 'window') {
+        const p = f.priority || {};
+        o.windowHours = hrs(f.windowHours, 24);
+        o.decideAt = at + o.windowHours * 3600000;
+        o.priority = { tiers: tiers(p.tiers), maxWeekHours: hrs(p.maxWeekHours, 40) };
+      }
+      const all = get('offers') || {}; all[id] = o; put('offers', all); fire();
+      return id;
+    },
+    closeScheduleOffer: async (id) => {
+      await delay(LAT);
+      const all = get('offers') || {};
+      if (!all[id]) throw new Error('No such offer.');
+      Object.assign(all[id], { status: 'closed', closedBy: name, closedAt: Date.now() });
+      put('offers', all); fire();
+    },
+    decideCounter: async (id, tid, yes) => {
+      await delay(LAT);
+      const tk = get('offertakes/' + id) || {};
+      if (!tk[tid] || tk[tid].status !== 'pending') throw new Error('That request was already answered.');
+      Object.assign(tk[tid], { status: yes ? 'approved' : 'declined', decidedBy: name });
+      put('offertakes/' + id, tk); fire();
+      return { ok: true };
+    },
     deleteScheduleWeek: async (week) => {
       const all = weeks(); delete all[week]; put('weeks', all);
       localStorage.removeItem(K + 'log/' + week);
@@ -225,6 +276,24 @@
       // our next save throws: 'offline' or any message
       failNext: (k) => { failNext = k || 'offline'; },
       set: (k, v) => { put(k, v); fire(); },
+      // a driver takes an offer (what the Driver App's drv_offer does, simplified): t = {tid, name, status
+      // ('approved' | 'waiting' | 'pending' | 'applied' | 'refused' | 'declined'), counter, role, why}.
+      // A non-counter approved / applied take uses a slot; the offer is filled when they're all used.
+      takeOffer: (id, t) => {
+        const all = get('offers') || {}, o = all[id];
+        if (!o) throw new Error('No such offer.');
+        const tk = get('offertakes/' + id) || {};
+        const tt = { tid: t.tid, name: t.name || t.tid, at: Date.now(), role: t.role || o.role || '',
+          counter: !!t.counter, status: t.status || 'approved', ...(t.why ? { why: t.why } : {}) };
+        tk[t.tid] = tt;
+        put('offertakes/' + id, tk);
+        if (!tt.counter && (tt.status === 'approved' || tt.status === 'applied')) {
+          o.taken = (o.taken || 0) + 1;
+          if (o.taken >= o.slots && o.status === 'open') o.status = 'filled';
+          put('offers', all);
+        }
+        fire();
+      },
       get,
       reset: () => { Object.keys(localStorage).filter((k) => k.startsWith(K)).forEach((k) => localStorage.removeItem(k)); },
     },

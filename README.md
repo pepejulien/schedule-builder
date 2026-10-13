@@ -32,6 +32,16 @@
 > logistics.amazon.com only). It never presses Save. Spec: `docs/roster-bookmarklet.md`; test:
 > `node tests/roster_send_test.mjs`.
 
+> **VET / VTO offers (2026-10-12, Firebase only; Driver App SPEC-v2 §6):** a card on the Live board after
+> "Who can work extra?" posts an extra shift (VET, route or backup, a wave or any) or a day off (VTO) to the
+> Driver App: spots, who gets it (everyone, or tiers and/or under N hours this week) and approval (first come,
+> first served, or wait N hours then pick, with tiers approved right away). **Open offers** lists this week's
+> and later offers (taken / spots), who took each, the backup/route counters to answer Yes / No, and Close.
+> Data: Firestore `schedule_offers/{id}` + `takes/{tid}` through `jajb.js` (`watchScheduleOffers`,
+> `saveScheduleOffer`, `closeScheduleOffer`, `watchOfferTakes`, `decideCounter`); the card hides itself when
+> the hub's `jajb.js` doesn't have them yet. Route counts never change. `app/live/offers.js` (+ the pure
+> `offers-model.js`); test: `node tests/offers_test.mjs`; the mock has them too (`JAJB.__mock.takeOffer` plays a driver).
+
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's
 inputs, click **Build**, download the finished `Week-NN-Schedule.xlsx`.
@@ -192,6 +202,7 @@ public/
     draft.js                 IndexedDB auto-save/resume of the in-progress build
     live/live-board.js       the Live schedule board (published week, midweek edits, change log)
     live/live-model.js       publish/save/load plumbing for the Live board
+    live/offers.js           the Live board's VET / VTO offers card (+ offers-model.js, its pure helpers)
     readiness.js             computes the home-screen dashboard
     worker/solver.worker.js  owns Pyodide
     steps/step1..step9 + advanced-panel.js   the wizard

@@ -312,3 +312,18 @@ export function timeoffOnce(weekISO, ms = 6000) {
     un = window.JAJB.watchScheduleTimeoff(weekISO, finish);
   });
 }
+
+// VET / VTO offers for drivers (Driver App SPEC-v2 §6, 2026-10-12): Firestore schedule_offers/{id}
+// + takes/{tid}, posted and closed from the Live board's offers card (live/offers.js). Field names:
+// jajb.js saveScheduleOffer. An older jajb.js has none of these: canOffers() is false and the card stays hidden.
+export const canOffers = () => onFirebase() && typeof window.JAJB.watchScheduleOffers === 'function'
+  && typeof window.JAJB.saveScheduleOffer === 'function' && typeof window.JAJB.closeScheduleOffer === 'function';
+// week (its Sunday) | null (every offer dated from 14 days ago on) -> cb(rows | null when refused)
+export const watchOffers = (week, cb) => (canOffers() ? window.JAJB.watchScheduleOffers(week, cb) : (cb([]), () => {}));
+export const watchOfferTakes = (offerId, cb) => (onFirebase() && typeof window.JAJB.watchOfferTakes === 'function'
+  ? window.JAJB.watchOfferTakes(offerId, cb) : (cb([]), () => {}));
+export const saveOffer = (fields) => window.JAJB.saveScheduleOffer(fields);
+export const closeOffer = (id) => window.JAJB.closeScheduleOffer(id);
+// a VET counter ("I'd rather do a backup"): yes = approved in the other role, no = declined
+export const canDecideCounter = () => onFirebase() && typeof window.JAJB.decideCounter === 'function';
+export const decideCounter = (offerId, tid, yes) => window.JAJB.decideCounter(offerId, tid, yes);

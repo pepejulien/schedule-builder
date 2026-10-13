@@ -15,7 +15,7 @@ import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest, warmup } from '../solver-client.js';
 import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, saveLiveConfirm, watchLiveAttendance, watchLiveLate, saveLiveLate,
-  watchLiveSummary, canWatchSummary } from '../api.js';
+  watchLiveSummary, canWatchSummary, canOffers } from '../api.js';
 import { MissingCheck } from './missing.js';
 import { routeDays, backupDays, rtMismatches } from './limits.js';
 import { RtCheck } from './rt-check.js';
@@ -33,6 +33,7 @@ import {
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 import { FutureWeek } from './future-week.js';
 import { DayList, DayPills, firstDay } from './day-list.js';
+import { Offers } from './offers.js';
 
 // Roster bookmark (2026-10-09, docs/roster-bookmarklet.md): the link only injects roster.js (next to
 // index.html, absolute, cache-busted), so fixing roster.js fixes every computer's bookmark.
@@ -1526,6 +1527,8 @@ function Board() {
 
     <${Finder} view=${view} finder=${finder} setFinder=${setFinder} ready=${ready} rev=${data.rev} busy=${busy}
       onPick=${finderPick} />
+
+    ${canOffers() ? html`<${Offers} days=${view.days} today=${today} />` : ''}
 
     <div class="card">
       <div class="row" style="justify-content:space-between">
