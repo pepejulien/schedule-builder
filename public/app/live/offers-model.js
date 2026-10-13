@@ -1,5 +1,5 @@
 // VET / VTO offers (Driver App SPEC-v2 §6, 2026-10-12): the pure part of the Live board's
-// offers card (live/offers.js) — form state -> the fields saveScheduleOffer takes, and the
+// VET / VTO strip (live/offers.js) — form state -> the fields saveScheduleOffer takes, and the
 // words the card shows. No app imports, so node tests/offers_test.mjs can load it.
 //
 // schedule_offers/{id} as jajb.js watchScheduleOffers hands it over: {id, v, kind: vet|vto, week, date,
@@ -104,19 +104,9 @@ export function offerWhat(o) {
   return o.wave ? `${o.wave} ${role}` : `${role}, any wave`;
 }
 
-// One row of the Open offers list: "VET · Sat Oct 17 · 10:45 AM route · 1 of 3 taken"
+// The Close confirmation's words: "VET · Sat Oct 17 · 10:45 AM route · 1 of 3 taken"
 export function offerLabel(o) {
   return `${o.kind === 'vto' ? 'VTO' : 'VET'} · ${dayLabel(o.date)} · ${offerWhat(o)} · ${Number(o.taken) || 0} of ${Number(o.slots) || 0} taken`;
-}
-
-export const STATUS_WORD = { open: 'Open', filled: 'Filled', closed: 'Closed' };
-export const offerStatusWord = (o) => STATUS_WORD[o.status] || 'Open';
-
-// The offers the card lists: this week (today's Sunday) and later.
-export function shownOffers(rows, today) {
-  const t = parse(today); t.setDate(t.getDate() - t.getDay());
-  const sun = isoOf(t);
-  return (rows || []).filter((o) => o && String(o.week || o.date || '') >= sun);
 }
 
 // the engine's / server's refusal codes in plain words; anything else is shown as it came
@@ -153,6 +143,15 @@ export function dayOffers(rows, date) {
   return (rows || []).filter((o) => o && o.date === date).slice().sort((a, b) =>
     (a.kind === 'vto') - (b.kind === 'vto') || (a.wave ? waveMins(a.wave) : 9998) - (b.wave ? waveMins(b.wave) : 9998)
     || (Number(a.at) || 0) - (Number(b.at) || 0));
+}
+
+// Every offer from today on (only those dates when dates is a list), by day, earliest first:
+// [{date, label: 'Tue Oct 13', offers (as dayOffers sorts them)}]
+export function upcomingGroups(rows, today, dates) {
+  const pick = Array.isArray(dates) && dates.length ? new Set(dates) : null;
+  const ds = [...new Set((rows || []).filter((o) => o && String(o.date || '') >= today && (!pick || pick.has(o.date)))
+    .map((o) => o.date))].sort();
+  return ds.map((date) => ({ date, label: dayLabel(date), offers: dayOffers(rows, date) }));
 }
 
 // "VET · 10:45 AM route" / "VET · backup, any wave" / "VTO · day off"

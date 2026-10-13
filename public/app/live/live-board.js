@@ -33,7 +33,7 @@ import {
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 import { FutureWeek } from './future-week.js';
 import { DayList, DayPills, firstDay } from './day-list.js';
-import { Offers, DayStrip } from './offers.js';
+import { OffersStrip } from './offers.js';
 
 // Roster bookmark (2026-10-09, docs/roster-bookmarklet.md): the link only injects roster.js (next to
 // index.html, absolute, cache-busted), so fixing roster.js fixes every computer's bookmark.
@@ -1356,10 +1356,15 @@ function Board() {
   const canUndo = ready && rep && rep.can_undo;
   const dayMode = small && mode === 'day';
   const vday = pday && view.days.some((x) => x.day === pday) ? pday : firstDay(view, today);
-  // the picked day's VET / VTO strip (one day picked; open days only)
-  const stripFor = (day) => {
-    const d = day && canOffers() ? view.days.find((x) => x.day === day && x.open) : null;
-    return d ? html`<${DayStrip} date=${d.date} day=${d.day} days=${view.days} today=${today} />` : '';
+  // the VET / VTO strip: one open day -> that day's offers; else (null = All days, or several picked
+  // days) every offer from today on, only the picked days when there are some
+  const stripFor = (day, many) => {
+    if (!canOffers()) return '';
+    const d = day ? view.days.find((x) => x.day === day && x.open) : null;
+    if (d) return html`<${OffersStrip} date=${d.date} day=${d.day} days=${view.days} today=${today} />`;
+    if (day) return '';
+    const dates = (many || []).map((n) => (view.days.find((x) => x.day === n) || {}).date).filter(Boolean);
+    return html`<${OffersStrip} dates=${dates.length ? dates : null} days=${view.days} today=${today} />`;
   };
   const pickMode = (m) => { setMode(m); saveMode(m); };
   const subLine = (x) => html`<div class="lv-sub">Week: ${x.clock_hours ?? x.hours}h${endISO && x.day_hours
@@ -1445,7 +1450,7 @@ function Board() {
         </div>
         ${dayF.length > 1 ? html`<span class="muted">${bkOnly ? 'on backup' : 'working'} all ${dayF.length} days</span>` : ''}
       </div>
-      ${stripFor(dayF.length === 1 ? dayF[0] : null)}
+      ${stripFor(dayF.length === 1 ? dayF[0] : null, dayF.length > 1 ? dayF : null)}
 
       <div class="scroll-x lv-wrap lv-tall"><table class="lv-grid">
         <thead><tr>
@@ -1533,8 +1538,6 @@ function Board() {
 
     <${Finder} view=${view} finder=${finder} setFinder=${setFinder} ready=${ready} rev=${data.rev} busy=${busy}
       onPick=${finderPick} />
-
-    ${canOffers() ? html`<${Offers} days=${view.days} today=${today} />` : ''}
 
     <div class="card">
       <div class="row" style="justify-content:space-between">

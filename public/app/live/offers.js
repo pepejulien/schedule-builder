@@ -1,7 +1,7 @@
-// VET / VTO offers (Driver App SPEC-v2 §6.4, 2026-10-12): the Live board card after "Who can work
-// extra?". Post an extra shift (VET) or a day off (VTO) to drivers' phones, and follow the open
-// offers: who took them, counters to answer, Close. Drivers take them in the Driver App; the hub
-// puts approved ones on the board (route counts never change). The words and the fields sent come
+// VET / VTO offers (Driver App SPEC-v2 §6.4, 2026-10-12; Jose 2026-10-13: a strip at the top of the
+// Live board, no card at the bottom). Post an extra shift (VET) or a day off (VTO) to drivers' phones,
+// and follow the offers: who took them, counters to answer, Close. Drivers take them in the Driver
+// App; the hub puts approved ones on the board (route counts never change). The words and the fields sent come
 // from offers-model.js (pure, tested by tests/offers_test.mjs).
 import { html } from '../preact-setup.js';
 import { useState, useEffect } from 'preact/hooks';
@@ -9,13 +9,11 @@ import { toast } from '../store.js';
 import { Banner, Spinner } from '../ui.js';
 import { watchOffers, watchOfferTakes, saveOffer, closeOffer, canDecideCounter, decideCounter } from '../api.js';
 import {
-  TIERS, defaultForm, offerDays, offerWaves, buildOfferFields, offerLabel, offerStatusWord, shownOffers,
-  takeStatus, timeLabel, dayLabel, dayOffers, stripHead, offerCounts, countsLabel, stripStatus,
+  TIERS, defaultForm, offerDays, offerWaves, buildOfferFields, offerLabel, takeStatus, timeLabel, dayLabel,
+  dayOffers, upcomingGroups, stripHead, offerCounts, countsLabel, stripStatus,
 } from './offers-model.js';
 
-const STATUS_CHIP = { open: 'green', filled: 'blue', closed: 'gray' };
-
-// One schedule_offers listener for the card's list and the day strip (both mounted together).
+// One schedule_offers listener however many strips are mounted.
 const feed = { rows: undefined, subs: new Set(), un: null };
 function useOffers() {
   const [rows, setRows] = useState(feed.rows);
@@ -42,20 +40,10 @@ function TierChecks({ list, onChange, name }) {
 const hoursBox = (value, onInput, label) => html`<input type="number" min="1" max="168" step="1" class="of-num"
   value=${value} onInput=${(e) => onInput(e.target.value)} aria-label=${label} />`;
 
-// days = the shown week's view.days; today = 'YYYY-MM-DD'
-export function Offers({ days, today }) {
-  return html`<div class="card" id="lv-offers">
-    <h2>VET / VTO</h2>
-    <${OfferForm} days=${days} today=${today} uid="c" />
-    <h3>Open offers</h3>
-    <${OfferList} today=${today} />
-  </div>`;
-}
-
-// The "Post an offer" form: the card's, and the day strip's inline one (Jose 2026-10-13).
-// date = the day it opens on; onDone = after a post (the strip folds it); onCancel shows a Cancel;
-// uid keeps two forms' radio names apart.
-function OfferForm({ days, today, date, onDone, onCancel, uid }) {
+// The "Post an offer" form, opened inline in the strip. days = the shown week's view.days;
+// today = 'YYYY-MM-DD'; date = the day it opens on (the first day left when it isn't postable);
+// onDone = after a post; onCancel shows a Cancel; uid keeps radio names apart.
+function OfferForm({ days, today, date, onDone, onCancel, uid = 's' }) {
   const choices = offerDays(days, today);
   const [f, setF] = useState(() => ({ ...defaultForm(), date: date || '' }));
   const [busy, setBusy] = useState(false);
@@ -152,44 +140,6 @@ function OfferForm({ days, today, date, onDone, onCancel, uid }) {
   </div>`;
 }
 
-function OfferList({ today }) {
-  const rows = useOffers();                      // undefined = loading, null = refused
-  const [open, setOpen] = useState({});          // {id: true} expanded
-  if (rows === undefined) return html`<p class="muted"><${Spinner}/> Loading offers…</p>`;
-  if (rows === null) return html`<${Banner} kind="err">Could not read the offers.<//>`;
-  const list = shownOffers(rows, today);
-  if (!list.length) return html`<p class="muted">No offers this week or later.</p>`;
-  return html`<ul class="of-list">${list.map((o) => html`<${OfferRow} o=${o} key=${o.id} expanded=${!!open[o.id]}
-    onToggle=${() => setOpen((s) => ({ ...s, [o.id]: !s[o.id] }))} />`)}</ul>`;
-}
-
-function OfferRow({ o, expanded, onToggle }) {
-  const [busy, setBusy] = useState(false);
-  async function close() {
-    if (!window.confirm(`Close this offer (${offerLabel(o)})? Drivers won't be able to take it any more.`)) return;
-    setBusy(true);
-    try { await closeOffer(o.id); toast('Offer closed.'); } catch (e) { toast('Could not close it: ' + (e.message || e), 'err'); }
-    setBusy(false);
-  }
-  return html`<li class="of-row">
-    <div class="row">
-      <button class="link" aria-expanded=${expanded} onClick=${onToggle}>${expanded ? '▾' : '▸'} ${offerLabel(o)}</button>
-      <span class=${'chip ' + (STATUS_CHIP[o.status] || 'green')}>${offerStatusWord(o)}</span>
-      ${o.status === 'open' ? html`<button class="small" disabled=${busy} onClick=${close}>Close</button>` : ''}
-    </div>
-    ${expanded ? html`<div class="of-indent">
-      <div class="muted">Posted by ${o.by || '—'}${o.at ? ' · ' + timeLabel(o.at) : ''}${o.note ? html` · <i>${o.note}</i>` : ''}</div>
-      <${Takes} o=${o} />
-    </div>` : ''}
-  </li>`;
-}
-
-function Takes({ o }) {
-  const [takes, setTakes] = useState(undefined);
-  useEffect(() => watchOfferTakes(o.id, (t) => setTakes(t)), [o.id]);
-  return html`<${TakesList} o=${o} takes=${takes} />`;
-}
-
 // who took an offer (undefined = loading, null = refused); counters get Yes / No
 function TakesList({ o, takes }) {
   const [busy, setBusy] = useState('');          // the tid being answered
@@ -214,38 +164,65 @@ function TakesList({ o, takes }) {
   })}</ul>`;
 }
 
-// The day strip (Jose 2026-10-13): the picked day's offers at the top of the Live board — the
-// computer's "Working on:" single day, or the phone's Day view. date = 'YYYY-MM-DD', day = 'Tue';
-// days / today as the card gets them; the Post button opens the card's form right here.
-export function DayStrip({ date, day, days, today }) {
+// The strip at the top of the Live board (Jose 2026-10-13). One day picked (the computer's
+// "Working on:" single day, or the phone's Day view): date + day -> that day's offers.
+// Otherwise (All days, several days, the phone's Week view): every offer from today on, by day,
+// only the picked dates when dates is a list. days / today: the shown week's view.days and today.
+export function OffersStrip({ date, day, dates, days, today }) {
   const rows = useOffers();
   const [open, setOpen] = useState({});
   const [posting, setPosting] = useState(false);
-  useEffect(() => setPosting(false), [date]);
-  const canPost = offerDays(days, today).some((x) => x.date === date);
-  if (rows === undefined || rows === null) return '';
-  const list = dayOffers(rows, date);
-  return html`<div class="of-strip" aria-label=${'VET / VTO on ' + dayLabel(date)}>
-    ${list.length ? html`<div class="of-strip-h">VET / VTO · ${dayLabel(date)}</div>
-      <ul class="of-strip-list">${list.map((o) => html`<${StripRow} o=${o} key=${o.id} expanded=${!!open[o.id]}
-        onToggle=${() => setOpen((s) => ({ ...s, [o.id]: !s[o.id] }))} />`)}</ul>`
-      : html`<div class="of-strip-h">No VET / VTO for ${day}</div>`}
-    ${canPost && posting ? html`<div class="of-strip-form"><${OfferForm} days=${days} today=${today} date=${date} uid="s"
+  const one = !!date;
+  const key = one ? date : (dates || []).join(',');
+  useEffect(() => setPosting(false), [key]);
+  const postable = offerDays(days, today);
+  const canPost = one ? postable.some((x) => x.date === date) : postable.length > 0;
+  if (rows === undefined) return '';
+  if (rows === null) return html`<div class="of-strip"><span class="muted">Could not read the VET / VTO offers.</span></div>`;
+  const toggle = (id) => setOpen((s) => ({ ...s, [id]: !s[id] }));
+  const list = (offers) => html`<ul class="of-strip-list">${offers.map((o) => html`<${StripRow} o=${o} key=${o.id}
+    expanded=${!!open[o.id]} onToggle=${() => toggle(o.id)} />`)}</ul>`;
+  let body;
+  if (one) {
+    const offers = dayOffers(rows, date);
+    body = offers.length ? html`<div class="of-strip-h">VET / VTO · ${dayLabel(date)}</div>${list(offers)}`
+      : html`<div class="of-strip-h">No VET / VTO for ${day}</div>`;
+  } else {
+    const groups = upcomingGroups(rows, today, dates);
+    body = groups.length ? html`<div class="of-strip-h">VET / VTO · upcoming</div>
+      ${groups.map((g) => html`<div class="of-strip-day" key=${g.date}>${g.label}</div>${list(g.offers)}`)}`
+      : html`<div class="of-strip-h">No upcoming VET / VTO</div>`;
+  }
+  return html`<div class="of-strip" aria-label="VET / VTO">
+    ${body}
+    ${canPost && posting ? html`<div class="of-strip-form"><${OfferForm} days=${days} today=${today} date=${one ? date : today}
       onDone=${() => setPosting(false)} onCancel=${() => setPosting(false)} /></div>`
-      : canPost ? html`<button class="small" onClick=${() => setPosting(true)}>Post an offer for ${day}</button>` : ''}
+      : canPost ? html`<button class="small" onClick=${() => setPosting(true)}>${one ? `Post an offer for ${day}` : 'Post an offer'}</button>` : ''}
   </div>`;
 }
 
+// One offer: what, counts, status; open -> who posted it, Close, who took it.
 function StripRow({ o, expanded, onToggle }) {
   const [takes, setTakes] = useState(undefined);
+  const [busy, setBusy] = useState(false);
   useEffect(() => watchOfferTakes(o.id, (t) => setTakes(t)), [o.id]);
   const c = offerCounts(o, takes);
   const st = stripStatus(o, c);
+  async function close() {
+    if (!window.confirm(`Close this offer (${offerLabel(o)})? Drivers won't be able to take it any more.`)) return;
+    setBusy(true);
+    try { await closeOffer(o.id); toast('Offer closed.'); } catch (e) { toast('Could not close it: ' + (e.message || e), 'err'); }
+    setBusy(false);
+  }
   return html`<li class="of-strip-row">
     <button class="link of-strip-btn" aria-expanded=${expanded} onClick=${onToggle}>
       <span>${expanded ? '▾' : '▸'} <b>${stripHead(o)}</b></span>
       <span class="muted">${countsLabel(c)}</span>
       <span class=${'chip ' + st.chip}>${st.word}</span></button>
-    ${expanded ? html`<div class="of-indent"><${TakesList} o=${o} takes=${takes} /></div>` : ''}
+    ${expanded ? html`<div class="of-indent">
+      <div class="row"><span class="muted">Posted by ${o.by || '—'}${o.at ? ' · ' + timeLabel(o.at) : ''}${o.note ? html` · <i>${o.note}</i>` : ''}</span>
+        ${o.status === 'open' ? html`<button class="small" disabled=${busy} onClick=${close}>Close</button>` : ''}</div>
+      <${TakesList} o=${o} takes=${takes} />
+    </div>` : ''}
   </li>`;
 }

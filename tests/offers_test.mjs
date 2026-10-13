@@ -2,7 +2,7 @@
 // saveScheduleOffer, the row labels, the take status words.   node tests/offers_test.mjs
 import {
   TIERS, defaultForm, dayLabel, timeLabel, offerDays, offerWaves, buildOfferFields, offerWhat, offerLabel,
-  offerStatusWord, shownOffers, takeStatus, whyText, dayOffers, stripHead, offerCounts, countsLabel, stripStatus,
+  takeStatus, whyText, dayOffers, upcomingGroups, stripHead, offerCounts, countsLabel, stripStatus,
 } from '../public/app/live/offers-model.js';
 
 let pass = 0, fail = 0;
@@ -80,12 +80,8 @@ eq('offerLabel VET backup any wave', offerLabel({ ...vet, role: 'backup', wave: 
 eq('offerLabel VTO', offerLabel({ kind: 'vto', date: '2026-10-15', wave: '', slots: 2, taken: 2 }), 'VTO · Thu Oct 15 · day off · 2 of 2 taken');
 eq('offerWhat no taken field', offerLabel({ kind: 'vet', date: '2026-10-17', role: 'road', wave: '', slots: 1 }), 'VET · Sat Oct 17 · route, any wave · 0 of 1 taken');
 eq('offerWhat', offerWhat({ kind: 'vet', role: 'backup', wave: '11:05 AM' }), '11:05 AM backup');
-eq('status words', ['open', 'filled', 'closed', undefined].map((s) => offerStatusWord({ status: s })), ['Open', 'Filled', 'Closed', 'Open']);
 const rows = [{ id: 'old', week: '2026-10-04', date: '2026-10-09' }, { id: 'this', week: '2026-10-11', date: '2026-10-12' },
   { id: 'next', week: '2026-10-18', date: '2026-10-20' }];
-eq('shownOffers: this week and later', shownOffers(rows, '2026-10-14').map((o) => o.id), ['this', 'next']);
-eq('shownOffers on a Sunday', shownOffers(rows, '2026-10-11').map((o) => o.id), ['this', 'next']);
-eq('shownOffers null', shownOffers(null, '2026-10-14'), []);
 
 // --- take status words
 const decideAt = new Date(2026, 9, 13, 18, 0).getTime();
@@ -119,6 +115,13 @@ const dayRows = [
 eq('dayOffers: that day, VET by wave, any wave last, VTO after', dayOffers(dayRows, '2026-10-13').map((o) => o.id), ['early', 'late', 'any', 'vto']);
 eq('dayOffers none', dayOffers(dayRows, '2026-10-15'), []);
 eq('dayOffers null', dayOffers(null, '2026-10-13'), []);
+const past = { id: 'past', kind: 'vet', role: 'road', wave: '', date: '2026-10-12', slots: 1, at: 0 };
+const ug = upcomingGroups([...dayRows, past], '2026-10-13');
+eq('upcomingGroups: today on, by day', ug.map((g) => [g.date, g.label, g.offers.map((o) => o.id)]),
+  [['2026-10-13', 'Tue Oct 13', ['early', 'late', 'any', 'vto']], ['2026-10-14', 'Wed Oct 14', ['other']]]);
+eq('upcomingGroups picked dates', upcomingGroups([...dayRows, past], '2026-10-13', ['2026-10-14', '2026-10-12']).map((g) => g.date), ['2026-10-14']);
+eq('upcomingGroups empty pick = all', upcomingGroups(dayRows, '2026-10-14', []).map((g) => g.date), ['2026-10-14']);
+eq('upcomingGroups null', upcomingGroups(null, '2026-10-13'), []);
 eq('stripHead route', stripHead(dayRows[3]), 'VET · 10:45 AM route');
 eq('stripHead backup any wave', stripHead(dayRows[1]), 'VET · backup, any wave');
 eq('stripHead VTO', stripHead(dayRows[0]), 'VTO · day off');

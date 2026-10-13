@@ -314,8 +314,8 @@ export function timeoffOnce(weekISO, ms = 6000) {
 }
 
 // VET / VTO offers for drivers (Driver App SPEC-v2 §6, 2026-10-12): Firestore schedule_offers/{id}
-// + takes/{tid}, posted and closed from the Live board's offers card (live/offers.js). Field names:
-// jajb.js saveScheduleOffer. An older jajb.js has none of these: canOffers() is false and the card stays hidden.
+// + takes/{tid}, posted and closed from the Live board's VET / VTO strip (live/offers.js). Field names:
+// jajb.js saveScheduleOffer. An older jajb.js has none of these: canOffers() is false and the strip stays hidden.
 export const canOffers = () => onFirebase() && typeof window.JAJB.watchScheduleOffers === 'function'
   && typeof window.JAJB.saveScheduleOffer === 'function' && typeof window.JAJB.closeScheduleOffer === 'function';
 // week (its Sunday) | null (every offer dated from 14 days ago on) -> cb(rows | null when refused)
