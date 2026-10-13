@@ -145,3 +145,39 @@ export function takeStatus(t, o) {
     default: return { text: String(t.status || ''), ask: false };
   }
 }
+
+// --- The day strip (Jose 2026-10-13): one picked day's offers at the top of the Live board.
+
+// That day's offers, VET before VTO, then by wave (any wave last), then oldest first.
+export function dayOffers(rows, date) {
+  return (rows || []).filter((o) => o && o.date === date).slice().sort((a, b) =>
+    (a.kind === 'vto') - (b.kind === 'vto') || (a.wave ? waveMins(a.wave) : 9998) - (b.wave ? waveMins(b.wave) : 9998)
+    || (Number(a.at) || 0) - (Number(b.at) || 0));
+}
+
+// "VET · 10:45 AM route" / "VET · backup, any wave" / "VTO · day off"
+export const stripHead = (o) => `${o.kind === 'vto' ? 'VTO' : 'VET'} · ${offerWhat(o)}`;
+
+// takes -> {offered, taken, waiting}: taken = approved / on the board, waiting = waiting + counters to answer.
+// takes undefined/null (not read yet): taken falls back to the offer's own count.
+export function offerCounts(o, takes) {
+  const offered = Number(o && o.slots) || 0;
+  if (!Array.isArray(takes)) return { offered, taken: Number(o && o.taken) || 0, waiting: 0 };
+  let taken = 0, waiting = 0;
+  for (const t of takes) {
+    if (!t) continue;
+    if (t.status === 'approved' || t.status === 'applied') taken++;
+    else if (t.status === 'waiting' || (t.status === 'pending' && t.counter)) waiting++;
+  }
+  return { offered, taken, waiting };
+}
+
+// "3 offered · 1 taken · 1 waiting" ("· 0 waiting" left out)
+export const countsLabel = (c) => `${c.offered} offered · ${c.taken} taken${c.waiting ? ` · ${c.waiting} waiting` : ''}`;
+
+// The strip's chip: {word, chip}: closed (grey), full (grey: filled, or every spot taken), else open (green).
+export function stripStatus(o, c) {
+  if (o.status === 'closed') return { word: 'closed', chip: 'gray' };
+  if (o.status === 'filled' || (c && c.offered > 0 && c.taken >= c.offered)) return { word: 'full', chip: 'gray' };
+  return { word: 'open', chip: 'green' };
+}

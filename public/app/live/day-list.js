@@ -33,7 +33,7 @@ export function DayPills({ view, day, today, onPick }) {
 }
 
 export function DayList({ view, viewRT, day, match, searching, Block, subLine, routeFor, bkFor, markOf, notes, lates, risks,
-  ready, busy, onCell, onCounts, onFind }) {
+  ready, busy, onCell, onCounts, onFind, strip }) {
   const dd = view.days.find((x) => x.day === day) || view.days[0];
   const date = parseISODate(dd.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   const g = { wave: {}, bk: [], trainer: [], other: [], rt: [], out: [], left: [], off: [], free: [] };
@@ -104,6 +104,7 @@ export function DayList({ view, viewRT, day, match, searching, Block, subLine, r
         <span class=${openR ? 'lv-bad' : ''}>${dd.routes_filled}/${dd.routes} routes</span>
         <span class=${openB ? 'lv-warnc' : ''}> · ${dd.backup_filled}/${dd.backup} backups</span></button>
     </div>
+    ${strip || ''}
     ${openR || openB ? html`<div class="lvd-open">
       ${openR ? html`<button class="small" onClick=${() => onFind(dd.day, 'road')}>${openR} route${openR === 1 ? '' : 's'} open — find someone</button>` : ''}
       ${openB ? html`<button class="small" onClick=${() => onFind(dd.day, 'backup')}>${openB} backup${openB === 1 ? '' : 's'} open — find someone</button>` : ''}

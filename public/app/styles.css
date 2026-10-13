@@ -821,13 +821,23 @@ table.lv-grid { font-size: 12.5px; }
 }
 
 /* VET / VTO offers card on the Live board (live/offers.js, 2026-10-12) */
-#lv-offers .of-fields { align-items: flex-end; gap: 14px; }
-#lv-offers div.fld { display: block; margin: 10px 0; }
-#lv-offers div.fld > span { display: block; font-weight: 600; margin-bottom: 5px; font-size: 12.5px; color: var(--ink2); }
-#lv-offers .of-num { width: 72px; }
-#lv-offers .of-indent { margin: 4px 0 8px 24px; }
-#lv-offers .of-tiers { gap: 6px 14px; margin: 4px 0 6px; }
+#lv-offers .of-fields, .of-form .of-fields { align-items: flex-end; gap: 14px; }
+#lv-offers div.fld, .of-form div.fld { display: block; margin: 10px 0; }
+#lv-offers div.fld > span, .of-form div.fld > span { display: block; font-weight: 600; margin-bottom: 5px; font-size: 12.5px; color: var(--ink2); }
+#lv-offers .of-num, .of-form .of-num { width: 72px; }
+#lv-offers .of-indent, .of-form .of-indent { margin: 4px 0 8px 24px; }
+#lv-offers .of-tiers, .of-form .of-tiers { gap: 6px 14px; margin: 4px 0 6px; }
 #lv-offers .of-list, #lv-offers .of-takes { list-style: none; padding: 0; margin: 6px 0; }
 #lv-offers .of-row { padding: 6px 0; border-top: 1px solid var(--line); }
 #lv-offers .of-takes li { gap: 8px; padding: 3px 0; font-size: 13px; }
 #lv-offers .of-row button.link { text-align: left; }
+/* the day strip (Jose 2026-10-13): the picked day's VET / VTO above the grid / under the phone's day heading */
+.of-strip { background: #fff7f1; border-left: 4px solid #df7332; border-radius: 6px; padding: 8px 12px; margin: 8px 0 10px; }
+.of-strip-h { font-weight: 700; font-size: 13.5px; margin-bottom: 6px; }
+.of-strip-list { list-style: none; padding: 0; margin: 0 0 8px; }
+.of-strip-row { background: #fff; border-radius: 5px; padding: 6px 10px; margin: 0 0 4px; }
+.of-strip-row button.of-strip-btn { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; width: 100%; text-align: left; }
+.of-strip-row .of-indent { margin: 4px 0 2px 18px; }
+.of-strip-row .of-takes { list-style: none; padding: 0; margin: 4px 0; }
+.of-strip-form { background: #fff; border-radius: 5px; padding: 2px 12px 8px; margin: 4px 0 2px; }
+.of-strip-row .of-takes li { gap: 8px; padding: 3px 0; font-size: 13px; }

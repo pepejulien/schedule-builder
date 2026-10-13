@@ -10,10 +10,26 @@ import { Banner, Spinner } from '../ui.js';
 import { watchOffers, watchOfferTakes, saveOffer, closeOffer, canDecideCounter, decideCounter } from '../api.js';
 import {
   TIERS, defaultForm, offerDays, offerWaves, buildOfferFields, offerLabel, offerStatusWord, shownOffers,
-  takeStatus, timeLabel,
+  takeStatus, timeLabel, dayLabel, dayOffers, stripHead, offerCounts, countsLabel, stripStatus,
 } from './offers-model.js';
 
 const STATUS_CHIP = { open: 'green', filled: 'blue', closed: 'gray' };
+
+// One schedule_offers listener for the card's list and the day strip (both mounted together).
+const feed = { rows: undefined, subs: new Set(), un: null };
+function useOffers() {
+  const [rows, setRows] = useState(feed.rows);
+  useEffect(() => {
+    feed.subs.add(setRows);
+    if (!feed.un) feed.un = watchOffers(null, (r) => { feed.rows = r; feed.subs.forEach((f) => f(r)); });
+    else setRows(feed.rows);
+    return () => {
+      feed.subs.delete(setRows);
+      if (!feed.subs.size) { const un = feed.un; feed.un = null; feed.rows = undefined; if (un) un(); }
+    };
+  }, []);
+  return rows;
+}
 
 function TierChecks({ list, onChange, name }) {
   const flip = (t) => onChange(list.includes(t) ? list.filter((x) => x !== t) : [...list, t]);
@@ -28,8 +44,20 @@ const hoursBox = (value, onInput, label) => html`<input type="number" min="1" ma
 
 // days = the shown week's view.days; today = 'YYYY-MM-DD'
 export function Offers({ days, today }) {
+  return html`<div class="card" id="lv-offers">
+    <h2>VET / VTO</h2>
+    <${OfferForm} days=${days} today=${today} uid="c" />
+    <h3>Open offers</h3>
+    <${OfferList} today=${today} />
+  </div>`;
+}
+
+// The "Post an offer" form: the card's, and the day strip's inline one (Jose 2026-10-13).
+// date = the day it opens on; onDone = after a post (the strip folds it); onCancel shows a Cancel;
+// uid keeps two forms' radio names apart.
+function OfferForm({ days, today, date, onDone, onCancel, uid }) {
   const choices = offerDays(days, today);
-  const [f, setF] = useState(defaultForm);
+  const [f, setF] = useState(() => ({ ...defaultForm(), date: date || '' }));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const set = (patch) => { setErr(''); setF((o) => ({ ...o, ...patch })); };
@@ -49,14 +77,14 @@ export function Offers({ days, today }) {
       await saveOffer(r.fields);
       toast('Offer posted.');
       setF((o) => ({ ...defaultForm(), kind: o.kind, date: o.date }));
+      if (onDone) onDone();
     } catch (e) {
       setErr('Could not post the offer: ' + (e.message || e));
     } finally { setBusy(false); }
   }
 
-  return html`<div class="card" id="lv-offers">
-    <h2>VET / VTO</h2>
-
+  const to = 'of-to-' + uid, md = 'of-mode-' + uid, mw = 'of-mode-w-' + uid;
+  return html`<div class="of-form">
     <h3>Post an offer</h3>
     <div class="seg" role="group" aria-label="Kind of offer">
       <button class=${vet ? 'on' : ''} aria-pressed=${vet} onClick=${() => set({ kind: 'vet' })}>VET — extra shift</button>
@@ -84,9 +112,9 @@ export function Offers({ days, today }) {
     </div>
 
     <h3>Send to</h3>
-    <label class="row lv-radio"><input type="radio" name="of-to" checked=${f.sendTo === 'all'}
+    <label class="row lv-radio"><input type="radio" name=${to} checked=${f.sendTo === 'all'}
       onChange=${() => set({ sendTo: 'all' })} /><span>Everyone</span></label>
-    <label class="row lv-radio"><input type="radio" name="of-to" checked=${f.sendTo === 'groups'}
+    <label class="row lv-radio"><input type="radio" name=${to} checked=${f.sendTo === 'groups'}
       onChange=${() => set({ sendTo: 'groups' })} /><span>Pick groups</span></label>
     ${f.sendTo === 'groups' ? html`<div class="of-indent">
       <${TierChecks} list=${f.tiers} name="Tiers to send to" onChange=${(tiers) => set({ tiers })} />
@@ -97,12 +125,12 @@ export function Offers({ days, today }) {
     </div>` : ''}
 
     <h3>Approval</h3>
-    <label class="row lv-radio"><input type="radio" name="of-mode" checked=${f.mode === 'fcfs'}
+    <label class="row lv-radio"><input type="radio" name=${md} checked=${f.mode === 'fcfs'}
       onChange=${() => set({ mode: 'fcfs' })} /><span>First come, first served</span></label>
-    <div class="row lv-radio" style="align-items:center"><input type="radio" name="of-mode" id="of-mode-w" checked=${f.mode === 'window'}
-      onChange=${() => set({ mode: 'window' })} /><label for="of-mode-w">Wait</label>
+    <div class="row lv-radio" style="align-items:center"><input type="radio" name=${md} id=${mw} checked=${f.mode === 'window'}
+      onChange=${() => set({ mode: 'window' })} /><label for=${mw}>Wait</label>
       ${hoursBox(f.windowHours, (v) => set({ windowHours: v, mode: 'window' }), 'Hours to wait')}
-      <label for="of-mode-w">hours, then pick</label></div>
+      <label for=${mw}>hours, then pick</label></div>
     ${f.mode === 'window' ? html`<div class="of-indent">
       <div class="muted">Approve right away:</div>
       <${TierChecks} list=${f.prTiers} name="Tiers approved right away" onChange=${(prTiers) => set({ prTiers })} />
@@ -118,18 +146,15 @@ export function Offers({ days, today }) {
     ${err ? html`<${Banner} kind="err">${err}<//>` : ''}
     <div class="row">
       <button class="primary" disabled=${busy || !choices.length} onClick=${post}>Post</button>
+      ${onCancel ? html`<button disabled=${busy} onClick=${onCancel}>Cancel</button>` : ''}
       ${busy ? html`<span><${Spinner}/> Posting…</span>` : ''}
     </div>
-
-    <h3>Open offers</h3>
-    <${OfferList} today=${today} />
   </div>`;
 }
 
 function OfferList({ today }) {
-  const [rows, setRows] = useState(undefined);   // undefined = loading, null = refused
+  const rows = useOffers();                      // undefined = loading, null = refused
   const [open, setOpen] = useState({});          // {id: true} expanded
-  useEffect(() => watchOffers(null, (r) => setRows(r)), []);
   if (rows === undefined) return html`<p class="muted"><${Spinner}/> Loading offers…</p>`;
   if (rows === null) return html`<${Banner} kind="err">Could not read the offers.<//>`;
   const list = shownOffers(rows, today);
@@ -161,8 +186,13 @@ function OfferRow({ o, expanded, onToggle }) {
 
 function Takes({ o }) {
   const [takes, setTakes] = useState(undefined);
-  const [busy, setBusy] = useState('');          // the tid being answered
   useEffect(() => watchOfferTakes(o.id, (t) => setTakes(t)), [o.id]);
+  return html`<${TakesList} o=${o} takes=${takes} />`;
+}
+
+// who took an offer (undefined = loading, null = refused); counters get Yes / No
+function TakesList({ o, takes }) {
+  const [busy, setBusy] = useState('');          // the tid being answered
   if (takes === undefined) return html`<p class="muted"><${Spinner}/> Loading…</p>`;
   if (takes === null) return html`<p class="muted">Could not read who took it.</p>`;
   if (!takes.length) return html`<p class="muted">Nobody has taken it yet.</p>`;
@@ -182,4 +212,40 @@ function Takes({ o }) {
         <button class="small" disabled=${!!busy} onClick=${() => answer(t, false)}>No</button>` : ''}
     </li>`;
   })}</ul>`;
+}
+
+// The day strip (Jose 2026-10-13): the picked day's offers at the top of the Live board — the
+// computer's "Working on:" single day, or the phone's Day view. date = 'YYYY-MM-DD', day = 'Tue';
+// days / today as the card gets them; the Post button opens the card's form right here.
+export function DayStrip({ date, day, days, today }) {
+  const rows = useOffers();
+  const [open, setOpen] = useState({});
+  const [posting, setPosting] = useState(false);
+  useEffect(() => setPosting(false), [date]);
+  const canPost = offerDays(days, today).some((x) => x.date === date);
+  if (rows === undefined || rows === null) return '';
+  const list = dayOffers(rows, date);
+  return html`<div class="of-strip" aria-label=${'VET / VTO on ' + dayLabel(date)}>
+    ${list.length ? html`<div class="of-strip-h">VET / VTO · ${dayLabel(date)}</div>
+      <ul class="of-strip-list">${list.map((o) => html`<${StripRow} o=${o} key=${o.id} expanded=${!!open[o.id]}
+        onToggle=${() => setOpen((s) => ({ ...s, [o.id]: !s[o.id] }))} />`)}</ul>`
+      : html`<div class="of-strip-h">No VET / VTO for ${day}</div>`}
+    ${canPost && posting ? html`<div class="of-strip-form"><${OfferForm} days=${days} today=${today} date=${date} uid="s"
+      onDone=${() => setPosting(false)} onCancel=${() => setPosting(false)} /></div>`
+      : canPost ? html`<button class="small" onClick=${() => setPosting(true)}>Post an offer for ${day}</button>` : ''}
+  </div>`;
+}
+
+function StripRow({ o, expanded, onToggle }) {
+  const [takes, setTakes] = useState(undefined);
+  useEffect(() => watchOfferTakes(o.id, (t) => setTakes(t)), [o.id]);
+  const c = offerCounts(o, takes);
+  const st = stripStatus(o, c);
+  return html`<li class="of-strip-row">
+    <button class="link of-strip-btn" aria-expanded=${expanded} onClick=${onToggle}>
+      <span>${expanded ? '▾' : '▸'} <b>${stripHead(o)}</b></span>
+      <span class="muted">${countsLabel(c)}</span>
+      <span class=${'chip ' + st.chip}>${st.word}</span></button>
+    ${expanded ? html`<div class="of-indent"><${TakesList} o=${o} takes=${takes} /></div>` : ''}
+  </li>`;
 }

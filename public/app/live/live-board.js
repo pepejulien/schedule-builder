@@ -33,7 +33,7 @@ import {
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 import { FutureWeek } from './future-week.js';
 import { DayList, DayPills, firstDay } from './day-list.js';
-import { Offers } from './offers.js';
+import { Offers, DayStrip } from './offers.js';
 
 // Roster bookmark (2026-10-09, docs/roster-bookmarklet.md): the link only injects roster.js (next to
 // index.html, absolute, cache-busted), so fixing roster.js fixes every computer's bookmark.
@@ -1356,6 +1356,11 @@ function Board() {
   const canUndo = ready && rep && rep.can_undo;
   const dayMode = small && mode === 'day';
   const vday = pday && view.days.some((x) => x.day === pday) ? pday : firstDay(view, today);
+  // the picked day's VET / VTO strip (one day picked; open days only)
+  const stripFor = (day) => {
+    const d = day && canOffers() ? view.days.find((x) => x.day === day && x.open) : null;
+    return d ? html`<${DayStrip} date=${d.date} day=${d.day} days=${view.days} today=${today} />` : '';
+  };
   const pickMode = (m) => { setMode(m); saveMode(m); };
   const subLine = (x) => html`<div class="lv-sub">Week: ${x.clock_hours ?? x.hours}h${endISO && x.day_hours
     ? html` · <span class=${max7Cls(last7(x.day_hours, endISO))}>Last 7d: ${last7(x.day_hours, endISO)}h</span>` : ''}</div>`;
@@ -1425,7 +1430,7 @@ function Board() {
         match=${(n) => !q.trim() || fold(n).includes(fold(q.trim()))}
         Block=${Block} subLine=${subLine} routeFor=${routeFor} bkFor=${bkFor} markOf=${markOf} notes=${notes} lates=${lates}
         risks=${risks} ready=${ready} busy=${busy} onCell=${(name, day) => setCell({ name, day })}
-        onCounts=${setCounter} onFind=${goFind} />` : html`
+        onCounts=${setCounter} onFind=${goFind} strip=${stripFor(vday)} />` : html`
       <div class="row lv-dayf">
         <span class="muted">Working on:</span>
         <div class="seg" role="group" aria-label="Show only drivers working on these days">
@@ -1440,6 +1445,7 @@ function Board() {
         </div>
         ${dayF.length > 1 ? html`<span class="muted">${bkOnly ? 'on backup' : 'working'} all ${dayF.length} days</span>` : ''}
       </div>
+      ${stripFor(dayF.length === 1 ? dayF[0] : null)}
 
       <div class="scroll-x lv-wrap lv-tall"><table class="lv-grid">
         <thead><tr>

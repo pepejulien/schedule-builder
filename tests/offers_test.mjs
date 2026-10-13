@@ -2,7 +2,7 @@
 // saveScheduleOffer, the row labels, the take status words.   node tests/offers_test.mjs
 import {
   TIERS, defaultForm, dayLabel, timeLabel, offerDays, offerWaves, buildOfferFields, offerWhat, offerLabel,
-  offerStatusWord, shownOffers, takeStatus, whyText,
+  offerStatusWord, shownOffers, takeStatus, whyText, dayOffers, stripHead, offerCounts, countsLabel, stripStatus,
 } from '../public/app/live/offers-model.js';
 
 let pass = 0, fail = 0;
@@ -108,6 +108,31 @@ eq('counter approved', takeStatus({ status: 'approved', counter: true }, vet).te
 eq('counter applied', takeStatus({ status: 'applied', counter: true, role: 'road' }, { ...vet, role: 'backup' }).text, 'On the board — as a route');
 eq('pending, not a counter', takeStatus({ status: 'pending' }, vet), { text: 'Pending', ask: false });
 eq('whyText empty', whyText(''), '');
+
+// --- the day strip
+const dayRows = [
+  { id: 'vto', kind: 'vto', date: '2026-10-13', slots: 2, at: 1 },
+  { id: 'any', kind: 'vet', role: 'backup', wave: '', date: '2026-10-13', slots: 1, at: 2 },
+  { id: 'late', kind: 'vet', role: 'road', wave: '11:25 AM', date: '2026-10-13', slots: 1, at: 3 },
+  { id: 'early', kind: 'vet', role: 'road', wave: '10:45 AM', date: '2026-10-13', slots: 3, at: 4 },
+  { id: 'other', kind: 'vet', role: 'road', wave: '10:45 AM', date: '2026-10-14', slots: 1, at: 5 }];
+eq('dayOffers: that day, VET by wave, any wave last, VTO after', dayOffers(dayRows, '2026-10-13').map((o) => o.id), ['early', 'late', 'any', 'vto']);
+eq('dayOffers none', dayOffers(dayRows, '2026-10-15'), []);
+eq('dayOffers null', dayOffers(null, '2026-10-13'), []);
+eq('stripHead route', stripHead(dayRows[3]), 'VET · 10:45 AM route');
+eq('stripHead backup any wave', stripHead(dayRows[1]), 'VET · backup, any wave');
+eq('stripHead VTO', stripHead(dayRows[0]), 'VTO · day off');
+const tk = [{ status: 'approved' }, { status: 'applied' }, { status: 'waiting' }, { status: 'pending', counter: true },
+  { status: 'pending' }, { status: 'refused' }, { status: 'declined' }];
+eq('offerCounts', offerCounts({ slots: 3 }, tk), { offered: 3, taken: 2, waiting: 2 });
+eq('offerCounts before the takes are read', offerCounts({ slots: 3, taken: 1 }, undefined), { offered: 3, taken: 1, waiting: 0 });
+eq('offerCounts no takes', offerCounts({ slots: 2 }, []), { offered: 2, taken: 0, waiting: 0 });
+eq('countsLabel', countsLabel({ offered: 3, taken: 1, waiting: 1 }), '3 offered · 1 taken · 1 waiting');
+eq('countsLabel no waiting', countsLabel({ offered: 3, taken: 1, waiting: 0 }), '3 offered · 1 taken');
+eq('stripStatus open', stripStatus({ status: 'open' }, { offered: 3, taken: 1 }), { word: 'open', chip: 'green' });
+eq('stripStatus filled', stripStatus({ status: 'filled' }, { offered: 3, taken: 3 }), { word: 'full', chip: 'gray' });
+eq('stripStatus every spot taken', stripStatus({ status: 'open' }, { offered: 2, taken: 2 }).word, 'full');
+eq('stripStatus closed', stripStatus({ status: 'closed' }, { offered: 2, taken: 2 }), { word: 'closed', chip: 'gray' });
 
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { for (const f of fails) console.log('FAIL ' + f); process.exit(1); }
