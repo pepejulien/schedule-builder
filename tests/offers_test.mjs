@@ -130,8 +130,8 @@ const tk = [{ status: 'approved' }, { status: 'applied' }, { status: 'waiting' }
 eq('offerCounts', offerCounts({ slots: 3 }, tk), { offered: 3, taken: 2, waiting: 2 });
 eq('offerCounts before the takes are read', offerCounts({ slots: 3, taken: 1 }, undefined), { offered: 3, taken: 1, waiting: 0 });
 eq('offerCounts no takes', offerCounts({ slots: 2 }, []), { offered: 2, taken: 0, waiting: 0 });
-eq('countsLabel', countsLabel({ offered: 3, taken: 1, waiting: 1 }), '3 offered · 1 taken · 1 waiting');
-eq('countsLabel no waiting', countsLabel({ offered: 3, taken: 1, waiting: 0 }), '3 offered · 1 taken');
+eq('countsLabel', countsLabel({ offered: 3, taken: 1, waiting: 1 }), '3 offered · 1 approved · 1 waiting');
+eq('countsLabel no waiting', countsLabel({ offered: 3, taken: 1, waiting: 0 }), '3 offered · 1 approved');
 eq('stripStatus open', stripStatus({ status: 'open' }, { offered: 3, taken: 1 }), { word: 'open', chip: 'green' });
 eq('stripStatus filled', stripStatus({ status: 'filled' }, { offered: 3, taken: 3 }), { word: 'full', chip: 'gray' });
 eq('stripStatus every spot taken', stripStatus({ status: 'open' }, { offered: 2, taken: 2 }).word, 'full');

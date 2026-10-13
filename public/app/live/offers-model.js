@@ -171,8 +171,8 @@ export function offerCounts(o, takes) {
   return { offered, taken, waiting };
 }
 
-// "3 offered · 1 taken · 1 waiting" ("· 0 waiting" left out)
-export const countsLabel = (c) => `${c.offered} offered · ${c.taken} taken${c.waiting ? ` · ${c.waiting} waiting` : ''}`;
+// "3 offered · 1 approved · 1 waiting" ("· 0 waiting" left out); same word as the day headers
+export const countsLabel = (c) => `${c.offered} offered · ${c.taken} approved${c.waiting ? ` · ${c.waiting} waiting` : ''}`;
 
 // The strip's chip: {word, chip}: closed (grey), full (grey: filled, or every spot taken), else open (green).
 export function stripStatus(o, c) {
