@@ -4,6 +4,7 @@
 import { html } from '../preact-setup.js';
 import { cellInfo, WAVE_COLORS, SHIFT_COLORS } from './live-model.js';
 import { parseISODate } from '../lib/weeks.js';
+import { headCounts } from './offers-model.js';
 
 // "10:05 AM" < "10:25 AM" < "1:05 PM"
 const waveMins = (w) => { const m = String(w).match(/(\d{1,2}):(\d{2}) ([AP]M)/); if (!m) return 9999;
@@ -21,19 +22,20 @@ export function firstDay(view, today) {
   return d.day;
 }
 
-export function DayPills({ view, day, today, onPick }) {
+// dot (optional): date -> the pill's VET / VTO dot
+export function DayPills({ view, day, today, onPick, dot }) {
   return html`<div class="lvd-pills" role="tablist" aria-label="Day">
     ${view.days.map((x) => html`<button role="tab" aria-selected=${x.day === day}
       class=${'lvd-pill' + (x.day === day ? ' on' : '') + (x.date === today ? ' today' : '') + (x.open ? '' : ' closed')}
       onClick=${() => onPick(x.day)}>
-      <b>${x.day}</b><span>${shortDate(x.date)}</span>
+      <b>${x.day}${dot ? dot(x.date) : ''}</b><span>${shortDate(x.date)}</span>
       ${x.open ? html`<small class=${x.routes_filled < x.routes ? 'lv-bad' : ''}>${x.routes_filled}/${x.routes}</small>`
         : html`<small>closed</small>`}</button>`)}
   </div>`;
 }
 
 export function DayList({ view, viewRT, day, match, searching, Block, subLine, routeFor, bkFor, markOf, notes, lates, risks,
-  ready, busy, onCell, onCounts, onFind, strip }) {
+  ready, busy, onCell, onCounts, onFind, strip, onPost, offerLine }) {
   const dd = view.days.find((x) => x.day === day) || view.days[0];
   const date = parseISODate(dd.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   const g = { wave: {}, bk: [], trainer: [], other: [], rt: [], out: [], left: [], off: [], free: [] };
@@ -101,8 +103,10 @@ export function DayList({ view, viewRT, day, match, searching, Block, subLine, r
       <b>${date}</b>
       <button class="lvd-counts" disabled=${!ready || busy} onClick=${() => onCounts(dd.day)}
         title="Routes and backups filled / needed — tap to change the counts">
-        <span class=${openR ? 'lv-bad' : ''}>${dd.routes_filled}/${dd.routes} routes</span>
-        <span class=${openB ? 'lv-warnc' : ''}> · ${dd.backup_filled}/${dd.backup} backups</span></button>
+        <span class=${openR ? 'lv-bad' : ''}>${headCounts(dd).drivers}</span>
+        <span class=${openB ? 'lv-warnc' : ''}> · ${headCounts(dd).backups}</span></button>
+      ${onPost ? html`<button class="primary small" onClick=${() => onPost(dd.date)}>Post an offer</button>` : ''}
+      ${offerLine ? html`<div class="lvd-offers">${offerLine(dd.date)}</div>` : ''}
     </div>
     ${strip || ''}
     ${openR || openB ? html`<div class="lvd-open">

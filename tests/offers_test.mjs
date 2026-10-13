@@ -2,7 +2,7 @@
 // saveScheduleOffer, the row labels, the take status words.   node tests/offers_test.mjs
 import {
   TIERS, defaultForm, dayLabel, timeLabel, offerDays, offerWaves, buildOfferFields, offerWhat, offerLabel,
-  takeStatus, whyText, dayOffers, upcomingGroups, stripHead, offerCounts, countsLabel, stripStatus,
+  takeStatus, whyText, dayOffers, upcomingGroups, headCounts, daySummary, daySummaryLabel, hasOpenOffer, stripHead, offerCounts, countsLabel, stripStatus,
 } from '../public/app/live/offers-model.js';
 
 let pass = 0, fail = 0;
@@ -136,6 +136,26 @@ eq('stripStatus open', stripStatus({ status: 'open' }, { offered: 3, taken: 1 })
 eq('stripStatus filled', stripStatus({ status: 'filled' }, { offered: 3, taken: 3 }), { word: 'full', chip: 'gray' });
 eq('stripStatus every spot taken', stripStatus({ status: 'open' }, { offered: 2, taken: 2 }).word, 'full');
 eq('stripStatus closed', stripStatus({ status: 'closed' }, { offered: 2, taken: 2 }), { word: 'closed', chip: 'gray' });
+
+// --- day headers
+eq('headCounts', headCounts({ routes_filled: 31, routes: 32, backup_filled: 6, backup: 8 }), { drivers: '31/32 drivers', backups: '6/8 backups' });
+const hdr = [
+  { id: 'a', kind: 'vet', date: '2026-10-13', slots: 2, taken: 1, status: 'open' },
+  { id: 'b', kind: 'vet', date: '2026-10-13', slots: 1, taken: 0, status: 'filled' },
+  { id: 'c', kind: 'vto', date: '2026-10-13', slots: 2, taken: 0, status: 'open' },
+  { id: 'x', kind: 'vto', date: '2026-10-13', slots: 5, taken: 0, status: 'closed' },
+  { id: 'd', kind: 'vet', date: '2026-10-14', slots: 1, taken: 0, status: 'filled' }];
+const hTakes = { a: [{ status: 'approved' }, { status: 'waiting' }], b: [{ status: 'applied', counter: true }],
+  c: [{ status: 'approved' }, { status: 'applied' }, { status: 'pending', counter: true }] };
+eq('daySummary', daySummary(hdr, '2026-10-13', hTakes), [
+  { kind: 'vet', offered: 3, approved: 2, waiting: 1 }, { kind: 'vto', offered: 2, approved: 2, waiting: 1 }]);
+eq('daySummary takes not read yet', daySummary(hdr, '2026-10-13', {}), [
+  { kind: 'vet', offered: 3, approved: 1, waiting: 0 }, { kind: 'vto', offered: 2, approved: 0, waiting: 0 }]);
+eq('daySummary only closed', daySummary([hdr[3]], '2026-10-13', {}), []);
+eq('daySummary none', daySummary(null, '2026-10-13'), []);
+eq('daySummaryLabel', daySummaryLabel({ kind: 'vet', offered: 3, approved: 1, waiting: 0 }), 'VET 3 · 1 approved');
+eq('daySummaryLabel waiting', daySummaryLabel({ kind: 'vto', offered: 2, approved: 2, waiting: 1 }), 'VTO 2 · 2 approved · 1 waiting');
+eq('hasOpenOffer', [hasOpenOffer(hdr, '2026-10-13'), hasOpenOffer(hdr, '2026-10-14'), hasOpenOffer(null, '2026-10-13')], [true, false, false]);
 
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { for (const f of fails) console.log('FAIL ' + f); process.exit(1); }

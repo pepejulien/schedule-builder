@@ -10,7 +10,7 @@ import { Banner, Spinner } from '../ui.js';
 import { watchOffers, watchOfferTakes, saveOffer, closeOffer, canDecideCounter, decideCounter } from '../api.js';
 import {
   TIERS, defaultForm, offerDays, offerWaves, buildOfferFields, offerLabel, takeStatus, timeLabel, dayLabel,
-  dayOffers, upcomingGroups, stripHead, offerCounts, countsLabel, stripStatus,
+  dayOffers, upcomingGroups, stripHead, offerCounts, countsLabel, stripStatus, daySummary, daySummaryLabel, hasOpenOffer,
 } from './offers-model.js';
 
 // One schedule_offers listener however many strips are mounted.
@@ -27,6 +27,57 @@ function useOffers() {
     };
   }, []);
   return rows;
+}
+
+// One takes listener per offer, shared by the strip's row and the day header (refcounted).
+const takeFeeds = new Map();                     // offerId -> {rows, subs, un}
+function subTakes(id, fn) {
+  let f = takeFeeds.get(id);
+  if (!f) {
+    f = { rows: undefined, subs: new Set(), un: null };
+    takeFeeds.set(id, f);
+    f.un = watchOfferTakes(id, (t) => { f.rows = t; f.subs.forEach((s) => s(t)); });
+  }
+  f.subs.add(fn);
+  if (f.rows !== undefined) fn(f.rows);
+  return () => {
+    f.subs.delete(fn);
+    if (!f.subs.size) { takeFeeds.delete(id); if (f.un) f.un(); }
+  };
+}
+function useTakes(id) {
+  const [t, setT] = useState(() => (takeFeeds.get(id) || {}).rows);
+  useEffect(() => subTakes(id, setT), [id]);
+  return t;
+}
+// {offerId: takes} for these offers (ids in a stable order)
+function useTakesMap(ids) {
+  const [map, setMap] = useState({});
+  const key = ids.join(',');
+  useEffect(() => {
+    const uns = ids.map((id) => subTakes(id, (t) => setMap((m) => (m[id] === t ? m : { ...m, [id]: t }))));
+    return () => uns.forEach((u) => u());
+  }, [key]);
+  return map;
+}
+
+// A day header's VET / VTO line (offers that aren't closed): "VET 3 · 1 approved · 1 waiting".
+// onPick (optional) makes it a button. Nothing when the day has none.
+export function OfferDayLine({ date, onPick }) {
+  const rows = useOffers();
+  const ids = (rows || []).filter((o) => o && o.date === date && o.status !== 'closed').map((o) => o.id).sort();
+  const takes = useTakesMap(ids);
+  const sum = daySummary(rows, date, takes);
+  if (!sum.length) return '';
+  const text = sum.map(daySummaryLabel).join(' · ');
+  return onPick ? html`<button class="of-dayline" title="Show this day's VET / VTO" onClick=${onPick}>${sum.map((x) => html`<span>${daySummaryLabel(x)}</span>`)}</button>`
+    : html`<div class="of-dayline" aria-label=${text}>${sum.map((x) => html`<span>${daySummaryLabel(x)}</span>`)}</div>`;
+}
+
+// The phone's day pill dot: that date has an open offer.
+export function OfferDot({ date }) {
+  const rows = useOffers();
+  return hasOpenOffer(rows, date) ? html`<i class="of-dot" aria-label="Open VET / VTO"></i>` : '';
 }
 
 function TierChecks({ list, onChange, name }) {
@@ -168,44 +219,43 @@ function TakesList({ o, takes }) {
 // "Working on:" single day, or the phone's Day view): date + day -> that day's offers.
 // Otherwise (All days, several days, the phone's Week view): every offer from today on, by day,
 // only the picked dates when dates is a list. days / today: the shown week's view.days and today.
-export function OffersStrip({ date, day, dates, days, today }) {
+// The form is the board's: postDate = the day it's open on (null: closed), onPost(date) opens it,
+// onPostDone closes it. No offers in scope and no form: no strip.
+export function OffersStrip({ date, day, dates, days, today, postDate, onPost, onPostDone }) {
   const rows = useOffers();
   const [open, setOpen] = useState({});
-  const [posting, setPosting] = useState(false);
   const one = !!date;
-  const key = one ? date : (dates || []).join(',');
-  useEffect(() => setPosting(false), [key]);
+  const posting = postDate != null;
   const postable = offerDays(days, today);
   const canPost = one ? postable.some((x) => x.date === date) : postable.length > 0;
-  if (rows === undefined) return '';
+  if (rows === undefined && !posting) return '';
   if (rows === null) return html`<div class="of-strip"><span class="muted">Could not read the VET / VTO offers.</span></div>`;
   const toggle = (id) => setOpen((s) => ({ ...s, [id]: !s[id] }));
   const list = (offers) => html`<ul class="of-strip-list">${offers.map((o) => html`<${StripRow} o=${o} key=${o.id}
     expanded=${!!open[o.id]} onToggle=${() => toggle(o.id)} />`)}</ul>`;
-  let body;
+  let body = '';
   if (one) {
     const offers = dayOffers(rows, date);
-    body = offers.length ? html`<div class="of-strip-h">VET / VTO · ${dayLabel(date)}</div>${list(offers)}`
-      : html`<div class="of-strip-h">No VET / VTO for ${day}</div>`;
+    if (offers.length) body = html`<div class="of-strip-h">VET / VTO · ${dayLabel(date)}</div>${list(offers)}`;
   } else {
     const groups = upcomingGroups(rows, today, dates);
-    body = groups.length ? html`<div class="of-strip-h">VET / VTO · upcoming</div>
-      ${groups.map((g) => html`<div class="of-strip-day" key=${g.date}>${g.label}</div>${list(g.offers)}`)}`
-      : html`<div class="of-strip-h">No upcoming VET / VTO</div>`;
+    if (groups.length) body = html`<div class="of-strip-h">VET / VTO · upcoming</div>
+      ${groups.map((g) => html`<div class="of-strip-day" key=${g.date}>${g.label}</div>${list(g.offers)}`)}`;
   }
+  // nothing in scope and no form open: no strip at all (the corner / day-heading button opens the form)
+  if (!body && !posting) return '';
   return html`<div class="of-strip" aria-label="VET / VTO">
     ${body}
-    ${canPost && posting ? html`<div class="of-strip-form"><${OfferForm} days=${days} today=${today} date=${one ? date : today}
-      onDone=${() => setPosting(false)} onCancel=${() => setPosting(false)} /></div>`
-      : canPost ? html`<button class="small" onClick=${() => setPosting(true)}>${one ? `Post an offer for ${day}` : 'Post an offer'}</button>` : ''}
+    ${posting ? html`<div class="of-strip-form"><${OfferForm} key=${postDate} days=${days} today=${today} date=${postDate}
+      onDone=${onPostDone} onCancel=${onPostDone} /></div>`
+      : canPost && onPost ? html`<button class="small" onClick=${() => onPost(one ? date : today)}>${one ? `Post an offer for ${day}` : 'Post an offer'}</button>` : ''}
   </div>`;
 }
 
 // One offer: what, counts, status; open -> who posted it, Close, who took it.
 function StripRow({ o, expanded, onToggle }) {
-  const [takes, setTakes] = useState(undefined);
+  const takes = useTakes(o.id);
   const [busy, setBusy] = useState(false);
-  useEffect(() => watchOfferTakes(o.id, (t) => setTakes(t)), [o.id]);
   const c = offerCounts(o, takes);
   const st = stripStatus(o, c);
   async function close() {

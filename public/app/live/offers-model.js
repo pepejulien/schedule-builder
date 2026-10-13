@@ -180,3 +180,31 @@ export function stripStatus(o, c) {
   if (o.status === 'filled' || (c && c.offered > 0 && c.taken >= c.offered)) return { word: 'full', chip: 'gray' };
   return { word: 'open', chip: 'green' };
 }
+
+// --- Day headers (Jose 2026-10-13): plain-word counts and the day's VET / VTO line.
+
+// A day's counts button: {drivers: '31/32 drivers', backups: '6/8 backups'} (d = a view.days entry)
+export function headCounts(d) {
+  return { drivers: `${d.routes_filled}/${d.routes} drivers`, backups: `${d.backup_filled}/${d.backup} backups` };
+}
+
+// A date's offers that aren't closed, per kind (VET first, kinds with none left out):
+// [{kind: 'vet'|'vto', offered (slots summed), approved, waiting}] — the counts as offerCounts makes them.
+// takesById = {offerId: takes[] | undefined}
+export function daySummary(rows, date, takesById) {
+  const by = {};
+  for (const o of rows || []) {
+    if (!o || o.date !== date || o.status === 'closed') continue;
+    const kind = o.kind === 'vto' ? 'vto' : 'vet';
+    const c = offerCounts(o, (takesById || {})[o.id]);
+    const s = by[kind] || (by[kind] = { kind, offered: 0, approved: 0, waiting: 0 });
+    s.offered += c.offered; s.approved += c.taken; s.waiting += c.waiting;
+  }
+  return ['vet', 'vto'].filter((k) => by[k]).map((k) => by[k]);
+}
+
+// "VET 3 · 1 approved" / "VTO 2 · 2 approved · 1 waiting"
+export const daySummaryLabel = (s) => `${s.kind === 'vto' ? 'VTO' : 'VET'} ${s.offered} · ${s.approved} approved${s.waiting ? ` · ${s.waiting} waiting` : ''}`;
+
+// The phone's day pills: a dot when that date has an open offer.
+export const hasOpenOffer = (rows, date) => (rows || []).some((o) => o && o.date === date && o.status === 'open');

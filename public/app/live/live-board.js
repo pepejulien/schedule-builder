@@ -33,7 +33,8 @@ import {
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 import { FutureWeek } from './future-week.js';
 import { DayList, DayPills, firstDay } from './day-list.js';
-import { OffersStrip } from './offers.js';
+import { OffersStrip, OfferDayLine, OfferDot } from './offers.js';
+import { headCounts } from './offers-model.js';
 
 // Roster bookmark (2026-10-09, docs/roster-bookmarklet.md): the link only injects roster.js (next to
 // index.html, absolute, cache-busted), so fixing roster.js fixes every computer's bookmark.
@@ -725,6 +726,7 @@ function Board() {
   const [sortBy, setSortBy] = useState(readSort);   // 'tier' | 'name'
   const [q, setQ] = useState('');                   // name search
   const [dayF, setDayF] = useState([]);             // day filter: only drivers working every picked day
+  const [postAt, setPostAt] = useState(null);       // the VET / VTO form's day while it's open at the top (null: closed)
   const [bkOnly, setBkOnly] = useState(false);      // "Backups only": on backup every picked day (no day: any day)
   const [mode, setMode] = useState(readMode);       // a phone: 'day' (one day's list) | 'week' (the grid)
   const [pday, setPday] = useState(null);           // the day the Day view shows (null: firstDay)
@@ -1361,11 +1363,14 @@ function Board() {
   const stripFor = (day, many) => {
     if (!canOffers()) return '';
     const d = day ? view.days.find((x) => x.day === day && x.open) : null;
-    if (d) return html`<${OffersStrip} date=${d.date} day=${d.day} days=${view.days} today=${today} />`;
+    const post = { days: view.days, today, postDate: postAt, onPost: setPostAt, onPostDone: () => setPostAt(null) };
+    if (d) return html`<${OffersStrip} date=${d.date} day=${d.day} ...${post} />`;
     if (day) return '';
     const dates = (many || []).map((n) => (view.days.find((x) => x.day === n) || {}).date).filter(Boolean);
-    return html`<${OffersStrip} dates=${dates.length ? dates : null} days=${view.days} today=${today} />`;
+    return html`<${OffersStrip} dates=${dates.length ? dates : null} ...${post} />`;
   };
+  // "Post an offer" in the grid's corner: the one picked day, else today
+  const postDay = () => setPostAt(dayF.length === 1 ? (view.days.find((x) => x.day === dayF[0]) || {}).date || today : today);
   const pickMode = (m) => { setMode(m); saveMode(m); };
   const subLine = (x) => html`<div class="lv-sub">Week: ${x.clock_hours ?? x.hours}h${endISO && x.day_hours
     ? html` · <span class=${max7Cls(last7(x.day_hours, endISO))}>Last 7d: ${last7(x.day_hours, endISO)}h</span>` : ''}</div>`;
@@ -1430,12 +1435,15 @@ function Board() {
         ${filtered && !dayMode ? html`<span class="muted">${shown.length} of ${view.drivers.length} drivers</span>` : ''}
       </div>
       ${dayMode ? html`
-      <${DayPills} view=${view} day=${vday} today=${today} onPick=${setPday} />
+      <${DayPills} view=${view} day=${vday} today=${today} onPick=${setPday}
+        dot=${canOffers() ? (date) => html`<${OfferDot} date=${date} />` : null} />
       <${DayList} view=${view} viewRT=${viewRT} day=${vday} searching=${!!q.trim()}
         match=${(n) => !q.trim() || fold(n).includes(fold(q.trim()))}
         Block=${Block} subLine=${subLine} routeFor=${routeFor} bkFor=${bkFor} markOf=${markOf} notes=${notes} lates=${lates}
         risks=${risks} ready=${ready} busy=${busy} onCell=${(name, day) => setCell({ name, day })}
-        onCounts=${setCounter} onFind=${goFind} strip=${stripFor(vday)} />` : html`
+        onCounts=${setCounter} onFind=${goFind} strip=${stripFor(vday)}
+        onPost=${canOffers() ? (date) => setPostAt(date) : null}
+        offerLine=${canOffers() ? (date) => html`<${OfferDayLine} date=${date} />` : null} />` : html`
       <div class="row lv-dayf">
         <span class="muted">Working on:</span>
         <div class="seg" role="group" aria-label="Show only drivers working on these days">
@@ -1454,14 +1462,16 @@ function Board() {
 
       <div class="scroll-x lv-wrap lv-tall"><table class="lv-grid">
         <thead><tr>
-          <th class="lv-namecol">Driver</th>
+          <th class="lv-namecol">${canOffers() ? html`<button class="primary small lv-postbtn" onClick=${postDay}
+            title="Post a VET or VTO offer to drivers' phones">Post an offer</button>` : ''}Driver</th>
           ${view.days.map((x) => html`<th class=${(x.date === today ? 'today ' : x.date < today ? 'past ' : '') + (x.open ? '' : 'closed') + (dayF.includes(x.day) ? ' lv-dayon' : '')}>
             ${x.day} <span class="lv-date">${shortDate(x.date)}</span>
             ${x.open ? html`<button class="lv-fill lv-fillbtn" disabled=${!ready || busy} onClick=${() => setCounter(x.day)}
               title="Routes and backups filled / needed — click to change the counts">
-              <span class=${x.routes_filled < x.routes ? 'lv-bad' : ''}>${x.routes_filled}/${x.routes}</span>
-              <span class=${x.backup_filled < x.backup ? 'lv-warnc' : ''}> · bk ${x.backup_filled}/${x.backup}</span></button>`
-              : html`<div class="lv-fill">closed</div>`}</th>`)}
+              <span class=${x.routes_filled < x.routes ? 'lv-bad' : ''}>${headCounts(x).drivers}</span>
+              <span class=${x.backup_filled < x.backup ? 'lv-warnc' : ''}> · ${headCounts(x).backups}</span></button>`
+              : html`<div class="lv-fill">closed</div>`}
+            ${canOffers() ? html`<${OfferDayLine} date=${x.date} onPick=${x.open ? () => setDayF([x.day]) : null} />` : ''}</th>`)}
           <th class="lv-stat" title="On the clock this week (scheduled)">Week</th>
           <th class="lv-stat" title=${`Most hours on the clock in any 7 days in a row, last week included (max ${max7Lim}h). A backup counts 2h; "if sent out" counts each backup day still ahead as a full route.`}>Max 7d</th>
           <th class="lv-stat" title=${`Days worked this week. Usual max ${maxD7} in any 7 days in a row — last week counts ("in 7d" shows it when last week adds to it); a 6th needs the pop-up.`}>Days</th>
