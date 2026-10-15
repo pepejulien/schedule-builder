@@ -15,7 +15,7 @@ import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest, warmup } from '../solver-client.js';
 import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, saveLiveConfirm, watchLiveAttendance, watchLiveLate, saveLiveLate,
-  watchLiveSummary, canWatchSummary, canOffers } from '../api.js';
+  watchLiveSummary, canWatchSummary, canOffers, canTrades } from '../api.js';
 import { MissingCheck } from './missing.js';
 import { routeDays, backupDays, rtMismatches } from './limits.js';
 import { RtCheck } from './rt-check.js';
@@ -34,6 +34,7 @@ import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 import { FutureWeek } from './future-week.js';
 import { DayList, DayPills, firstDay } from './day-list.js';
 import { OffersStrip, OfferDayLine, OfferDot } from './offers.js';
+import { TradesStrip } from './trades.js';
 import { headCounts } from './offers-model.js';
 
 // Roster bookmark (2026-10-09, docs/roster-bookmarklet.md): the link only injects roster.js (next to
@@ -1369,6 +1370,17 @@ function Board() {
     const dates = (many || []).map((n) => (view.days.find((x) => x.day === n) || {}).date).filter(Boolean);
     return html`<${OffersStrip} dates=${dates.length ? dates : null} ...${post} />`;
   };
+  // the drivers' trades strip under it (read only, Driver App SPEC-v3): one open day -> that day's trades;
+  // else the shown week's, only the picked days when there are some
+  const tradesFor = (day, many) => {
+    if (!canTrades()) return '';
+    const wk = { week: sel, weekDates: view.days.map((x) => x.date) };
+    const d = day ? view.days.find((x) => x.day === day && x.open) : null;
+    if (d) return html`<${TradesStrip} date=${d.date} ...${wk} />`;
+    if (day) return '';
+    const dates = (many || []).map((n) => (view.days.find((x) => x.day === n) || {}).date).filter(Boolean);
+    return html`<${TradesStrip} dates=${dates.length ? dates : null} ...${wk} />`;
+  };
   // "Post an offer" in the grid's corner: the one picked day, else today
   const postDay = () => setPostAt(dayF.length === 1 ? (view.days.find((x) => x.day === dayF[0]) || {}).date || today : today);
   const pickMode = (m) => { setMode(m); saveMode(m); };
@@ -1441,7 +1453,7 @@ function Board() {
         match=${(n) => !q.trim() || fold(n).includes(fold(q.trim()))}
         Block=${Block} subLine=${subLine} routeFor=${routeFor} bkFor=${bkFor} markOf=${markOf} notes=${notes} lates=${lates}
         risks=${risks} ready=${ready} busy=${busy} onCell=${(name, day) => setCell({ name, day })}
-        onCounts=${setCounter} onFind=${goFind} strip=${stripFor(vday)}
+        onCounts=${setCounter} onFind=${goFind} strip=${html`${stripFor(vday)}${tradesFor(vday)}`}
         onPost=${canOffers() ? (date) => setPostAt(date) : null}
         offerLine=${canOffers() ? (date) => html`<${OfferDayLine} date=${date} />` : null} />` : html`
       <div class="row lv-dayf">
@@ -1459,6 +1471,7 @@ function Board() {
         ${dayF.length > 1 ? html`<span class="muted">${bkOnly ? 'on backup' : 'working'} all ${dayF.length} days</span>` : ''}
       </div>
       ${stripFor(dayF.length === 1 ? dayF[0] : null, dayF.length > 1 ? dayF : null)}
+      ${tradesFor(dayF.length === 1 ? dayF[0] : null, dayF.length > 1 ? dayF : null)}
 
       <div class="scroll-x lv-wrap lv-tall"><table class="lv-grid">
         <thead><tr>

@@ -327,3 +327,13 @@ export const closeOffer = (id) => window.JAJB.closeScheduleOffer(id);
 // a VET counter ("I'd rather do a backup"): yes = approved in the other role, no = declined
 export const canDecideCounter = () => onFirebase() && typeof window.JAJB.decideCounter === 'function';
 export const decideCounter = (offerId, tid, yes) => window.JAJB.decideCounter(offerId, tid, yes);
+
+// Drivers' shift giveaways / trades (Driver App SPEC-v3, 2026-10-15): Firestore driver_trades/{id} +
+// props/{tid}, written only by the Driver App's server and the hub (agreed deals go on the board by
+// themselves). Read only here: the Live board's Trades strip (live/trades.js). An older jajb.js has none:
+// canTrades() is false and the strip stays hidden.
+export const canTrades = () => onFirebase() && typeof window.JAJB.watchDriverTrades === 'function';
+// week (its Sunday) -> cb(rows | null when refused): that week's trades + trades whose other day is in it
+export const watchTrades = (week, cb) => (canTrades() ? window.JAJB.watchDriverTrades(week, cb) : (cb([]), () => {}));
+export const watchTradeProps = (tradeId, cb) => (onFirebase() && typeof window.JAJB.watchTradeProps === 'function'
+  ? window.JAJB.watchTradeProps(tradeId, cb) : (cb([]), () => {}));

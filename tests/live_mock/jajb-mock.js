@@ -260,6 +260,17 @@
       put('offertakes/' + id, tk); fire();
       return { ok: true };
     },
+    // Drivers' trades (Driver App SPEC-v3, 2026-10-15): driver_trades/{id} in 'trades', props in
+    // 'tradeprops/{id}' (times as ms, like jajb.js). Read only; __mock.putTrade / putTradeProp play the
+    // Driver App's server and the hub.
+    watchDriverTrades: (week, cb) => listen('trades', () => {
+      const from = new Date(); from.setDate(from.getDate() - 14);
+      return Object.values(get('trades') || {})
+        .filter((t) => (week ? t.week === String(week) || (t.deal && t.deal.week === String(week)) : t.date >= iso(from)))
+        .sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.at - b.at);
+    }, cb),
+    watchTradeProps: (id, cb) => listen('tradeprops/' + id, () => Object.values(get('tradeprops/' + id) || {})
+      .sort((a, b) => a.at - b.at), cb),
     deleteScheduleWeek: async (week) => {
       const all = weeks(); delete all[week]; put('weeks', all);
       localStorage.removeItem(K + 'log/' + week);
@@ -293,6 +304,20 @@
           put('offers', all);
         }
         fire();
+      },
+      // a trade as the Driver App's server / the hub writes it: t = {id, giver: {tid, name}, week, date, day,
+      // role, wave, swapDays, status, deal?, at, deadline, agreedAt?, appliedAt?, refusedAt?, why?, ...}
+      // (missing at = now); a later call with the same id merges into it
+      putTrade: (t) => {
+        const all = get('trades') || {};
+        all[t.id] = { v: 1, swapDays: [], status: 'open', at: Date.now(), ...(all[t.id] || {}), ...t };
+        put('trades', all); fire();
+      },
+      // a trade offer to the giver: p = {tid, name, date, role, wave, status, at?}
+      putTradeProp: (id, p) => {
+        const all = get('tradeprops/' + id) || {};
+        all[p.tid] = { at: Date.now(), status: 'pending', ...p };
+        put('tradeprops/' + id, all); fire();
       },
       get,
       reset: () => { Object.keys(localStorage).filter((k) => k.startsWith(K)).forEach((k) => localStorage.removeItem(k)); },

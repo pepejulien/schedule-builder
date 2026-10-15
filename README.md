@@ -42,6 +42,16 @@
 > the hub's `jajb.js` doesn't have them yet. Route counts never change. `app/live/offers.js` (+ the pure
 > `offers-model.js`); test: `node tests/offers_test.mjs`; the mock has them too (`JAJB.__mock.takeOffer` plays a driver).
 
+> **Drivers' trades (2026-10-15, Firebase only; Driver App SPEC-v3, plan task 36):** a read-only **Trades** strip
+> under the VET / VTO strip lists the shown week's shift giveaways and trades drivers make in the Driver App
+> (only the picked day(s) when some are picked): kind (Offered / Giveaway / Trade / Added as Backup), who gives to
+> whom, the day(s) and shift(s), status (Open until 6 PM the day before · Agreed · Applied · Refused + reason ·
+> Closed · Cancelled) and time; open a row for the timeline, the giver's exchange days and the trade offers made
+> to them. No buttons: the hub puts agreed deals on the board by itself. Data: Firestore `driver_trades/{id}` +
+> `props/{tid}` through `jajb.js` (`watchDriverTrades`, `watchTradeProps`); hidden when the hub's `jajb.js` doesn't
+> have them yet. `app/live/trades.js` (+ the pure `trades-model.js`); test: `node tests/trades_test.mjs`; the mock
+> has them too (`JAJB.__mock.putTrade` / `putTradeProp`).
+
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's
 inputs, click **Build**, download the finished `Week-NN-Schedule.xlsx`.
