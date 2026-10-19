@@ -11,7 +11,7 @@ import { driverCsv } from '../public/app/lib/driver-csv.js';
 import { readiness } from '../public/app/readiness.js';
 import { joinChunks } from '../public/app/lib/board-fetch.js';
 import { runRisk, riskCardHtml, actualList, routeDays, backupDays, rtMismatches, missingDays, mergeActual, withConfirmed,
-  overRisk, addUnscheduled, withOpenDays, openTodayRisk, roomOn, clockOutBy, doneDates } from '../public/app/live/limits.js';
+  overRisk, addUnscheduled, withOpenDays, openTodayRisk, roomOn, clockOutBy, doneDates, rtBackupShown } from '../public/app/live/limits.js';
 import { actualSig, withRouteTracker, rtOnlyWeek, sharedTodayLines, actualLoadFailed } from '../public/app/live/live-model.js';
 
 let pass = 0, fail = 0;
@@ -683,6 +683,31 @@ const hm10 = (x) => `${((Math.floor(x / 60) + 11) % 12) + 1}:${String(x % 60).pa
   ok('amb2: TID set -> only B2', m2.drivers[0].day_hours['2026-10-05'] === 10 && m2.drivers[1].day_hours['2026-10-06'] === 13, JSON.stringify(m2.drivers.map((d) => d.day_hours)));
   // only one schedule John Smith: the TID-less entry still matches by name
   ok('amb2: one schedule driver -> matched', mergeActual({ ...summary, drivers: [a1] }, [rt]).drivers[0].day_hours['2026-10-05'] === 13);
+}
+
+// ---- 2026-10-19: Route Tracker backups before their hours are logged ----
+{
+  const T = '2026-10-08';
+  eq('rtBackupShown: earlier, today, tomorrow', ['2026-10-07', T, '2026-10-09'].map((d) => rtBackupShown(d, T)), [true, true, true]);
+  eq('rtBackupShown: the day after tomorrow / no date', [rtBackupShown('2026-10-10', T), rtBackupShown('', T), rtBackupShown('2026-10-09', '')], [false, false, false]);
+  eq('rtBackupShown: across the month', rtBackupShown('2026-11-01', '2026-10-31'), true);
+  const other = { name: 'Other Guy', keys: [], tid: '', days: { '2026-10-06': 10 } };   // Tue is tracked
+  const summary = { days: days10, limits: lim10, drivers: [
+    { name: 'Bea Back', cells: { Tue: '10:45 AM Backup' }, day_hours: { '2026-10-06': 2 }, worked_dates: ['2026-10-06'] },
+    { name: 'Zed Zero', cells: { Tue: '10:45 AM Backup' }, day_hours: { '2026-10-06': 2 }, worked_dates: ['2026-10-06'] },
+    { name: 'Ned New', cells: {}, day_hours: {}, worked_dates: [] }] };
+  const list = [other,
+    { name: 'Bea Back', keys: [], tid: '', days: { '2026-10-06': 2 }, bk: { '2026-10-06': 2 } },     // scheduled Backup + RT backup
+    { name: 'Zed Zero', keys: [], tid: '', days: { '2026-10-06': 0 }, bk: { '2026-10-06': 0 } },     // listed at 0 hours
+    { name: 'Ned New', keys: [], tid: '', days: { '2026-10-07': 2 }, bk: { '2026-10-07': 2 } }];     // blank day, RT backup
+  const m = mergeActual(summary, list).drivers;
+  eq('scheduled Backup + RT backup: 2h once, not 4', [m[0].day_hours['2026-10-06'], m[0].clock_hours, m[0].max7], [2, 2, 2]);
+  eq('RT backup at 0 hours: 0 means 0 (no 2h put back)', [m[1].day_hours['2026-10-06'], m[1].clock_hours], [0, 0]);
+  eq('RT backup on a blank day: the usual 2h in the totals', [m[2].day_hours['2026-10-07'], m[2].clock_hours, m[2].max7], [2, 2, 2]);
+  eq('missingDays: a backup day (0h too) is not asked "what happened?"', missingDays(summary, list, {}, T).map((x) => x.name), []);
+  eq('missingDays: without bk the 0h day would be asked', missingDays(summary, [other, { ...list[2], bk: undefined }], {}, T).map((x) => x.name), ['Zed Zero']);
+  eq('backupDays keeps the 0', backupDays(list)('Zed Zero'), { '2026-10-06': 0 });
+  eq('actualList keeps bk 0', actualList({ drivers: { z: list[2] } })[0].bk, { '2026-10-06': 0 });
 }
 
 console.log(`\n${pass}/${pass + fail} passed`);

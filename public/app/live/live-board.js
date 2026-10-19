@@ -17,7 +17,7 @@ import { liveRequest, warmup } from '../solver-client.js';
 import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, saveLiveConfirm, watchLiveAttendance, watchLiveLate, saveLiveLate,
   watchLiveSummary, canWatchSummary, canOffers, canTrades } from '../api.js';
 import { MissingCheck } from './missing.js';
-import { routeDays, backupDays, rtMismatches } from './limits.js';
+import { routeDays, backupDays, rtMismatches, rtBackupShown } from './limits.js';
 import { RtCheck } from './rt-check.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate, weekLabel } from '../lib/weeks.js';
@@ -1284,9 +1284,10 @@ function Board() {
   const routeOf = routeDays(actList, view.drivers || []);   // shared entry paints no row (2026-10-10)
   const drvOf = new Map((view.drivers || []).map((d) => [d.name, d]));   // name -> driver, for its tid (Jose 2026-10-08)
   const routeFor = (name, iso) => { const r = iso && iso <= today ? routeOf(drvOf.get(name) || name) : null; return r && iso in r ? r[iso] : undefined; };
-  // backup days (Route Tracker) - shown on blank days until the cloud writer adds them (Jose 2026-10-08)
+  // backup days (Route Tracker) - shown on blank days until the cloud writer adds them (Jose 2026-10-08);
+  // tomorrow's too, listed ahead before any hours (2026-10-19)
   const bkOf = backupDays(actList, view.drivers || []);   // (2026-10-10)
-  const bkFor = (name, iso) => { const r = iso && iso <= today ? bkOf(drvOf.get(name) || name) : null; return r && iso in r ? r[iso] : undefined; };
+  const bkFor = (name, iso) => { const r = rtBackupShown(iso, today) ? bkOf(drvOf.get(name) || name) : null; return r && iso in r ? r[iso] : undefined; };
   // the hours checks see every Route Tracker driver (2026-10-10): not on the schedule = a stand-in
   // row; a route today with no clock-out yet = still ahead. Display only: the engine never sees these.
   const viewRT = withRouteTracker(view, actList, today);

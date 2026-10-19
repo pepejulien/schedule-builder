@@ -570,6 +570,67 @@ ok(runner._STATE['rt'][(runner.norm(ad), 'Mon')]['role'] == 'road', 'remembered 
 a3 = J(runner.sync_actual, {'today': TODAY, 'entries': []})
 ok(cells(a3)[ad]['Mon'] == '' and CNT(a3, 'Mon') == CNT(built, 'Mon'), 'RT drops it -> blank again, counts as built')
 
+# ---------------------------------------------------------------- Part E ----
+print("Part E: tomorrow's backups (2026-10-19, Jose: show backups before their hours are logged)")
+T0, TOM, AFT = DATE['Tue'], 'Wed', 'Thu'      # today Tue, tomorrow Wed, the day after Thu
+ok(TOM in OPEN and AFT in OPEN, 'Wed and Thu are open days in the fixture')
+tk = next(x for x in C0 if 'Backup' in C0[x][TOM])                  # already a backup tomorrow
+tb = next(x for x in names if blank(x, TOM))                         # blank tomorrow
+tr = next(x for x in names if blank(x, TOM) and x != tb)             # a route tomorrow: not yet
+ts = next(x for x in names if blank(x, AFT) and x not in (tb, tr, tk))  # the day after tomorrow
+load('tomorrow')
+ents_t = [E(tb, TOM, 'backup'), E(tr, TOM, 'road'), E(ts, AFT, 'backup'), E(tk, TOM, 'backup')]
+rt1 = J(runner.sync_actual, {'today': T0, 'entries': ents_t})
+ok(rt1.get('ok') and rt1.get('changed'), 'sync ran and changed the schedule')
+apt = {(a['name'], a['day']) for a in rt1['data']['applied']}
+ok(apt == {(tb, TOM)}, f'only the blank Wed backup is applied: {sorted(apt)}')
+ok('Backup' in cells(rt1)[tb][TOM] and TOM in drv(rt1, tb)['backup_days'],
+   f"{tb}: Wed set as a Backup ({cells(rt1)[tb][TOM]!r})")
+ok(cells(rt1)[tr][TOM] == '', 'a route tomorrow is not applied (routes: today and before)')
+ok(cells(rt1)[ts][AFT] == '', 'a backup the day after tomorrow is not applied')
+ok(rt1['data']['ignored'] == 2, f"tomorrow's route + Thursday's backup ignored ({rt1['data']['ignored']})")
+ok(cells(rt1)[tk][TOM] == C0[tk][TOM] and any((x['name'], x['day']) == (tk, TOM) and x['kind'] == 'agree'
+                                               for x in rt1['data']['skipped']),
+   'already a Backup on the schedule tomorrow: left as is (agree)')
+ok(drv(rt1, tb)['day_hours'].get(DATE[TOM]) == built['limits'].get('backup_hours', 2),
+   f"tomorrow's backup counts the usual backup hours ({drv(rt1, tb)['day_hours'].get(DATE[TOM])})")
+rt2 = J(runner.sync_actual, {'today': T0, 'entries': ents_t})
+ok(rt2['changed'] is False, 'second identical call: changed false')
+print('  reproducible: export -> load (no inputs) gives the same report')
+stt = J(runner.export_state)['state']
+runner.use_slot('tomorrow-reload')
+rl_t = J(runner.load_state, {'state': stt, 'out': os.path.join(tmp, 'tr.xlsx'), 'today': T0})
+pick_t = lambda r: ([{k: x[k] for k in ('name', 'cells', 'road_days', 'backup_days', 'hours', 'day_hours')}  # noqa: E731
+                     for x in r['drivers']], r['days'], r['infeasible'], r['check']['errors'])
+ok(pick_t(rl_t) == pick_t(rt2), 'same drivers / days / hours / open slots / errors after the reload')
+rt3 = J(runner.sync_actual, {'today': T0, 'entries': [e for e in ents_t if e['name'] != tb]})
+ok([x['name'] for x in rt3['data']['removed']] == [tb] and cells(rt3)[tb][TOM] == '',
+   'Route Tracker drops the Wed backup -> taken back off (after a reload too)')
+ok(day(rt3, TOM)['backup_filled'] == day(built, TOM)['backup_filled'], 'Wed backup count back to as built')
+rt4 = J(runner.sync_actual, {'today': DATE[TOM], 'entries': [E(tb, TOM, 'backup')]})
+ok('Backup' in cells(rt4)[tb][TOM], 'the next day (Wed = today) the same backup still applies')
+
+print('  tomorrow never changes a scheduled route (the plan can still change)')
+plain_e = lambda x, d: bool(C0[x][d]) and runner._cell_wave(C0[x][d]) == C0[x][d]  # noqa: E731
+rw = next(x for x in names if plain_e(x, TOM))                        # a plain route tomorrow (Wed)
+rd = next(x for x in names if plain_e(x, 'Tue') and x != rw)          # a plain route today (Tue)
+nb = next(x for x in names if blank(x, TOM) and x not in (rw, rd))    # blank tomorrow
+load('tomorrow-route')
+ra1 = J(runner.sync_actual, {'today': T0, 'entries': [E(rw, TOM, 'backup'), E(rd, 'Tue', 'backup'), E(nb, TOM, 'backup')]})
+apa = {(a['name'], a['day']): a for a in ra1['data']['applied']}
+ok(cells(ra1)[rw][TOM] == C0[rw][TOM] and (rw, TOM) not in apa and TOM in drv(ra1, rw)['road_days'],
+   f"{rw}: tomorrow's route stays a route ({cells(ra1)[rw][TOM]!r})")
+s_rw = next((x for x in ra1['data']['skipped'] if (x['name'], x['day']) == (rw, TOM)), None)
+ok(s_rw and s_rw['kind'] == 'ahead', f"reported, not applied: {s_rw and s_rw['kind']}")
+ok(day(ra1, TOM)['routes'] == day(built, TOM)['routes'], 'tomorrow keeps its route count')
+ok((rd, 'Tue') in apa and apa[(rd, 'Tue')].get('kind') == 'swap' and cells(ra1)[rd]['Tue'] == C0[rd]['Tue'] + ' Backup',
+   f"today: route -> backup as before ({cells(ra1)[rd]['Tue']!r})")
+ok((nb, TOM) in apa and 'Backup' in cells(ra1)[nb][TOM], f"tomorrow's blank day -> Backup ({cells(ra1)[nb][TOM]!r})")
+ok((runner.norm(rw), TOM) not in runner._STATE['rt'], 'nothing remembered for the route left alone')
+ra2 = J(runner.sync_actual, {'today': DATE[TOM], 'entries': [E(rw, TOM, 'backup')]})
+ok(any((a['name'], a['day']) == (rw, TOM) and a.get('kind') == 'swap' for a in ra2['data']['applied']),
+   'once that day is today, the usual route -> backup applies')
+
 print()
 print('FAIL: ' + '; '.join(fails) if fails else 'PASS')
 sys.exit(1 if fails else 0)

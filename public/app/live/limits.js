@@ -571,6 +571,12 @@ export function backupDays(list, people) {   // people: as routeDays (2026-10-10
     return a && a.bk && Object.keys(a.bk).length ? { ...a.bk } : null;
   };
 }
+// Which days the Live board shows a Route Tracker backup on (2026-10-19, Jose: show backups before
+// their hours are logged): today and before, and TOMORROW - a backup is listed ahead. Routes stay
+// today and before. Same reach as the cloud sync (schedule_routes.py entries_from_actual).
+export function rtBackupShown(iso, today) {
+  return !!iso && !!today && iso <= toISODate(addDays(parseISODate(today), 1));
+}
 
 // ---- "Route Tracker and the schedule don't match" (Jose 2026-10-08) ----------------------
 // The cloud writer copies Route Tracker's routes / backups onto BLANK schedule days. This lists
@@ -659,6 +665,8 @@ export function missingDays(summary, list, confirms, today = toISODate(new Date(
     if (!a) continue;                          // Route Tracker doesn't know them: the schedule stands
     for (const x of summary.days || []) {
       if (x.date >= today || !tracked.has(x.date) || Number((a.days || {})[x.date])) continue;
+      // a backup day in Route Tracker, 0 hours too (2026-10-19): not missing - 0 means 0
+      if (a.bk && x.date in a.bk) continue;
       const cell = String((d.cells || {})[x.day] || '').trim(), hours = shiftHours(cell, lim);
       // Route Tracker doesn't track meetings or Dispatch: nothing to ask (2026-10-10) — the day
       // keeps its scheduled hours (mergeOne, runner._apply_actual)

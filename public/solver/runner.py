@@ -2371,10 +2371,12 @@ def sync_actual(payload_json):
     """payload: {today: 'YYYY-MM-DD', entries: [{name, keys, tid, date: ISO,
     role: 'backup'|'road', start?: 'HH:MM', code?}]} - EVERY driver-day Route
     Tracker has this week through today (one this op added that is missing from
-    it is taken back off). Returns the usual report plus changed: bool and
-    data: {applied, removed, skipped, ignored} (a route made a backup / put back:
-    kind 'swap', cell = the route). No rule gate: those days
-    happened, and their hours already come from h_act."""
+    it is taken back off). Backups also for TOMORROW (2026-10-19, Jose: show backups
+    before their hours are logged) - Route Tracker lists them ahead; taken back the
+    same way if it drops them. Routes stay today and before. Returns the usual report
+    plus changed: bool and data: {applied, removed, skipped, ignored} (a route made a
+    backup / put back: kind 'swap', cell = the route). No rule gate: those days
+    happened (or dispatch already lined the backup up), and their hours come from h_act."""
     try:
         p = json.loads(payload_json)
         res, cfg = _STATE.get("res"), _STATE.get("cfg")
@@ -2401,7 +2403,8 @@ def sync_actual(payload_json):
             except Exception:  # noqa: BLE001
                 ignored += 1
                 continue
-            if not start <= d < start + 7 * ONE or d > today:
+            last = today + ONE if e["role"] == "backup" else today    # a backup: tomorrow too (2026-10-19)
+            if not start <= d < start + 7 * ONE or d > last:
                 ignored += 1
                 continue
             tid = str(e.get("tid") or "").strip()
@@ -2528,7 +2531,12 @@ def sync_actual(payload_json):
                    "unavailable": "asked for the day off"}.get(kind)
             if kind == "unavailable":
                 why = _unav_reason(dr, day, why)
-            if kind == "road" and role == "backup":
+            if kind == "road" and role == "backup" and d > today:
+                # tomorrow (2026-10-19): a backup only fills a blank day or agrees with a Backup -
+                # a scheduled route is never made a backup ahead, tomorrow's plan can still change
+                kind, why = "ahead", ("scheduled on a route tomorrow; Route Tracker has them as a backup"
+                                      " (left as is until the day - the plan can still change)")
+            elif kind == "road" and role == "backup":
                 w = _cell_wave(cell)
                 if (w and cell == w and day in dr["prim"] and day not in dr["bk"]
                         and day not in dr["unav"] and w in res.waves.get(day, {})):
