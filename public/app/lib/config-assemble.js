@@ -301,10 +301,11 @@ export function assembleConfig(state) {
   if (Number.isFinite(wknCap) && wknCap > 0) config.max_weekend_days = wknCap;
   if (adv.merge_standing_unavailable && config.prefs_csv) config.merge_standing_unavailable = true;
   // Drivers-page keys: only when non-empty. NOT part of the name pre-flight below.
-  for (const k of ['extra_unavailable', 'driver_max_days', 'driver_max_row', 'prefer_days', 'like_days']) {
+  for (const k of ['extra_unavailable', 'driver_max_days', 'driver_soft_max_days', 'driver_max_row', 'prefer_days', 'like_days']) {
     if (Object.keys(prefs[k]).length) config[k] = prefs[k];
   }
   if (prefs.keep_together.length) config.keep_together = prefs.keep_together;
+  if (prefs.prefer_ot.length) config.prefer_ot = prefs.prefer_ot;   // soft (2026-10-19)
 
   // --- name pre-flight (mirror the solver's strict_names) ---
   const allNames = [
@@ -325,13 +326,14 @@ export function assembleConfig(state) {
 
 // The solver keys from the Drivers page + this week's time off, plus what the
 // review card shows: info = { off: {name: {Day: {why, note?}}},
-// limits: {name: {maxDays?, maxRow?, together?, weekend?: {on: [Day]}, likes?: [Day]}}, unmatched: [name] }
+// limits: {name: {maxDays?, softMaxDays?, maxRow?, together?, likesOT?, weekend?: {on: [Day]}, likes?: [Day]}}, unmatched: [name] }
 // like_days (very soft) leaves out closed days and the driver's days off this week.
+// driver_soft_max_days {name: n} / prefer_ot [name] (2026-10-19): SOFT -- the builder tries, may go over.
 // (unmatched = not on this week's roster; excluded / benched are left out).
 // A failed read of one source still applies the other.
 function buildPrefKeys(state, roster, exclude, bench, closed = []) {
-  const out = { extra_unavailable: {}, driver_max_days: {}, driver_max_row: {}, keep_together: [],
-    prefer_days: {}, like_days: {}, info: { off: {}, limits: {}, unmatched: [] } };
+  const out = { extra_unavailable: {}, driver_max_days: {}, driver_soft_max_days: {}, driver_max_row: {}, keep_together: [],
+    prefer_ot: [], prefer_days: {}, like_days: {}, info: { off: {}, limits: {}, unmatched: [] } };
   const startISO = state.week?.startISO;
   const doc = state.driverPrefsFailed ? null : state.driverPrefs;
   const timeoff = state.timeoffFailed ? null : state.weekTimeoff;
@@ -358,24 +360,26 @@ function buildPrefKeys(state, roster, exclude, bench, closed = []) {
       inf[d] = v;
     }
   }
-  const keep = new Set();
+  const keep = new Set(), ot = new Set();
   for (const [nm, raw] of Object.entries((doc && doc.drivers) || {})) {
     const p = normPref(raw);
     if (!p) continue;
     const onW = onWeekendDays(p, startISO);
     const likeOpen = (p.likeDays || []).filter((d) => !closed.includes(d));
-    if (!p.maxDays && !p.maxRow && !p.together && !p.weekends && !likeOpen.length) continue;
+    if (!p.maxDays && !p.softMaxDays && !p.maxRow && !p.together && !p.likesOT && !p.weekends && !likeOpen.length) continue;
     const r = take(nm);
     if (!r) continue;
     const L = () => (out.info.limits[r] = out.info.limits[r] || {});
     const lim = (k, v) => {
       if (!v) return;
       out[k][r] = out[k][r] == null ? v : Math.min(out[k][r], v);
-      L()[k === 'driver_max_days' ? 'maxDays' : 'maxRow'] = out[k][r];
+      L()[{ driver_max_days: 'maxDays', driver_soft_max_days: 'softMaxDays', driver_max_row: 'maxRow' }[k]] = out[k][r];
     };
     lim('driver_max_days', p.maxDays);
+    lim('driver_soft_max_days', p.softMaxDays);
     lim('driver_max_row', p.maxRow);
     if (p.together) { keep.add(r); L().together = true; }
+    if (p.likesOT) { ot.add(r); L().likesOT = true; }
     if (onW.length) out.prefer_days[r] = [...new Set([...(out.prefer_days[r] || []), ...onW])];
     if (p.weekends) L().weekend = { on: out.prefer_days[r] || [] };   // [] = off this weekend
     const like = likeOpen.filter((d) => !(out.extra_unavailable[r] && d in out.extra_unavailable[r]));
@@ -385,6 +389,7 @@ function buildPrefKeys(state, roster, exclude, bench, closed = []) {
     }
   }
   out.keep_together = [...keep];
+  out.prefer_ot = [...ot];
   out.info.unmatched = [...unmatched].sort();
   return out;
 }

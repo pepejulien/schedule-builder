@@ -325,6 +325,105 @@ for seed in range(1, 4):
             viol.append((seed, k, bad[:3]))
 ok(not viol, f'30 random weeks with random Drivers-page prefs: no hard violations {viol[:2]}')
 
+print('A8 driver_soft_max_days: SOFT -- honored when the week allows, broken with a note when not (2026-10-19)')
+roomy = dict(base, backup_per_day={d: 1 for d in ALL})
+res0, _ = build(roomy)
+ok(total(drv(res0, 'Topz04')) >= 4 and total(drv(res0, 'Fairz03')) >= 3,
+   f"precondition: uncapped Topz04 / Fairz03 get {total(drv(res0, 'Topz04'))} / {total(drv(res0, 'Fairz03'))} days")
+res, chk = build(dict(roomy, driver_soft_max_days={'Topz04': 3, 'Fairz03': 2}))
+ok(total(drv(res, 'Topz04')) <= 3 and total(drv(res, 'Fairz03')) <= 2,
+   f"room in the week: kept to 3 / 2 ({total(drv(res, 'Topz04'))} / {total(drv(res, 'Fairz03'))})")
+ok(not any(x.startswith('SOFT DAY CAP') for x in res.notes), 'nothing broken -> no note')
+ok(sum(len(dr['prim']) for dr in res.roster) == sum(len(dr['prim']) for dr in res0.roster)
+   and not res.infeasible, 'every route still covered')
+ok(not hard_errs(chk), f'no hard-rule errors: {hard_errs(chk)}')
+# no room: 6 drivers for 22 routes (4 road days each at most) -> he must go past "1 day"
+SOFT6 = [f'Softy{i:02d}' for i in range(6)]
+tight = dict(waves={d: {'10:25 AM': n} for d, n in zip(ALL, (4, 3, 3, 3, 3, 3, 3))})
+res, chk = build(synth_week(SOFT6, 3, 'soft', driver_soft_max_days={'Softy00': 1}, **tight))
+s0 = drv(res, 'Softy00')
+ok(not res.infeasible and total(s0) == 2, f'no room: the routes win, Softy00 works {total(s0)} days (just 1 over)')
+ok(all(total(drv(res, n)) == 4 for n in SOFT6[1:]), 'everyone else is filled first (4 each)')
+ok(any(x.startswith('SOFT DAY CAP broken') and 'Softy00 2 days (would rather 1)' in x for x in res.notes),
+   f"a SOFT DAY CAP note names him: {[x for x in res.notes if 'SOFT' in x]}")
+ok(not chk['errors'], f'and it is not an error: {chk["errors"][:3]}')
+# the hard cap wins over a soft one that says the same or more
+res, _ = build(dict(base, driver_max_days={'Topz05': 3}, driver_soft_max_days={'Topz05': 3, 'Topz06': 4}))
+ok(drv(res, 'Topz05')['soft_max_days'] is None and drv(res, 'Topz06')['soft_max_days'] == 4,
+   'soft >= max_days is dropped; a soft cap alone is kept')
+for bad in ({'driver_soft_max_days': {'X': 0}}, {'driver_soft_max_days': {'X': 'two'}}, {'prefer_ot': 'X'},
+            {'prefer_ot': [3]}):
+    try:
+        B.load_config(save_cfg(fixture_cfg(**bad), 'bad.json'))
+        ok(False, f'rejected {bad}')
+    except B.ScheduleConfigError:
+        ok(True, f'rejected {bad}')
+res, _ = build(synth_week(SOFT6, 3, 'softu', driver_soft_max_days={'Ghosty Nobody': 2}, prefer_ot=['Nope Ot']))
+ok(any('driver_soft_max_days: "Ghosty Nobody"' in x for x in res.prefs_unmatched)
+   and any('prefer_ot: "Nope Ot"' in x for x in res.prefs_unmatched), f'unmatched listed: {res.prefs_unmatched}')
+
+print('A9 prefer_ot: likes overtime -- extra days / hours go to them first, never past a hard limit')
+OTS = [f'Topo{i:02d}' for i in range(7)]
+otw = dict(backup_per_day={d: (1 if d in ('Tue', 'Thu') else 0) for d in ALL})
+res0, chk0 = build(synth_week(OTS, 4, 'ot0', most_days=OTS, **otw))       # 28 routes = 7 x 4: everyone at 40h
+fifth0 = sorted(dr['name'] for dr in res0.roster if dr['bk'])
+ok(len(fifth0) == 2, f'precondition: the 42h overflow (2 backups) goes to {fifth0}')
+likers = [n for n in OTS if n not in fifth0]
+res, chk = build(synth_week(OTS, 4, 'ot1', most_days=OTS, prefer_ot=likers, **otw))
+fifth = sorted(dr['name'] for dr in res.roster if dr['bk'])
+ok(len(fifth) == 2 and set(fifth) <= set(likers), f'likes overtime -> the 5th day (42h) goes to them first: {fifth0} -> {fifth}')
+ok(drv(res, likers[0])['likes_ot'] and res.OTPREF == {runner.norm(n) for n in likers}, 'kept on the driver and in the Result')
+ok(not hard_errs(chk) and not chk['errors'], f'no errors: {chk["errors"][:3]}')
+# a Fair who likes overtime never passes free_total_days / max_total_days / days in a row
+FO = [f'Fairo{i:02d}' for i in range(7)]
+res, chk = build(synth_week(FO, 4, 'ot2', prefer_ot=FO, driver_max_days={'Fairo00': 3}, **otw))
+ok(all(len(dr['prim']) + len(dr['bk']) <= 4 for dr in res.roster) and total(drv(res, 'Fairo00')) <= 3,
+   f"Fair + likes overtime: still <= {4} roads+backups, max_days holds "
+   f"({[(dr['name'], len(dr['prim']), len(dr['bk'])) for dr in res.roster][:3]})")
+ok(not hard_errs(chk) and not any(e.startswith('FAIR-SHAPE') for e in chk['errors']), f'no hard errors: {hard_errs(chk)}')
+# the upgrade layers: a Fair 3 -> 4 day goes to the one who likes overtime first
+FU = [f'Fairu{i:02d}' for i in range(10)]
+ups = dict(waves={d: {'10:25 AM': n} for d, n in zip(ALL, (5, 5, 5, 5, 4, 4, 4))})   # 32 = 10 x 3 + 2
+res0, _ = build(synth_week(FU, 4, 'up0', **ups))
+four0 = sorted(dr['name'] for dr in res0.roster if len(dr['prim']) == 4)
+like = [n for n in FU if n not in four0][:2]
+res, chk = build(synth_week(FU, 4, 'up1', prefer_ot=like, **ups))
+four = sorted(dr['name'] for dr in res.roster if len(dr['prim']) == 4)
+ok(len(four0) == 2 and four == sorted(like), f'Fair 4th days: {four0} -> {four} (likes overtime: {like})')
+ok(not hard_errs(chk), f'no hard-rule errors: {hard_errs(chk)}')
+
+print('A10 random sweep: soft caps + likes overtime never break a hard rule')
+
+
+class _SoftShim(_Shim):
+    def load_config(self, p):
+        cfg = _Shim.load_config(self, p)
+        rng = self.rng
+        wb = openpyxl.load_workbook(cfg['avail_file'])
+        names = [r[0] for r in wb.active.iter_rows(min_row=2, values_only=True)]
+        cfg['driver_soft_max_days'] = {n: rng.randint(1, 5) for n in names if rng.random() < 0.25}
+        cfg['prefer_ot'] = [n for n in names if rng.random() < 0.25]
+        return cfg
+
+
+viol = []
+for seed in range(1, 4):
+    rng = random.Random(seed)
+    for k in range(10):
+        case = bk_sweep.gen_case(rng, f'so{seed}x{k}')
+        bk_sweep.B = _Shim(random.Random(seed * 100 + k))
+        _r0, chk0 = bk_sweep.run_case(case, f'so{seed}x{k}')
+        bk_sweep.B = _SoftShim(random.Random(seed * 100 + k))
+        res, chk = bk_sweep.run_case(case, f'so{seed}x{k}')
+        kinds0 = {e.split(':')[0].split(' ')[0] for e in chk0['errors']}
+        bad = hard_errs(chk) + [e for e in chk['errors'] if e.split(':')[0].split(' ')[0] not in kinds0]
+        for dr in res.roster:
+            if dr['max_days'] is not None and total(dr) > max(dr['max_days'], len(dr['extra']) + len(dr['meet'])):
+                bad.append(f"{dr['name']} {total(dr)} > max_days {dr['max_days']}")
+        if bad:
+            viol.append((seed, k, bad[:3]))
+ok(not viol, f'30 random weeks with random soft caps + likes overtime: no new or hard errors {viol[:2]}')
+
 # ========================================================== B. the engine ====
 print('B1 runner: a Drivers-page day off is the typed-confirm bucket')
 cfg = fixture_cfg(extra_unavailable={'Colin Drake': {'Mon': 'timeoff', 'Tue': 'days', 'Sat': 'weekend'}},
@@ -399,9 +498,9 @@ ok(sk and sk[0]['reason'] == "can't work Tues (Drivers page)", f'sync_actual ski
 print('B5 a week saved BEFORE this change still loads')
 old = json.loads(st)
 for dr in old['res']['roster']:
-    for k in ('unav_why', 'max_days', 'max_row'):
+    for k in ('unav_why', 'max_days', 'max_row', 'soft_max_days', 'likes_ot'):
         dr.pop(k, None)
-for k in ('prefs_unmatched', 'KEEPT', 'PREFD', 'LIKED'):
+for k in ('prefs_unmatched', 'KEEPT', 'PREFD', 'LIKED', 'OTPREF'):
     old['res'].pop(k, None)
 runner.use_slot('live-old')
 rep = J(runner.load_state, {'state': json.dumps(old), 'out': os.path.join(tmp, 'old.xlsx')})
@@ -414,6 +513,39 @@ r = J(runner.apply_add, {'name': 'Colin Drake', 'day': 'Sat', 'role': 'backup', 
 ok(r['ok'] and any(e.startswith('UNAVAIL violated: Colin Drake Sat') for e in r['check']['overridden']),
    f"an edit on the old state works: {r.get('message', '')[:200]}")
 ok(J(runner.export_xlsx)['ok'], 'old state: workbook writes')
+ok(all(r['soft_max_days'] is None and r['likes_ot'] is False and r['sent_days'] == [] for r in rep['drivers']),
+   'old state: soft fields default to none')
+
+print('B6 runner: soft day cap = a warning only; likes overtime first in "who can take it" (2026-10-19)')
+cfg = fixture_cfg(driver_soft_max_days={'Aaron Bell': 1}, prefer_ot=['Bianca Cole'])
+runner.use_slot('build')
+built = json.loads(runner.run(save_cfg(cfg, 'run-soft.json')))
+ok(built['ok'], 'build ran')
+ab = next(r for r in built['drivers'] if r['name'] == 'Aaron Bell')
+bc = next(r for r in built['drivers'] if r['name'] == 'Bianca Cole')
+ok(ab['soft_max_days'] == 1 and bc['likes_ot'] is True and ab['likes_ot'] is False, 'driver rows carry both')
+opts = J(runner.add_options, {'name': 'Aaron Bell'})['days']
+soft = [o for o in opts for role in ('road', 'backup')
+        if 'would rather work no more than 1 day (Drivers page, soft)' in o[role]['reasons']]
+ok(bool(soft) and all(o[role]['status'] != 'blocked' or any('Drivers page, soft' not in x for x in o[role]['reasons'])
+                      for o in soft for role in ('road', 'backup')),
+   'add_options: "would rather work no more than 1 day (Drivers page, soft)" -- a warning, never the block')
+pick = next((o for o in soft if o['backup']['status'] == 'warn'), None)
+if pick:
+    r = J(runner.apply_add, {'name': 'Aaron Bell', 'day': pick['day'], 'role': 'backup'})
+    ok(r['ok'] and not r['check']['errors'], f"allowed without any confirm, no error ({r.get('message', '')[:120]})")
+for d in ('Mon', 'Wed'):
+    cands = J(runner.candidates, {'day': d, 'role': 'backup'})['candidates']
+    st = next(x for x in cands if x['name'] == 'Bianca Cole')['status']
+    first = next(x for x in cands if x['status'] == st)
+    ok(first['name'] == 'Bianca Cole' and first['likes_ot'],
+       f"{d}: Bianca (likes overtime) heads the {st!r} group ({first['name']})")
+st = J(runner.export_state)['state']
+runner.use_slot('live-soft')
+rep = J(runner.load_state, {'state': st, 'out': os.path.join(tmp, 'ls.xlsx')})
+ok(next(r for r in rep['drivers'] if r['name'] == 'Aaron Bell')['soft_max_days'] == 1
+   and next(r for r in rep['drivers'] if r['name'] == 'Bianca Cole')['likes_ot'] is True,
+   'both survive export_state -> load_state')
 
 print()
 print('PASS' if not fails else f'FAILED ({len(fails)})')

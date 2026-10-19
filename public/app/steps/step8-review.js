@@ -20,8 +20,10 @@ function PrefsCard({ info, loaded, prefsFailed, timeoffFailed }) {
   const why = (v) => (WHY_LABEL[v.why] || v.why).toLowerCase();
   const limitText = (L) => [
     L.maxDays ? `${L.maxDays} day${L.maxDays === 1 ? '' : 's'} max` : '',
+    L.softMaxDays ? `Rather ≤${L.softMaxDays} day${L.softMaxDays === 1 ? '' : 's'}` : '',   // soft (2026-10-19)
     L.maxRow ? `${L.maxRow} in a row max` : '',
     L.together ? 'Days together' : '',
+    L.likesOT ? 'Likes overtime' : '',
     L.weekend ? (L.weekend.on.length ? `Every other weekend (on this weekend: ${L.weekend.on.join(', ')})`
       : 'Every other weekend (off this weekend)') : '',
   ].filter(Boolean).join(', ');

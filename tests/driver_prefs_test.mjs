@@ -2,7 +2,7 @@
 //   node tests/driver_prefs_test.mjs
 // The storage helpers run against a tiny in-memory window.JAJB (the Firebase path of api.js).
 import {
-  PREFS_KEY, WHY_LABEL, normPref, weekendOn, prefOffDays, onWeekendDays, weekUnavailable, prefSummary,
+  PREFS_KEY, WHY_LABEL, normPref, weekendOn, prefOffDays, onWeekendDays, weekUnavailable, prefSummary, prefHasLimit,
   loadDriverPrefs, saveDriverPref, loadDriverRoster,
 } from '../public/app/lib/driver-prefs.js';
 
@@ -44,6 +44,19 @@ eq('likeDays outside days dropped', normPref({ days: ['Mon', 'Tue', 'Wed'], like
 eq('likeDays all outside days', normPref({ days: ['Mon', 'Tue'], likeDays: ['Sat'] }), { days: ['Mon', 'Tue'] });
 eq('likeDays not array', normPref({ likeDays: 'Mon' }), null);
 eq('by/at kept with content', normPref({ maxDays: 3, by: 'J', at: 'T' }), { maxDays: 3, by: 'J', at: 'T' });
+// soft (2026-10-19): would rather work at most N days / likes overtime
+eq('softMaxDays kept', normPref({ softMaxDays: 3 }), { softMaxDays: 3 });
+eq('softMaxDays clamp hi', normPref({ softMaxDays: 9 }), { softMaxDays: 6 });
+eq('softMaxDays clamp lo', normPref({ softMaxDays: 0 }), { softMaxDays: 1 });
+eq('softMaxDays string ok', normPref({ softMaxDays: '2' }), { softMaxDays: 2 });
+eq('softMaxDays junk dropped', normPref({ softMaxDays: 'x' }), null);
+eq('softMaxDays bool dropped', normPref({ softMaxDays: true }), null);
+eq('softMaxDays below maxDays kept', normPref({ maxDays: 5, softMaxDays: 4 }), { maxDays: 5, softMaxDays: 4 });
+eq('softMaxDays = maxDays dropped', normPref({ maxDays: 4, softMaxDays: 4 }), { maxDays: 4 });
+eq('softMaxDays > maxDays dropped', normPref({ maxDays: 3, softMaxDays: 5 }), { maxDays: 3 });
+eq('likesOT kept', normPref({ likesOT: true }), { likesOT: true });
+eq('likesOT false dropped', normPref({ likesOT: false }), null);
+eq('likesOT truthy non-true dropped', normPref({ likesOT: 'yes' }), null);
 
 // weekendOn — alternates both ways from `on`
 const alt = { weekends: { mode: 'alternate', on: '2026-10-17' } };
@@ -106,6 +119,23 @@ eq('sum likes gap', prefSummary({ likeDays: ['Mon', 'Wed', 'Thu'] }), ['Likes Mo
 eq('sum likes last', prefSummary({ likeDays: ['Sat'], maxDays: 3, weekends: alt.weekends }), ['3 days max', 'Every other weekend', 'Likes Sat']);
 eq('sum 1 day max', prefSummary({ maxDays: 1 }), ['1 day max']);
 eq('sum null', prefSummary(null), []);
+eq('sum soft cap', prefSummary({ softMaxDays: 4 }), ['Rather ≤4 days']);
+eq('sum soft cap 1', prefSummary({ softMaxDays: 1 }), ['Rather ≤1 day']);
+eq('sum likes overtime', prefSummary({ likesOT: true }), ['Likes overtime']);
+eq('sum soft order', prefSummary({ maxDays: 5, softMaxDays: 4, maxRow: 3, likeDays: ['Mon'], likesOT: true }),
+  ['5 days max', 'Rather ≤4 days', '3 in a row max', 'Likes Mon', 'Likes overtime']);
+eq('sum soft dropped at maxDays', prefSummary({ maxDays: 3, softMaxDays: 3 }), ['3 days max']);
+
+// prefHasLimit (the Live board's "N drivers with limits", 2026-10-19): a note alone isn't one
+eq('limit: null', prefHasLimit(null), false);
+eq('limit: note only', prefHasLimit({ note: 'school', by: 'J', at: 'T' }), false);
+eq('limit: junk only', prefHasLimit({ maxDays: 'x', note: '  ' }), false);
+eq('limit: all 7 days', prefHasLimit({ days: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], note: 'any' }), false);
+eq('limit: days', prefHasLimit({ days: ['Mon'] }), true);
+eq('limit: maxDays', prefHasLimit({ maxDays: 3, note: 'x' }), true);
+eq('limit: soft cap', prefHasLimit({ softMaxDays: 3 }), true);
+eq('limit: likes overtime', prefHasLimit({ likesOT: true }), true);
+eq('limit: weekends', prefHasLimit({ weekends: alt.weekends }), true);
 
 // storage, against an in-memory window.JAJB
 const store = {};

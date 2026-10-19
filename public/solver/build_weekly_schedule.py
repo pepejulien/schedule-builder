@@ -64,6 +64,12 @@ OPTIONAL FEATURES (behind config flags):
       prefer_days {name: [Day]} -- SOFT: +15 placement on those days.
       like_days {name: [Day]} -- VERY SOFT: +4 placement on days they'd like
         to work (the weakest nudge; never flagged, never a verification check).
+      driver_soft_max_days {name: n} -- SOFT (2026-10-19): would rather work at
+        most n days. A day past it ranks below every upgrade (filled last, moved
+        away when it can); backups skip them until a last-resort pass. Broken
+        only when needed -> a SOFT DAY CAP note. Ignored when >= their max_days.
+      prefer_ot [name] -- SOFT (2026-10-19): likes overtime -- first in the
+        upgrade layers and the 42h overflow. Never past a hard limit.
     A cap the driver asked for beats an exact_days target / a training pair;
     the shortfall is reported, not an error.
 
@@ -218,6 +224,7 @@ def load_roster(avail_file):
                          unav=unav, seed=seed, seed_time=seed_time,
                          meet=meet, meet_txt=meet_txt,
                          std_added=set(), unav_why={}, max_days=None, max_row=None,
+                         soft_max_days=None, likes_ot=False,
                          usual=[], soft=[],
                          present=0, prim=[], bk=[], helper=[], extra=set()))
     if not rows:
@@ -391,7 +398,7 @@ def load_config(config_path):
                 bad = [d for d in v if d not in ALL]
                 if bad:
                     errs.append(f"extra_unavailable['{nm}']: {bad} not valid days ({ALL})")
-    for k, lo in (('driver_max_days', 0), ('driver_max_row', 1)):
+    for k, lo in (('driver_max_days', 0), ('driver_max_row', 1), ('driver_soft_max_days', 1)):
         v = cfg.get(k)
         if v is not None and (not isinstance(v, dict)
                               or any(not _whole(x, lo) for x in v.values())):
@@ -399,6 +406,9 @@ def load_config(config_path):
     kt = cfg.get('keep_together')
     if kt is not None and (not isinstance(kt, list) or any(not isinstance(x, str) for x in kt)):
         errs.append("'keep_together' must be a list of driver names")
+    po = cfg.get('prefer_ot')
+    if po is not None and (not isinstance(po, list) or any(not isinstance(x, str) for x in po)):
+        errs.append("'prefer_ot' must be a list of driver names")
     pf = cfg.get('prefer_days')
     if pf is not None:
         if not isinstance(pf, dict) or any(not isinstance(v, list) for v in pf.values()):
@@ -618,6 +628,8 @@ def build_schedule(cfg, prev_hook=None):
     #   keep_together [name]      : SOFT, days next to each other (placement only).
     #   prefer_days {name: [Day]} : SOFT placement boost (placement only).
     #   like_days {name: [Day]}   : VERY SOFT placement nudge, the weakest term.
+    #   driver_soft_max_days {name: n} : SOFT day cap (2026-10-19) -- see _rank_at / _bk_ok.
+    #   prefer_ot [name]          : SOFT (2026-10-19), likes overtime -- see _dayscore / overflow.
     prefs_unmatched = []
     by_n = {norm(dr['name']): dr for dr in roster}
 
@@ -644,6 +656,21 @@ def build_schedule(cfg, prev_hook=None):
             if dr is not None:
                 v = int(v)
                 dr[fld] = v if dr.get(fld) is None else min(dr[fld], v)
+    for nm, v in (cfg.get('driver_soft_max_days') or {}).items():
+        dr = _pref_driver(nm, 'driver_soft_max_days')
+        if dr is not None:
+            v = int(v)
+            dr['soft_max_days'] = v if dr.get('soft_max_days') is None else min(dr['soft_max_days'], v)
+    for dr in roster:                        # the hard cap already says it
+        if dr.get('soft_max_days') is not None and dr.get('max_days') is not None \
+                and dr['soft_max_days'] >= dr['max_days']:
+            dr['soft_max_days'] = None
+    OTPREF = set()
+    for nm in cfg.get('prefer_ot') or []:
+        dr = _pref_driver(nm, 'prefer_ot')
+        if dr is not None:
+            dr['likes_ot'] = True
+            OTPREF.add(norm(dr['name']))
     KEEPT = set()
     for nm in cfg.get('keep_together') or []:
         dr = _pref_driver(nm, 'keep_together')
@@ -735,6 +762,13 @@ def build_schedule(cfg, prev_hook=None):
             return 99
         return k - len(dr['extra']) - len(dr['meet'])
 
+    def softroad(dr):
+        """Road days (incl. helper days) under the driver's SOFT day cap (Drivers
+        page "would rather work at most", 2026-10-19), after the fixed dispatch /
+        meeting days. 99 = no soft cap. Ranking only -- never a hard limit."""
+        k = dr.get('soft_max_days')
+        return 99 if k is None else k - len(dr['extra']) - len(dr['meet'])
+
     def runok(dr, dt):
         s = worked(dr) | {dt}
         n = 0; c = dt
@@ -774,8 +808,20 @@ def build_schedule(cfg, prev_hook=None):
     #   30  discipline 1 -> 2
     #   20  Top/Solid 3 -> 4
     #   10  Fair 3 -> 4
+    #    5  a day past the driver's SOFT day cap (2026-10-19, Drivers page "would
+    #       rather work at most"): below every upgrade, so filled last and moved
+    #       away by _rebalance when it can. Explicit exact_days pins are exempt.
     #    0  at cap (not a fill candidate)
+    SOFTR = 5
+
     def _rank_at(dr, cur):
+        r = _rank_base(dr, cur)
+        n = norm(dr['name'])
+        if r > SOFTR and cur >= softroad(dr) and not (n in TARGET and n not in REDS):
+            return SOFTR
+        return r
+
+    def _rank_base(dr, cur):
         n = norm(dr['name'])
         if cur >= roadcap(dr):                 # the driver's own max_days (Drivers page)
             return 0
@@ -806,7 +852,8 @@ def build_schedule(cfg, prev_hook=None):
             return (r, key2, rate_of(dr), prefsc(dr, d))
         if r >= 50:                        # Fair/discipline base: round-robin
             return (r, -cur, rate_of(dr), prefsc(dr, d))
-        return (r, rate_of(dr), -cur, prefsc(dr, d))   # upgrades: better rate first
+        # upgrades: likes overtime first (Drivers page, 2026-10-19), then better rate
+        return (r, n in OTPREF, rate_of(dr), -cur, prefsc(dr, d))
 
     def wkend_ok(dr, d):
         if not weekend_rule or d not in WEEKEND:
@@ -1087,6 +1134,8 @@ def build_schedule(cfg, prev_hook=None):
         for f in frees:
             if pdays(roster[f]) >= pcap(roster[f]):    # f's own max_days (Drivers page)
                 continue
+            if pdays(roster[f]) >= softroad(roster[f]):  # f's soft day cap (2026-10-19)
+                continue
             for g in reversed(frees):
                 if pdays(roster[g]) - pdays(roster[f]) < 2:
                     continue
@@ -1246,6 +1295,7 @@ def build_schedule(cfg, prev_hook=None):
     # coverage wins as the true last resort.
     bslot = {d: [] for d in DAYS}
     BKCAP = HCAP if HCAP else 4 * PH          # the "under 40 hours" line
+    SOFT_BK = [False]                         # True = the last-resort pass may pass soft day caps
 
     def _bk_common(i, dr, d, dt):
         return (d not in dr['unav'] and d not in dr['prim'] and d not in dr['helper']
@@ -1276,6 +1326,9 @@ def build_schedule(cfg, prev_hook=None):
         if FREE(dr) and tot >= FREETOT:
             return False
         if tot >= dcap(dr):                  # incl. the driver's own max_days
+            return False
+        # soft day cap (2026-10-19): skipped until the last-resort pass
+        if not SOFT_BK[0] and dr.get('soft_max_days') is not None and tot >= dr['soft_max_days']:
             return False
         return H(dr) < BKCAP                 # under 40 road+backup hours
 
@@ -1336,7 +1389,7 @@ def build_schedule(cfg, prev_hook=None):
 
     def _try_exchange():
         tops = sorted((i for i, dr in enumerate(roster)
-                       if norm(dr['name']) in MOST and pdays(dr) < min(MAXPRIM, roadcap(dr))
+                       if norm(dr['name']) in MOST and pdays(dr) < min(MAXPRIM, roadcap(dr), softroad(dr))
                        and H(dr) < BKCAP),
                       key=lambda i: (-rate_of(roster[i]), H(roster[i]),
                                      norm(roster[i]['name'])))
@@ -1419,15 +1472,43 @@ def build_schedule(cfg, prev_hook=None):
 
     # overflow: the ladder is spent and slots remain -> Top/Solid at 4 roads
     # take a 5th day (42h), best rate first. Coverage beats the 40h line here.
-    if _bk_filled() < total_slots:
-        for i in sorted((i for i, dr in enumerate(roster)
-                         if norm(dr['name']) in MOST and pdays(dr) == 4
-                         and not dr['bk']
-                         and pdays(dr) + len(dr['extra']) + len(dr['meet']) < dcap(dr)),
-                        key=_bk_order):
+    # Drivers who like overtime (prefer_ot, 2026-10-19) go first and may take it
+    # from any tier -- every hard rule still holds (_bk_common: days in a row,
+    # days in 7, max_days / max_total_days; a Fair's free_total_days; no backups
+    # for a pinned exact-days driver).
+    def _overflow(only_ot):
+        if _bk_filled() >= total_slots:
+            return
+
+        def _in(dr):
+            n = norm(dr['name'])
+            if only_ot and n not in OTPREF:
+                return False
+            if n not in MOST:                 # likes overtime, another tier: its own rules hold
+                if n not in OTPREF or (n in TARGET and n not in REDS and n not in BKX):
+                    return False
+                if FREE(dr) and pdays(dr) + len(dr['bk']) >= FREETOT:
+                    return False
+            if not SOFT_BK[0] and dr.get('soft_max_days') is not None \
+                    and pdays(dr) + len(dr['extra']) + len(dr['meet']) >= dr['soft_max_days']:
+                return False
+            return (pdays(dr) == 4 and not dr['bk']
+                    and pdays(dr) + len(dr['extra']) + len(dr['meet']) < dcap(dr))
+        for i in sorted((i for i, dr in enumerate(roster) if _in(dr)),
+                        key=lambda i: (norm(roster[i]['name']) not in OTPREF, _bk_order(i))):
             if _bk_filled() >= total_slots:
                 break
             _bk_augment(i, set())
+
+    if OTPREF:
+        _overflow(True)                       # likes overtime: the extra hours go to them first
+    # last resort for the soft day caps (2026-10-19): the ladder again, allowed past them.
+    # Only when someone has one -- a week without soft caps runs exactly as before.
+    if _bk_filled() < total_slots and any(dr.get('soft_max_days') is not None for dr in roster):
+        SOFT_BK[0] = True
+        _run_ladder()
+    SOFT_BK[0] = True
+    _overflow(False)
 
     # discipline-tier coverage is worth a line of its own in the report
     disc_lr = sorted((dr['name'], d) for dr in roster
@@ -1450,6 +1531,22 @@ def build_schedule(cfg, prev_hook=None):
             f'BACKUPS {_bk_filled()}/{total_slots}: {short} slot(s) open on '
             f'{"/".join(open_days)} -- nobody under {BKCAP}h with >=2 road days '
             f'can work those days, and no 4-road Top/Solid can either.')
+
+    # who went past their SOFT day cap (Drivers page "would rather work at most",
+    # 2026-10-19) -- allowed, named so it isn't silent. Fixed dispatch / meeting
+    # days alone over it are not the build's doing.
+    soft_over = []
+    for dr in roster:
+        k = dr.get('soft_max_days')
+        if k is None:
+            continue
+        fixed = len(dr['extra']) + len(dr['meet'])
+        tot = pdays(dr) + len(dr['bk']) + fixed
+        if tot > max(k, fixed):
+            soft_over.append((dr['name'], tot, k))
+    if soft_over:
+        notes.append('SOFT DAY CAP broken (Drivers page, would rather work less) -- '
+                     + '; '.join(f'{nm} {t} days (would rather {k})' for nm, t, k in sorted(soft_over)))
 
     # ---- wave labels (primaries hit exact counts; backups spread across waves) ----
     # Requested times first (Jose 2026-09-11): a driver whose seed cell carried
@@ -1514,6 +1611,7 @@ def build_schedule(cfg, prev_hook=None):
                   MAXWKND=MAXWKND, weekend_rule=weekend_rule, CAPX=CAPX,
                   XBK=XBK, exchanges=exchanges,
                   prefs_unmatched=prefs_unmatched, KEEPT=KEEPT, PREFD=PREFD, LIKED=LIKED,
+                  OTPREF=OTPREF,
                   merge_std=merge_std, notes=notes, infeasible=infeasible)
 
 

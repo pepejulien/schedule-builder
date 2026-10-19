@@ -199,8 +199,6 @@ train = next((x, d) for x in names for d in OPEN if 'TRAIN' in C0[x][d] and DATE
 on_road = next((x, d) for x in names for d in OPEN if DATE[d] <= TODAY and d != 'Mon'
                and C0[x][d] and 'Backup' not in C0[x][d] and 'TRAIN' not in C0[x][d]
                and 'Meeting' not in C0[x][d] and C0[x][d] not in ('Unavailable', 'Dispatch'))
-on_bk = next((x, d) for x in names for d in OPEN if DATE[d] <= TODAY and 'Backup' in C0[x][d]
-             and x != on_road[0])
 same = next((x, d) for x in names for d in OPEN if DATE[d] <= TODAY and d != 'Mon'
             and C0[x][d] and 'Backup' not in C0[x][d] and 'TRAIN' not in C0[x][d]
             and 'Meeting' not in C0[x][d] and C0[x][d] not in ('Unavailable', 'Dispatch')
@@ -225,7 +223,6 @@ entries = [
     E(vic, 'Mon', 'backup'),                                    # called out
     E(unav[0], unav[1], 'road'),
     E(train[0], train[1], 'road'),
-    E(on_bk[0], on_bk[1], 'road'),                             # backup sent out: Amazon's way
     E(same[0], same[1], 'road'),
     dict(name='Nobody Atall', keys=['nobody|atall'], tid='', date=DATE['Mon'], role='road'),
     dict(name='Old Week', keys=[], tid='', date='2020-01-01', role='road'),
@@ -261,8 +258,6 @@ ok(sk[unav]['kind'] == 'unavailable' and sk[unav]['reason'] in
 ok(sk[train]['kind'] == 'training', f"training -> {sk[train]['reason']}")
 if meet:
     ok(sk[meet]['kind'] == 'duty', f"meeting -> {sk[meet]['reason']}")
-ok(sk[on_bk]['kind'] == 'agree' and 'sent out' in sk[on_bk]['reason'],
-   f"backup vs RT route -> agree ({sk[on_bk]['reason']})")
 ok(sk[same]['kind'] == 'agree', f"same role -> {sk[same]['reason']}")
 ok(sk[('Nobody Atall', 'Mon')]['kind'] == 'unmatched', 'unknown name reported as unmatched')
 ok(all({'name', 'date', 'day', 'cell', 'role', 'reason', 'code'} <= set(s) for s in data['skipped']),
@@ -472,6 +467,108 @@ ok(rl['changed'] is False, 'reloaded + same entries: changed false')
 rl2 = J(runner.sync_actual, {'today': TODAY, 'entries': [E(dp, 'Wed', 'backup')]})   # mo Mon gone
 ok([x['name'] for x in rl2['data']['removed']] == [mo] and cells(rl2)[mo]['Mon'] == C0[mo]['Mon']
    and CNT(rl2, 'Mon') == CNT(built, 'Mon'), 'after reload, RT dropping it puts the route back exactly')
+
+# ---------------------------------------------------------------- Part D ----
+print('Part D: a scheduled backup, Route Tracker has a route -> sent out, a route day (2026-10-19)')
+pbk = lambda x, d: 'Backup' in C0[x][d] and C0[x][d] == f"{runner._cell_wave(C0[x][d])} Backup"  # noqa: E731
+DD = next(d for d in ('Tue', 'Wed', 'Mon') if any(pbk(x, d) for x in names))
+sb = next(x for x in names if pbk(x, DD))                               # no start: keeps the backup's wave
+sb2 = next(((x, d) for x in names for d in OPEN if DATE[d] <= TODAY and d != DD and pbk(x, d)
+            and len(waves(d)) > 1 and runner._cell_wave(C0[x][d]) != waves(d)[-1]), None)  # a start in another wave
+cv = next(x for x in names if plain(x, DD) and x != sb)                 # calls out: a route slot opens
+bw = runner._cell_wave(C0[sb][DD])
+load('sent')
+mkd = J(runner.apply_mark, {'name': cv, 'day': DD, 'kind': 'callout'})    # a human edit: an undo step
+ok(mkd['ok'], f'{cv} called out {DD}')
+B0 = CNT(mkd, DD)
+h0 = drv(mkd, sb)['hours']
+n0 = len(mkd['edits'])
+ents = [E(sb, DD, 'road')]
+if sb2:
+    ents.append(E(sb2[0], sb2[1], 'road', start=waves(sb2[1])[-1]))
+rd = J(runner.sync_actual, {'today': TODAY, 'entries': ents})
+ok(rd.get('ok') and rd.get('changed'), 'sync ran and changed the schedule')
+apd = {(a['name'], a['day']): a for a in rd['data']['applied']}
+ok((sb, DD) in apd and apd[(sb, DD)]['kind'] == 'sent' and apd[(sb, DD)]['cell'] == C0[sb][DD],
+   f'{sb} {DD}: applied as sent out ({apd.get((sb, DD))})')
+cd_ = cells(rd)
+ok(cd_[sb][DD] == bw, f"the backup's cell is a plain route in its own wave: {C0[sb][DD]!r} -> {cd_[sb][DD]!r}")
+row = drv(rd, sb)
+ok(DD in row['road_days'] and DD not in row['backup_days'], f"in the data a route day: road {row['road_days']}, backup {row['backup_days']}")
+ok(row['hours'] == h0 + built['limits']['primary_hours'] - built['limits']['backup_hours'],
+   f"planned hours count it as a route ({h0} -> {row['hours']})")
+ok(row['sent_days'] == [DD], f"marked as sent out from backup: sent_days {row['sent_days']}")
+r_, rf, b_, bf = B0
+ok(CNT(rd, DD) == (r_, rf + 1, b_, bf - 1),
+   f"{DD}: one more route driven, one backup fewer; counts only change by hand {B0} -> {CNT(rd, DD)}")
+pvd = runner._STATE['rt'][(runner.norm(sb), DD)]
+ok(pvd['kind'] == 'sent' and pvd['orig'] == C0[sb][DD] and pvd['role'] == 'road', f'provenance kept: {pvd}')
+line = f"{sb}: {DD} backup sent out on a {bw} route (Route Tracker)"
+ok(any(x.startswith(line) for x in rd['edits'][n0:]), f'logged, worded for Jose: {line!r}')
+if sb2:
+    ok(cells(rd)[sb2[0]][sb2[1]] == waves(sb2[1])[-1], f"a start time picks its wave: {cells(rd)[sb2[0]][sb2[1]]!r}")
+ok(not any((x['name'], x['day']) == (sb, DD) for x in rd['data']['skipped']), 'not reported as skipped any more')
+ok(all(cd_[x][d] == cells(mkd)[x][d] for x in names for d in OPEN
+       if (x, d) not in apd), 'nobody else changed')
+
+print('  idempotent')
+rd2 = J(runner.sync_actual, {'today': TODAY, 'entries': ents})
+ok(rd2['changed'] is False and not rd2['data']['applied'] and rd2['edits'] == rd['edits'], 'second identical call: changed false')
+
+print('  reproducible: export -> load (no inputs) gives the same report')
+std = J(runner.export_state)['state']
+runner.use_slot('sent-reload')
+rl = J(runner.load_state, {'state': std, 'out': os.path.join(tmp, 'sr.xlsx')})
+pick = lambda r: ([{k: x[k] for k in ('name', 'cells', 'road_days', 'backup_days', 'hours', 'sent_days')}  # noqa: E731
+                   for x in r['drivers']], r['days'], r['infeasible'], r['check']['errors'])
+ok(pick(rl) == pick(rd), 'same drivers / days / open slots / errors after the reload')
+ok(runner._STATE['rt'][(runner.norm(sb), DD)]['kind'] == 'sent', 'provenance survives export_state -> load_state')
+runner.use_slot('sent')
+
+print('  undo stays the dispatcher\'s')
+ud = J(runner.undo_last)                                             # takes back the call-out
+ok(cells(ud)[cv][DD] == C0[cv][DD] and cells(ud)[sb][DD] == bw, 'undo put the call-out back; the sent-out route stayed')
+ok(not ud['can_undo'], 'nothing left to undo: sync never pushed an undo step')
+
+print('  Route Tracker says backup after all -> back to the backup')
+rb = J(runner.sync_actual, {'today': TODAY, 'entries': [E(sb, DD, 'backup')]})
+rmd = {(x['name'], x['day']): x for x in rb['data']['removed']}
+ok((sb, DD) in rmd and rmd[(sb, DD)]['kind'] == 'sent', f'taken back: {sorted(rmd)}')
+ok(cells(rb)[sb][DD] == C0[sb][DD] and DD in drv(rb, sb)['backup_days'] and drv(rb, sb)['sent_days'] == [],
+   f"the backup cell is back: {cells(rb)[sb][DD]!r}")
+ok(CNT(rb, DD) == CNT(built, DD), f"{DD} counts as built {CNT(built, DD)} -> {CNT(rb, DD)}")
+ok(f"{sb}: {DD} back to {C0[sb][DD]} — Route Tracker has a backup now" in rb['edits'], 'revert logged')
+ok(any((x['name'], x['day']) == (sb, DD) and x['kind'] == 'agree' for x in rb['data']['skipped']),
+   'the backup now agrees with Route Tracker')
+
+print('  sent again, then Route Tracker drops the day -> back to the backup')
+J(runner.sync_actual, {'today': TODAY, 'entries': [E(sb, DD, 'road')]})
+rx = J(runner.sync_actual, {'today': TODAY, 'entries': []})
+ok(cells(rx)[sb][DD] == C0[sb][DD] and f"{sb}: {DD} back to {C0[sb][DD]} — no route in Route Tracker any more" in rx['edits'],
+   'dropped -> the backup is back, logged')
+
+print('  a human changed it (no flip-flop)')
+J(runner.sync_actual, {'today': TODAY, 'entries': [E(sb, DD, 'road')]})
+hb = J(runner.set_role, {'name': sb, 'day': DD, 'to': 'backup'})
+ok(hb.get('ok') and 'Backup' in cells(hb)[sb][DD], f'{sb} {DD} made a backup again by hand')
+rh = J(runner.sync_actual, {'today': TODAY, 'entries': [E(sb, DD, 'road')]})
+s_sb = next((x for x in rh['data']['skipped'] if (x['name'], x['day']) == (sb, DD)), None)
+ok(not rh['data']['applied'] and 'Backup' in cells(rh)[sb][DD] and s_sb and s_sb['reason'] == runner.RT_OFF_WHY,
+   'not sent out again; reported "removed by hand on the schedule - still in Route Tracker"')
+ok((runner.norm(sb), DD, 'road') in runner._STATE['rt_off'], 'remembered in rt_off')
+
+print('  a backup the sync added, Route Tracker has a route now -> a route')
+ad = next(x for x in names if blank(x, 'Mon') and x not in (sb, cv))
+load('sent2')
+a1 = J(runner.sync_actual, {'today': TODAY, 'entries': [E(ad, 'Mon', 'backup')]})
+ok('Backup' in cells(a1)[ad]['Mon'], f"{ad} Mon backup added ({cells(a1)[ad]['Mon']!r})")
+a2 = J(runner.sync_actual, {'today': TODAY, 'entries': [E(ad, 'Mon', 'road')]})
+ok([x['name'] for x in a2['data']['removed']] == [ad] and [x['name'] for x in a2['data']['applied']] == [ad]
+   and 'Backup' not in cells(a2)[ad]['Mon'] and 'Mon' in drv(a2, ad)['road_days'],
+   f"taken back as a backup, added as a route ({cells(a2)[ad]['Mon']!r})")
+ok(runner._STATE['rt'][(runner.norm(ad), 'Mon')]['role'] == 'road', 'remembered as a route add')
+a3 = J(runner.sync_actual, {'today': TODAY, 'entries': []})
+ok(cells(a3)[ad]['Mon'] == '' and CNT(a3, 'Mon') == CNT(built, 'Mon'), 'RT drops it -> blank again, counts as built')
 
 print()
 print('FAIL: ' + '; '.join(fails) if fails else 'PASS')

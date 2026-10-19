@@ -87,7 +87,8 @@ const eq = (name, a, b) => ok(name, JSON.stringify(a) === JSON.stringify(b), `${
 // empty prefs / no prefs -> no keys at all
 for (const [label, extra] of [['none', {}], ['empty doc', { driverPrefs: { v: 1, drivers: {} }, weekTimeoff: {} }]]) {
   const c = assembleConfig({ ...state, ...extra }).config;
-  for (const k of ['extra_unavailable', 'driver_max_days', 'driver_max_row', 'keep_together', 'prefer_days', 'like_days']) {
+  for (const k of ['extra_unavailable', 'driver_max_days', 'driver_soft_max_days', 'driver_max_row', 'keep_together',
+    'prefer_ot', 'prefer_days', 'like_days']) {
     ok(`${label}: ${k} absent`, !(k in c));
   }
 }
@@ -144,6 +145,26 @@ ok('like_days: unmatched listed', lk.prefsInfo.unmatched.includes('Nobody Here')
 ok('like_days absent when none', !('like_days' in out.config));
 const lkAll = assembleConfig({ ...state, driverPrefs: { v: 1, drivers: { 'Daniel Lynch': { likeDays: ['Fri'] } } } });
 ok('like_days: only closed days -> key absent', !('like_days' in lkAll.config));
+// soft (2026-10-19): driver_soft_max_days {name: n} + prefer_ot [name]; a note-only entry adds nothing
+const so = assembleConfig({ ...state, driverPrefs: { v: 1, drivers: {
+  'Daniel Lynch': { maxDays: 5, softMaxDays: 4 },
+  'grace nolan': { likesOT: true, note: 'wants hours' },
+  'Aaron Bell': { softMaxDays: 3, likesOT: true },
+  'Cara Amos': { maxDays: 3, softMaxDays: 3 },                                      // soft = hard -> dropped
+  'Colin Drake': { note: 'just a note' },
+  'Zackary McDonald': { softMaxDays: 2, likesOT: true },                             // excluded
+  'Nobody Here': { softMaxDays: 2 },                                                 // not on the roster
+} } });
+eq('driver_soft_max_days', so.config.driver_soft_max_days, { 'Daniel Lynch': 4, 'Aaron Bell': 3, 'Nobody Here': 2 });
+eq('prefer_ot', so.config.prefer_ot, ['Grace Nolan', 'Aaron Bell']);
+eq('driver_max_days with soft', so.config.driver_max_days, { 'Daniel Lynch': 5, 'Cara Amos': 3 });
+eq('soft info.limits Daniel', so.prefsInfo.limits['Daniel Lynch'], { maxDays: 5, softMaxDays: 4 });
+eq('soft info.limits Grace', so.prefsInfo.limits['Grace Nolan'], { likesOT: true });
+eq('soft info.limits Aaron', so.prefsInfo.limits['Aaron Bell'], { softMaxDays: 3, likesOT: true });
+ok('note-only: no limits entry', !so.prefsInfo.limits['Colin Drake']);
+ok('soft: excluded skipped', !('Zackary McDonald' in so.config.driver_soft_max_days) && !so.config.prefer_ot.includes('Zackary McDonald'));
+ok('soft: unmatched listed', so.prefsInfo.unmatched.includes('Nobody Here'));
+ok('soft absent when none', !('driver_soft_max_days' in out.config) && !('prefer_ot' in out.config));
 const PREFS_W = "Couldn't read driver preferences — this build doesn't use them.";
 const TIME_W = "Couldn't read the days off asked for this week — check the connection, then build again.";
 ok('ok reads: no failure warnings', !out.warnings.includes(PREFS_W) && !out.warnings.includes(TIME_W));
@@ -151,7 +172,8 @@ ok('ok reads: no failure warnings', !out.warnings.includes(PREFS_W) && !out.warn
 const pf = assembleConfig({ ...state, driverPrefs: null, weekTimeoff, driverPrefsFailed: true });
 eq('prefs failed: only time off', pf.config.extra_unavailable,
   { 'Daniel Lynch': { Wed: 'timeoff' }, 'Bianca Cole': { Sun: 'timeoff' }, 'Someone Else': { Tue: 'timeoff' } });
-ok('prefs failed: no prefs keys', ['driver_max_days', 'driver_max_row', 'keep_together', 'prefer_days', 'like_days'].every((k) => !(k in pf.config)));
+ok('prefs failed: no prefs keys', ['driver_max_days', 'driver_soft_max_days', 'driver_max_row', 'keep_together', 'prefer_ot',
+  'prefer_days', 'like_days'].every((k) => !(k in pf.config)));
 ok('prefs failed: prefs warning only', pf.warnings.includes(PREFS_W) && !pf.warnings.includes(TIME_W));
 // time-off read failed, prefs fine -> prefs still apply, no 'timeoff' days
 const tf = assembleConfig({ ...state, driverPrefs, weekTimeoff: null, timeoffFailed: true });

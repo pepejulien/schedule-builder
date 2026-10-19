@@ -155,6 +155,12 @@ def _driver_rows(res):
             unav_why=dict(dr.get("unav_why") or {}),
             max_days=dr.get("max_days"),
             max_row=dr.get("max_row"),
+            # soft (2026-10-19): would rather work at most N days / likes overtime
+            soft_max_days=dr.get("soft_max_days"),
+            likes_ot=bool(dr.get("likes_ot")),
+            # backup days Route Tracker shows he was sent out on a route (sync_actual made them routes)
+            sent_days=sorted((d for (k, d), pv in (_STATE.get("rt") or {}).items()
+                              if k == n and pv.get("kind") == "sent"), key=ALL_DAYS.index),
             hours=hours,
             cells=cells,
             worked_dates=sorted(x.isoformat() for x in _worked_dates(res, dr)),
@@ -866,6 +872,10 @@ def _assess(res, dr, day, role):
     if kd is not None and not real and tot + inc > kd:
         # the driver's own limit (Drivers page): POLICY - allowed, flagged
         warns.append(f"asked for {_plural(kd, 'day')} max (Drivers page)")
+    ks = dr.get("soft_max_days")
+    if ks is not None and not real and tot + inc > ks and not (kd is not None and tot + inc > kd):
+        # soft (2026-10-19): only a warning, never a block
+        warns.append(f"would rather work no more than {_plural(ks, 'day')} (Drivers page, soft)")
     if FREE_name(dr, res.TARGET, res.MOST) and _pdays(dr) + len(dr["bk"]) + 1 > res.FREETOT:
         warns.append(f"Fair drivers normally max out at {res.FREETOT} total days")
 
@@ -1047,9 +1057,11 @@ def candidates(payload_json):
                 hours=h,
                 new_hours=h + (res.PH if role == "road" else res.BH),
                 road_days=sorted(dr["prim"]), backup_days=sorted(dr["bk"]),
+                likes_ot=bool(dr.get("likes_ot")),
                 status=status, reasons=reasons, notes=notes, limits=limits))
         rank = {"ok": 0, "warn": 1, "confirm": 2, "unavail": 3, "blocked": 4}
-        out.sort(key=lambda c: (rank[c["status"]], c["hours"], norm(c["name"])))
+        # likes overtime first within a status (Drivers page, soft, 2026-10-19)
+        out.sort(key=lambda c: (rank[c["status"]], not c["likes_ot"], c["hours"], norm(c["name"])))
         return json.dumps(dict(ok=True, day=day, role=role, candidates=out))
     except Exception:  # noqa: BLE001
         import traceback
@@ -1915,7 +1927,10 @@ def load_state(payload_json):
             dr.setdefault("unav_why", {})
             dr.setdefault("max_days", None)
             dr.setdefault("max_row", None)
-        for k, v in (("prefs_unmatched", []), ("KEEPT", set()), ("PREFD", {}), ("LIKED", {})):
+            dr.setdefault("soft_max_days", None)      # soft prefs (2026-10-19)
+            dr.setdefault("likes_ot", False)
+        for k, v in (("prefs_unmatched", []), ("KEEPT", set()), ("PREFD", {}), ("LIKED", {}),
+                     ("OTPREF", set())):
             if not hasattr(res, k):
                 setattr(res, k, v)
         res.cfg["out"] = p.get("out") or res.cfg.get("out") or "/work/live.xlsx"
@@ -2289,6 +2304,42 @@ def _rt_unswap(v, i, n, day, pv, desc):
     v["edits"].append(desc)
 
 
+# Backup -> route (2026-10-19): Route Tracker shows a scheduled backup ran a route -- he was sent
+# out. The day becomes a plain route in wave w, so the counts and hours treat it as one; the
+# sync's own record (kind "sent", orig = the backup cell) marks it and takes it back if Route
+# Tracker later says he didn't run. Counts only change by hand (Jose 2026-10-11), as set_role does
+# it: a full wave just shows one over, the backup slot shows open.
+def _rt_on_backup(v, i, n, day, orig):
+    """The view still has the backup a backup->route starts from."""
+    a = v["assign"][i]
+    return (day in a["bk"] and day not in a["prim"] and n not in v["marks"].get(day, {})
+            and v["cell"].get(day, {}).get(i) == orig)
+
+
+def _rt_send(v, i, day, w):
+    """Backup -> route in wave w. -> {extra}: the wave was already full (shows over)."""
+    cell = v["cell"][day]
+    fw = sum(1 for x in cell.values() if "Backup" not in x and "TRAIN helper" not in x and _cell_wave(x) == w)
+    a = v["assign"][i]
+    a["bk"].remove(day)
+    a["prim"].append(day)
+    cell[i] = w
+    return dict(extra=fw >= v["waves"][day].get(w, 0))
+
+
+def _rt_unsend(v, i, n, day, pv, desc):
+    """Back to the original backup cell -- in an undo snapshot only where the send was applied."""
+    if v["rtx"] is not None:
+        if (n, day) not in v["rtx"]:
+            return
+        v["rtx"].pop((n, day))
+    a = v["assign"][i]
+    a["prim"].remove(day)
+    a["bk"].append(day)
+    v["cell"][day][i] = pv["orig"]
+    v["edits"].append(desc)
+
+
 def _rt_cell(res, i, dr, day):
     """(kind, cell text) of a driver's day: blank | mark | duty | training | road |
     backup | unavailable."""
@@ -2402,7 +2453,13 @@ def sync_actual(payload_json):
             views = list(_rt_views(res))
             holds = dr is not None and _rt_holds(views[0], i, n, day, pv)
             swap = pv.get("kind") == "swap"                       # a route sync made a backup
-            if ((n, day, "backup") in present_r) if swap else ((n, day) in present):
+            sent = pv.get("kind") == "sent"                       # a backup sync made a route (2026-10-19)
+            # a backup this op added, Route Tracker has a route now: taken back here, added again
+            # below as a route (2026-10-19)
+            if (((n, day, "backup") in present_r) if swap
+                    else ((n, day, "road") in present_r) if sent
+                    else ((n, day, "backup") in present_r) if pv["role"] == "backup"
+                    else ((n, day) in present)):
                 if not holds:
                     del rt[(n, day)]
                     rt_off.add((n, day, pv["role"]))
@@ -2412,13 +2469,20 @@ def sync_actual(payload_json):
                     why = ("Route Tracker has a route now" if (n, day) in present
                            else "no longer a backup in Route Tracker")
                     desc = f"{dr['name']}: {day} back on the {pv['wave']} route — {why}"
+                elif sent:
+                    why = ("Route Tracker has a backup now" if (n, day) in present
+                           else "no route in Route Tracker any more")
+                    desc = f"{dr['name']}: {day} back to {pv['orig']} — {why}"
+                elif (n, day) in present:                         # our backup, RT has a route now
+                    desc = f"{dr['name']}: {_rt_text(pv, day)} removed (Route Tracker has a route now)"
                 else:
                     desc = f"{dr['name']}: {_rt_text(pv, day)} removed (no longer in Route Tracker)"
                 for v in views:
                     if _rt_holds(v, i, n, day, pv):
-                        (_rt_unswap if swap else _rt_take)(v, i, n, day, pv, desc)
+                        (_rt_unswap if swap else _rt_unsend if sent else _rt_take)(v, i, n, day, pv, desc)
                 removed.append(dict(name=dr["name"], date=pv["date"], day=day, role=pv["role"],
-                                    label=pv["label"], **(dict(kind="swap", cell=pv["orig"]) if swap else {})))
+                                    label=pv["label"], **(dict(kind=pv["kind"], cell=pv["orig"])
+                                                          if swap or sent else {})))
             del rt[(n, day)]
         rt_off &= present_r                                       # Route Tracker let go of it
 
@@ -2489,7 +2553,31 @@ def sync_actual(payload_json):
                 kind, why = "conflict", ("scheduled on a route; Route Tracker has them as a backup"
                                          " (not a plain route here - change it by hand)")
             elif kind == "backup" and role == "road":
-                kind, why = "agree", "scheduled as a backup and sent out on a route (normal)"
+                # 4) a backup, Route Tracker has a route: he was sent out (2026-10-19) -> a route day,
+                #    marked as sent out from backup. The wave: Route Tracker's start, else the backup's own
+                bw = _cell_wave(cell)
+                w = (_rt_wave(res, day, "road", e.get("start")) if e.get("start") or bw not in res.waves.get(day, {})
+                     else bw)
+                if w is None:
+                    skip(dr["name"], d, cell, e, "closed", "the day has no wave times on the schedule")
+                    continue
+                pv = dict(name=dr["name"], role="road", kind="sent", label=w, wave=w, orig=cell,
+                          date=d.isoformat())
+                views = list(_rt_views(res))
+                pv.update(_rt_send(views[0], i, day, w))
+                desc = (f"{dr['name']}: {day} backup sent out on a {w} route (Route Tracker)"
+                        + (f" - an EXTRA route ({day} is now {_routes_filled(res, day)}/{res.routes[day]} routes)"
+                           if pv["extra"] else ""))
+                views[0]["edits"].append(desc)
+                for v in views[1:]:
+                    if _rt_on_backup(v, i, n, day, cell):
+                        v["rtx"][(n, day)] = _rt_send(v, i, day, w)
+                        v["edits"].append(desc)
+                rt[(n, day)] = pv
+                applied.append(dict(name=dr["name"], date=d.isoformat(), day=day, role=role, wave=w,
+                                    label=w, extra=pv["extra"], kind="sent", cell=cell,
+                                    code=e.get("code") or ""))
+                continue
             elif kind in ("road", "backup"):
                 kind, why = "agree", "already on the schedule"
             skip(dr["name"], d, cell, e, kind, why)

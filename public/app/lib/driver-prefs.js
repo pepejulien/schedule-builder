@@ -7,11 +7,15 @@
 // Pref = {
 //   days?: ['Sun', ...]   days of the week they CAN work; absent, empty or all 7 = any day
 //   maxDays?: 1..6        most days on the clock a week (route, backup, any shift)
+//   softMaxDays?: 1..6    SOFT (2026-10-19): would rather work at most N days a week; the build tries,
+//                         may go over. Dropped when maxDays is the same or lower (the hard cap says it).
 //   maxRow?: 1..5         most days in a row (1 = every other day, 2 = 2 on 1 off)
 //   together?: true       soft: keep their days next to each other
 //   weekends?: { mode: 'alternate', on: 'YYYY-MM-DD' }   `on` = a Saturday of one of their ON weekends
 //   likeDays?: ['Mon', ...]   very soft: days they'd LIKE to work (only days inside `days`; all 7 = no
 //                             preference, so dropped). A light placement nudge only; every other rule wins.
+//   likesOT?: true        SOFT (2026-10-19): likes overtime -- picked first for extra days / hours,
+//                         never past a hard limit
 //   note?: string
 //   by?: string, at?: ISO string   who/when last changed (set by saveDriverPref)
 // }
@@ -48,9 +52,12 @@ export function normPref(p) {
   }
   const md = clampInt(p.maxDays, 1, 6);
   if (md != null) out.maxDays = md;
+  const smd = clampInt(p.softMaxDays, 1, 6);
+  if (smd != null && !(out.maxDays && smd >= out.maxDays)) out.softMaxDays = smd;
   const mr = clampInt(p.maxRow, 1, 5);
   if (mr != null) out.maxRow = mr;
   if (p.together === true) out.together = true;
+  if (p.likesOT === true) out.likesOT = true;
   const w = p.weekends;
   if (w && typeof w === 'object' && w.mode === 'alternate' && isISO(w.on)) {
     out.weekends = { mode: 'alternate', on: satOf(w.on) };   // a non-Saturday snaps to its weekend's Saturday
@@ -145,6 +152,7 @@ export function prefSummary(pref) {
     else out.push(`${p.days.join(', ')} only`);
   }
   if (p.maxDays) out.push(`${p.maxDays} day${p.maxDays === 1 ? '' : 's'} max`);
+  if (p.softMaxDays) out.push(`Rather ≤${p.softMaxDays} day${p.softMaxDays === 1 ? '' : 's'}`);
   if (p.maxRow) out.push(`${p.maxRow} in a row max`);
   if (p.together) out.push('Days together');
   if (p.weekends) out.push('Every other weekend');
@@ -155,7 +163,14 @@ export function prefSummary(pref) {
       ? `Likes ${p.likeDays[0]}–${p.likeDays[p.likeDays.length - 1]}`
       : `Likes ${p.likeDays.join(', ')}`);
   }
+  if (p.likesOT) out.push('Likes overtime');
   return out;
+}
+
+// Does the preference change how the build schedules them (2026-10-19)? A note alone doesn't.
+export function prefHasLimit(pref) {
+  const p = normPref(pref);
+  return !!p && Object.keys(p).some((k) => k !== 'note' && k !== 'by' && k !== 'at');
 }
 
 // ---------------------------------------------------------------- storage --

@@ -124,6 +124,8 @@ function formFrom(pref) {
     days: p.days ? [...p.days] : [...DAYS],
     likeDays: p.likeDays ? [...p.likeDays] : [],
     maxDays: p.maxDays ? String(p.maxDays) : '',
+    softMaxDays: p.softMaxDays ? String(p.softMaxDays) : '',   // soft (2026-10-19)
+    likesOT: !!p.likesOT,
     maxRow: p.maxRow ? String(p.maxRow) : '',
     alternate: !!p.weekends,
     on,
@@ -137,6 +139,8 @@ function prefFrom(f) {
     days: f.days,
     likeDays: f.likeDays.filter((d) => f.days.includes(d)),
     maxDays: f.maxDays ? Number(f.maxDays) : null,
+    softMaxDays: f.softMaxDays ? Number(f.softMaxDays) : null,   // dropped by normPref when >= maxDays
+    likesOT: f.likesOT || undefined,
     maxRow: f.maxRow ? Number(f.maxRow) : null,
     together: f.together || undefined,
     weekends: f.alternate ? { mode: 'alternate', on: f.on } : undefined,
@@ -206,6 +210,17 @@ function Editor({ name, pref, onSaved, onClose }) {
         <option value="">Any</option>
         ${[1, 2, 3, 4, 5, 6].map((n) => html`<option value=${String(n)}>${n} day${n === 1 ? '' : 's'}</option>`)}
       </select></div>
+
+      <label class="dv-lab" for="dv-smd">Would rather work at most</label>
+      <div><select id="dv-smd" value=${f.softMaxDays} onChange=${(e) => set({ softMaxDays: e.target.value })}>
+        <option value="">—</option>
+        ${[1, 2, 3, 4, 5, 6].map((n) => html`<option value=${String(n)}>${n} day${n === 1 ? '' : 's'}</option>`)}
+      </select>
+        <div class="hint dv-h">Soft — the builder tries, may go over.</div></div>
+
+      <div class="dv-lab">Overtime</div>
+      <div><label class="dv-check"><input type="checkbox" checked=${f.likesOT}
+        onChange=${(e) => set({ likesOT: e.target.checked })} /> Likes overtime (soft — gets extra days first)</label></div>
 
       <label class="dv-lab" for="dv-mr">Most days in a row</label>
       <div><select id="dv-mr" value=${f.maxRow} onChange=${(e) => set({ maxRow: e.target.value })}>

@@ -7,7 +7,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, toast } from '../store.js';
 import { Spinner } from '../ui.js';
 import { canTimeoff, watchTimeoff, saveTimeoff, clearTimeoff } from '../api.js';
-import { loadDriverPrefs, loadDriverRoster, saveDriverPref, weekUnavailable, WHY_LABEL, prefSummary } from '../lib/driver-prefs.js';
+import { loadDriverPrefs, loadDriverRoster, saveDriverPref, weekUnavailable, WHY_LABEL, prefSummary, prefHasLimit } from '../lib/driver-prefs.js';
 import { DAYS } from '../lib/waves.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 import { SHIFT_COLORS, todayISO } from './live-model.js';
@@ -182,7 +182,9 @@ export function FutureWeek({ week, label }) {
   const rows = all.filter((n) => (!q.trim() || fold(n).includes(fold(q.trim())))
     && (!only || Object.keys(unav[nkey(n)] || {}).length));
   const asked = Object.values(unav).reduce((a, u) => a + Object.values(u).filter((x) => x.why === 'timeoff').length, 0);
-  const limited = Object.keys(prefs.drivers || {}).length;
+  // drivers shown here (on the roster / still active) with a preference the build follows -- not a
+  // note alone, not someone who left (2026-10-19)
+  const limited = all.filter((n) => prefHasLimit(prefOf[nkey(n)])).length;
   const canEdit = canTimeoff();
 
   const recOf = (name, date) => weekOff.find((t) => t.day === date && nkey(t.name) === nkey(name)) || null;
