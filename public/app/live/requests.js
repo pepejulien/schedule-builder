@@ -233,7 +233,7 @@ function CalendarCard({ grid, views, today, sel, onPick, onMonth, onToday, loadi
           aria-label=${`${longDate(c.date)}${v.chips.length ? ': ' + v.chips.map((x) => x.text).join(', ') : ''}`}
           onClick=${() => onPick(c.date)}>
           <span class="rq-num">${c.num}</span>
-          ${v.chips.slice(0, MAX_CHIPS).map((x) => html`<span class=${'rq-chip ' + x.kind + (x.faded ? ' faded' : '')}>${x.text}</span>`)}
+          ${v.chips.slice(0, MAX_CHIPS).map((x) => html`<span class=${'rq-chip ' + x.kind + (x.faded ? ' faded' : '')} title=${x.title}>${x.text}</span>`)}
           ${more > 0 ? html`<span class="rq-moretxt">+${more} more</span>` : ''}
         </button>`;
       })}
@@ -242,7 +242,7 @@ function CalendarCard({ grid, views, today, sel, onPick, onMonth, onToday, loadi
 }
 
 function LegendCard() {
-  const items = [['off', 'Days off'], ['conflict', 'Still scheduled'], ['pending', 'Pending'], ['vet', 'VET'], ['vto', 'VTO']];
+  const items = [['off', 'Days off'], ['conflict', 'Asked off, still scheduled'], ['pending', 'Pending'], ['vet', 'VET'], ['vto', 'VTO']];
   return html`<div class="card rq-legend">
     ${items.map(([k, t]) => html`<span class="rq-leg"><span class=${'rq-chip rq-sw ' + k}></span>${t}</span>`)}
   </div>`;
@@ -289,6 +289,10 @@ export function Requests() {
     return () => { alive = false; };
   }, []);
 
+  // a tap on a day: on a phone (the panel is under the calendar) bring the panel into view
+  const panelRef = useRef(null);
+  const [tap, setTap] = useState(0);             // day taps (also a tap on the day already picked)
+
   const grid = monthGrid(ym);
   // the visible month's 6 weeks, the picked day's week, and the next 14 days (the alert + the offer form)
   const weeks = canLive() ? [...new Set([...grid.weeks, sundayOf(sel), ...weeksBetween(today, shiftISO(today, 13))])].sort() : [];
@@ -297,6 +301,10 @@ export function Requests() {
   const offerWeeks = useFeed(subOffers, canOffers() ? weeks : []);
   const offers = weeks.flatMap((w) => (Array.isArray(offerWeeks[w]) ? offerWeeks[w] : []));
   const takesById = useTakesMap(offers.map((o) => o.id).sort());
+  useEffect(() => {
+    if (!tap) return;
+    if (window.innerWidth < 1000 && panelRef.current) panelRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [tap]);
 
   if (!canLive()) return html`<${Banner} kind="info">Requests need the JAJB hub's connection — open the Schedule Builder from the hub.<//>`;
 
@@ -315,7 +323,7 @@ export function Requests() {
     ...Object.values(off).flatMap((d) => Object.values(d || {}).map((t) => t && t.name)),
     ...Object.values(takesById).flatMap((t) => (Array.isArray(t) ? t.map((x) => x && x.name) : []))].filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
-  const pick = (d) => { setSel(d); if (monthOf(d) !== ym) setYm(monthOf(d)); };
+  const pick = (d) => { setTap((n) => n + 1); setSel(d); if (monthOf(d) !== ym) setYm(monthOf(d)); };
 
   return html`<div class="rq">
     ${c.drivers ? html`<div class="card rq-alert" role="alert">
@@ -331,7 +339,7 @@ export function Requests() {
           onPick=${pick} onMonth=${(n) => setYm((m) => shiftMonth(m, n))} onToday=${() => { setYm(monthOf(today)); setSel(today); }} />
         <${LegendCard} />
       </div>
-      <div class="rq-right">
+      <div class="rq-right" ref=${panelRef}>
         <${DayPanel} key=${sel} date=${sel} view=${selView} days=${days} today=${today} names=${names} show=${show} />
       </div>
     </div>

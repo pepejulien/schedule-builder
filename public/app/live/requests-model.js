@@ -215,8 +215,9 @@ const offerDone = (o, c) => o.status === 'closed' || o.status === 'filled' || (c
 // src = {offByWeek, smByWeek, offers: schedule_offers rows, takesById: {offerId: takes | undefined}}.
 //   offs    the days off that date (requestRows rows, with their Live status)
 //   offers  that date's offers (VET first, then by wave) — with a driver picked, only those they took
-//   chips   what the calendar cell shows, in this order: still scheduled (red), pending takes (grey),
-//           days off (orange), then one per offer: VET (green) / VTO (amber) taken/spots, faded once closed or full.
+//   chips   what the calendar cell shows, one short line each ({kind, text, title = the long words}), in this
+//           order: still scheduled (red), pending takes (grey), days off (orange), then one per offer:
+//           VET (green) / VTO (amber) taken/spots, faded once closed or full.
 // Days off have no pending state: the Driver app approves them at once (or refuses and stores nothing).
 export function dayViews(from, to, src, filter = {}) {
   const show = filter.show || 'all', driver = filter.driver || '';
@@ -247,13 +248,18 @@ export function dayViews(from, to, src, filter = {}) {
       if (o.status === 'closed') continue;
       for (const t of takesOf(o) || []) if (t && PENDING.has(t.status) && driverMatch(t.name, driver)) pending++;
     }
-    if (conflicts) v.chips.push({ kind: 'conflict', text: `${conflicts} still scheduled ⊘` });
-    if (pending) v.chips.push({ kind: 'pending', text: `${pending} pending ⏱` });
-    if (v.offs.length) v.chips.push({ kind: 'off', text: `${v.offs.length} off ✓` });
+    // one short line each (icon, count, word); title = the long words for the tooltip
+    const n = v.offs.length;
+    if (conflicts) v.chips.push({ kind: 'conflict', text: `⊘ ${conflicts} scheduled`,
+      title: `${conflicts} driver${conflicts === 1 ? '' : 's'} asked off but ${conflicts === 1 ? 'is' : 'are'} still on the schedule` });
+    if (pending) v.chips.push({ kind: 'pending', text: `⏱ ${pending} pending`,
+      title: `${pending} VET / VTO take${pending === 1 ? '' : 's'} waiting for an answer` });
+    if (n) v.chips.push({ kind: 'off', text: `✓ ${n} off`, title: `${n} driver${n === 1 ? '' : 's'} asked for the day off` });
     for (const k of ['vet', 'vto']) {
       for (const o of v.offers.filter((x) => (x.kind === 'vto' ? 'vto' : 'vet') === k)) {
         const c = offerCounts(o, takesOf(o));
-        v.chips.push({ kind: k, text: `${k.toUpperCase()} ${c.taken}/${c.offered}`, faded: offerDone(o, c), id: o.id });
+        v.chips.push({ kind: k, text: `${k.toUpperCase()} ${c.taken}/${c.offered}`, faded: offerDone(o, c), id: o.id,
+          title: `${k.toUpperCase()} · ${offerRole(o)} · ${offerLine(o, takesOf(o))}` });
       }
     }
   }

@@ -867,7 +867,7 @@ button.rq-cell.today { background: #fff8d6; }
 button.rq-cell.today .rq-num { font-weight: 800; color: var(--ink); }
 button.rq-cell.sel { outline: 2px solid var(--navy); outline-offset: -1px; }
 .rq-num { align-self: flex-end; font-size: 12px; line-height: 16px; padding: 0 2px; }
-.rq-chip { display: block; font-size: 11px; font-weight: 600; line-height: 14px; padding: 2px 6px; border-radius: 6px; overflow-wrap: anywhere; }
+.rq-chip { display: block; font-size: 11px; font-weight: 600; line-height: 16px; padding: 1px 6px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rq-chip.off { background: #fde4cf; color: #a34d16; }
 .rq-chip.conflict { background: var(--err); color: #fff; }
 .rq-chip.pending { background: #dfe1e7; color: #2c2f36; }
@@ -885,5 +885,5 @@ button.rq-cell.sel { outline: 2px solid var(--navy); outline-offset: -1px; }
   .rq-calcard { padding: 12px 8px; }
   .rq-cal { gap: 2px; }
   button.rq-cell { min-height: 64px; padding: 3px 2px; }
-  .rq-chip { font-size: 10px; line-height: 14px; padding: 0 3px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rq-chip { font-size: 10px; line-height: 14px; padding: 0 3px; border-radius: 4px; }
 }
