@@ -145,7 +145,7 @@ const SRC = { offByWeek: OFF, smByWeek: SMW, offers: CO, takesById: TK };
 const V = dayViews('2026-10-18', '2026-10-24', SRC);
 eq('dayViews dates', Object.keys(V), ['2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23', '2026-10-24']);
 eq('chips Tue (order: still scheduled, pending, off, VET, VTO)', V['2026-10-20'].chips.map((c) => [c.kind, c.text, !!c.faded]), [
-  ['conflict', '⊘ 2 scheduled', false], ['pending', '⏱ 2 pending', false], ['off', '✓ 2 off', false],
+  ['conflict', '⊘ 2 sched', false], ['pending', '⏱ 2 wait', false], ['off', '✓ 2 off', false],
   ['vet', 'VET 1/3', false], ['vto', 'VTO 2/2', true]]);
 eq('chip titles', V['2026-10-20'].chips.map((c) => c.title), [
   '2 drivers asked off but are still on the schedule', '2 VET / VTO takes waiting for an answer', '2 drivers asked for the day off',
@@ -157,10 +157,10 @@ eq('day offers VET first', V['2026-10-20'].offers.map((o) => o.id), ['v1', 't1']
 eq('day offs', V['2026-10-20'].offs.map((r) => [r.name, r.status.state]), [['Ana Road', 'scheduled'], ['Jason Leidy', 'scheduled']]);
 eq('filter days off only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'off' })['2026-10-20'].chips.map((c) => c.kind), ['conflict', 'off']);
 eq('filter VTO only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'vto' })['2026-10-20'].chips.map((c) => c.text), ['VTO 2/2']);
-eq('filter VET only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'vet' })['2026-10-20'].chips.map((c) => c.text), ['⏱ 2 pending', 'VET 1/3']);
+eq('filter VET only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'vet' })['2026-10-20'].chips.map((c) => c.text), ['⏱ 2 wait', 'VET 1/3']);
 const IV = dayViews('2026-10-20', '2026-10-21', SRC, { driver: 'ivy blank' });
 eq('driver filter: their offers and pending only', [IV['2026-10-20'].chips.map((c) => c.text), IV['2026-10-21'].chips.map((c) => c.text)],
-  [['⏱ 1 pending', 'VET 1/3'], ['VET 0/1']]);
+  [['⏱ 1 wait', 'VET 1/3'], ['VET 0/1']]);
 eq('driver filter: their days off', dayViews('2026-10-20', '2026-10-21', SRC, { driver: 'Jason' })['2026-10-21'].chips.map((c) => c.text), ['✓ 1 off']);
 eq('takes not read yet: counts from the offer, no pending', dayViews('2026-10-20', '2026-10-20', { offers: CO })['2026-10-20'].chips.map((c) => c.text),
   ['VET 1/3', 'VTO 2/2']);

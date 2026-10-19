@@ -250,9 +250,9 @@ export function dayViews(from, to, src, filter = {}) {
     }
     // one short line each (icon, count, word); title = the long words for the tooltip
     const n = v.offs.length;
-    if (conflicts) v.chips.push({ kind: 'conflict', text: `⊘ ${conflicts} scheduled`,
+    if (conflicts) v.chips.push({ kind: 'conflict', text: `⊘ ${conflicts} sched`,
       title: `${conflicts} driver${conflicts === 1 ? '' : 's'} asked off but ${conflicts === 1 ? 'is' : 'are'} still on the schedule` });
-    if (pending) v.chips.push({ kind: 'pending', text: `⏱ ${pending} pending`,
+    if (pending) v.chips.push({ kind: 'pending', text: `⏱ ${pending} wait`,
       title: `${pending} VET / VTO take${pending === 1 ? '' : 's'} waiting for an answer` });
     if (n) v.chips.push({ kind: 'off', text: `✓ ${n} off`, title: `${n} driver${n === 1 ? '' : 's'} asked for the day off` });
     for (const k of ['vet', 'vto']) {
