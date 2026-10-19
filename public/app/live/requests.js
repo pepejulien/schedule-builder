@@ -1,22 +1,24 @@
 // The Requests page (Jose 2026-10-19: it replaces the Today page, which nobody used — the Live
-// schedule is the landing page now). Two cards: the days off drivers asked for (schedule_timeoff,
-// from the drivers' app or typed in by a manager) checked against the published Live schedule, and
-// the VET / VTO offers. A red line on top names whoever asked off but is still on the schedule; the
-// nav's Requests item carries the same count (useConflictCount). The words and the checks come from
-// requests-model.js (pure, tested by tests/requests_test.mjs). Everything is live: Firestore listeners,
-// one per week however many readers (the page + the nav badge), dropped when nobody reads it.
+// schedule is the landing page now). A month calendar like Paycom's time-off calendar: each day
+// shows the days off asked for (schedule_timeoff, from the drivers' app or typed in by a manager),
+// who asked off but is still on the published Live schedule, VET / VTO takes waiting for an answer,
+// and that day's VET / VTO offers; clicking a day opens it in the panel beside the calendar. A red
+// line on top names whoever asked off in the next 14 days but is still on the schedule; the nav's
+// Requests item carries the same count (useConflictCount). The words and the counts come from
+// requests-model.js (pure, tested by tests/requests_test.mjs). Everything is live: Firestore
+// listeners, one per week however many readers (the page + the nav badge), dropped when nobody reads it.
 import { html } from '../preact-setup.js';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, toast } from '../store.js';
 import { Banner, Spinner } from '../ui.js';
 import { canLive, canTimeoff, watchTimeoff, saveTimeoff, clearTimeoff, liveWeeks, liveWeek, watchLiveWeek,
-  watchLiveSummary, canWatchSummary, canOffers } from '../api.js';
+  watchLiveSummary, canWatchSummary, canOffers, watchOffers } from '../api.js';
 import { loadDriverRoster } from '../lib/driver-prefs.js';
 import { toISODate } from '../lib/weeks.js';
-import { useOffers, useTakes, OfferForm } from './offers.js';
+import { useTakes, useTakesMap, OfferForm } from './offers.js';
 import { dayLabel, takeStatus, offerDays } from './offers-model.js';
-import { fold, shiftISO, sundayOf, rangeOf, weeksBetween, askedLabel, requestRows, groupByDay, conflictsOf,
-  offerLists, offerRole, offerLine, takeTone } from './requests-model.js';
+import { fold, shiftISO, sundayOf, rangeOf, weeksBetween, askedLabel, conflictsOf, offerRole, offerLine, takeTone,
+  monthOf, shiftMonth, longDate, monthGrid, dayViews } from './requests-model.js';
 
 const AHEAD = 12;   // weeks past this one a day off can be added for, as on Driver preferences
 const todayNow = () => toISODate(new Date());
@@ -43,54 +45,56 @@ function watchSummary(week, cb) {
   return () => { dead = true; un(); };
 }
 
-// One week's days off + Live summary, shared and refcounted (like offers.js takeFeeds).
-const weekFeeds = new Map();   // week -> {off, sm, subs, uns}
-function subWeek(week, fn) {
-  let f = weekFeeds.get(week);
-  if (!f) {
-    f = { off: undefined, sm: undefined, subs: new Set(), uns: [] };
-    weekFeeds.set(week, f);
-    const push = () => f.subs.forEach((s) => s(week, f));
-    // null = the read failed (not "nobody asked off")
-    f.uns.push(watchTimeoff(week, (d) => { f.off = d && typeof d === 'object' ? d : null; push(); }));
-    f.uns.push(watchSummary(week, (sm) => { f.sm = sm; push(); }));
-  }
-  f.subs.add(fn);
-  fn(week, f);
-  return () => {
-    f.subs.delete(fn);
-    if (!f.subs.size) { weekFeeds.delete(week); f.uns.forEach((u) => u()); }
+// One listener per key (a week) however many readers, dropped when nobody reads it (like offers.js takeFeeds).
+function makeFeed(watch) {
+  const feeds = new Map();                       // key -> {val, subs, un}
+  return (key, fn) => {
+    let f = feeds.get(key);
+    if (!f) {
+      f = { val: undefined, subs: new Set(), un: null };
+      feeds.set(key, f);
+      f.un = watch(key, (v) => { f.val = v; f.subs.forEach((s) => s(v)); });
+    }
+    f.subs.add(fn);
+    fn(f.val);
+    return () => {
+      f.subs.delete(fn);
+      if (!f.subs.size) { feeds.delete(key); if (f.un) f.un(); }
+    };
   };
 }
-// {off: {week: days off}, sm: {week: summary}} for these weeks (as requests-model.js reads them)
-function useWeeks(weeks) {
-  const [st, setSt] = useState({ off: {}, sm: {} });
-  const key = weeks.join(',');
+// days off (null = the read failed, not "nobody asked off"), the Live summary, the week's VET / VTO offers
+const subOff = makeFeed((week, cb) => watchTimeoff(week, (d) => cb(d && typeof d === 'object' ? d : null)));
+const subSm = makeFeed(watchSummary);
+const subOffers = makeFeed((week, cb) => watchOffers(week, cb));
+// {key: value} for these keys (undefined = not read yet); a key dropped from the list stops its listener
+function useFeed(sub, keys) {
+  const [map, setMap] = useState({});
+  const key = keys.join(',');
   useEffect(() => {
-    if (!weeks.length) return undefined;
-    const uns = weeks.map((w) => subWeek(w, (wk, f) => setSt((s) => (s.off[wk] === f.off && s.sm[wk] === f.sm
-      ? s : { off: { ...s.off, [wk]: f.off }, sm: { ...s.sm, [wk]: f.sm } }))));
+    if (!keys.length) return undefined;
+    const uns = keys.map((k) => sub(k, (v) => setMap((m) => (k in m && m[k] === v ? m : { ...m, [k]: v }))));
     return () => uns.forEach((u) => u());
   }, [key]);
-  return st;
+  return map;
 }
 
 // The nav badge: how many drivers asked off in the next 14 days but are still on the Live schedule.
 export function useConflictCount() {
   const today = todayNow();
   const { from, to } = rangeOf(today, 'next');
-  const st = useWeeks(canLive() && canTimeoff() ? weeksBetween(from, to) : []);
-  return conflictsOf(st.off, st.sm, today).drivers;
+  const weeks = canLive() && canTimeoff() ? weeksBetween(from, to) : [];
+  const off = useFeed(subOff, weeks), sm = useFeed(subSm, weeks);
+  return conflictsOf(off, sm, today).drivers;
 }
 
 // "+ Add a day off": a driver (the roster, or any typed name, as on Driver preferences), a date, a note.
 // Same checks as Driver preferences: from today to 12 weeks out, and only for a week not built yet.
-function AddDayOff({ onDone }) {
+function AddDayOff({ date: date0, names, onDone }) {
   const today = todayNow();
   const maxDay = shiftISO(sundayOf(today), 7 * AHEAD + 6);
-  const [names, setNames] = useState([]);
   const [name, setName] = useState('');
-  const [date, setDate] = useState('');
+  const [date, setDate] = useState(date0 || '');
   const [note, setNote] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
@@ -99,7 +103,6 @@ function AddDayOff({ onDone }) {
   useEffect(() => {
     built.current = Promise.resolve(liveWeeks(80)).then((ws) => new Set((ws || []).map((w) => w && w.week)));
     built.current.catch(() => {});
-    loadDriverRoster({ active: true }).then((r) => { if (alive.current) setNames((r || []).map((x) => x.name)); }).catch(() => {});
     return () => { alive.current = false; };
   }, []);
 
@@ -131,7 +134,6 @@ function AddDayOff({ onDone }) {
       <label class="fld"><span>Driver</span>
         <input type="text" list="rq-names" value=${name} disabled=${busy} placeholder="Full name" autocomplete="off"
           onInput=${(e) => { setName(e.target.value); setMsg(''); }} /></label>
-      <datalist id="rq-names">${names.map((n) => html`<option value=${n} />`)}</datalist>
       <label class="fld"><span>Date</span>
         <input type="date" min=${today} max=${maxDay} value=${date} disabled=${busy}
           onInput=${(e) => { setDate(e.target.value); setMsg(''); }} /></label>
@@ -155,62 +157,28 @@ const STATUS = {
   loading: () => ({ cls: 'na', text: '…' }),
 };
 
-function DaysOffCard({ st, today }) {
-  const [range, setRange] = useState('next');
-  const [source, setSource] = useState('all');
-  const [adding, setAdding] = useState(false);
-  const [busy, setBusy] = useState('');          // the row being removed
-  if (!canTimeoff()) {
-    return html`<div class="card rq-card"><h2>Days off asked for</h2>
-      <p class="muted" style="margin:0">Days off need the JAJB hub's connection — open the Schedule Builder from the hub.</p></div>`;
-  }
-  const { from, to } = rangeOf(today, range);
-  const weeks = weeksBetween(from, to);
-  const loading = weeks.some((w) => st.off[w] === undefined);
-  const failed = weeks.some((w) => st.off[w] === null);
-  const groups = groupByDay(requestRows(st.off, st.sm, { from, to, source }), st.sm, today, range === 'past');
-
-  const remove = async (r, label) => {
+// One day off: name, who put it in, the note, when; its status against the Live schedule; ✕ remove.
+function OffRow({ r, label }) {
+  const [busy, setBusy] = useState(false);
+  const s = STATUS[r.status.state](r.status);
+  const asked = askedLabel(r.at);
+  const remove = async () => {
     if (!window.confirm(`Remove ${r.name}'s day off on ${label}?${r.src.app ? ' They asked for it in the drivers\' app.' : ''}`)) return;
-    setBusy(r.key);
+    setBusy(true);
     try { await clearTimeoff(r.week, r.name, r.day); toast('Day off removed'); }
-    catch { toast("Couldn't remove it — check your connection and try again.", 'err'); }
-    setBusy('');
+    catch { toast("Couldn't remove it — check your connection and try again.", 'err'); setBusy(false); }
   };
-  const seg = (val, set, opts, label) => html`<div class="seg" role="group" aria-label=${label}>
-    ${opts.map(([k, t]) => html`<button class=${val === k ? 'on' : ''} aria-pressed=${val === k} onClick=${() => set(k)}>${t}</button>`)}
-  </div>`;
-
-  return html`<div class="card rq-card">
-    <div class="rq-head"><h2>Days off asked for</h2>
-      ${adding ? '' : html`<button class="small" onClick=${() => setAdding(true)}>+ Add a day off</button>`}</div>
-    ${adding ? html`<${AddDayOff} onDone=${() => setAdding(false)} />` : ''}
-    <div class="row rq-filters">
-      ${seg(range, setRange, [['next', 'Next 14 days'], ['past', 'Past 14 days']], 'Dates')}
-      ${seg(source, setSource, [['all', 'All'], ['app', 'Driver app'], ['office', 'Added by a manager']], 'Who added it')}
+  return html`<li class="rq-row">
+    <div class="rq-who">
+      <b>${r.name}</b>
+      <span class=${'chip ' + (r.src.app ? 'blue' : 'gray')}>${r.src.label}</span>
+      ${r.note ? html`<span class="muted rq-note">“${r.note}”</span>` : ''}
+      ${asked ? html`<span class="muted rq-asked">${asked}</span>` : ''}
     </div>
-    ${failed ? html`<p class="muted small">Couldn't load every week's days off — check the connection.</p>` : ''}
-    ${groups.length ? groups.map((g) => html`<div class="rq-day" key=${g.date}>
-      <div class="rq-dayh">${g.label} · ${g.n} off${g.unbuilt ? ` · ${g.unbuilt}` : ''}</div>
-      <ul class="rq-list">${g.rows.map((r) => {
-        const s = STATUS[r.status.state](r.status);
-        const asked = askedLabel(r.at);
-        return html`<li class="rq-row" key=${r.key}>
-          <div class="rq-who">
-            <b>${r.name}</b>
-            <span class=${'chip ' + (r.src.app ? 'blue' : 'gray')}>${r.src.label}</span>
-            ${r.note ? html`<span class="muted rq-note">“${r.note}”</span>` : ''}
-            ${asked ? html`<span class="muted rq-asked">${asked}</span>` : ''}
-          </div>
-          <span class=${'rq-st ' + s.cls}>${s.text}</span>
-          <button class="ghost rq-x" title="Remove this day off" aria-label=${`Remove ${r.name}'s day off on ${g.label}`}
-            disabled=${!!busy} onClick=${() => remove(r, g.label)}>✕</button>
-        </li>`;
-      })}</ul>
-    </div>`)
-      : loading ? html`<p class="muted"><${Spinner}/> Loading…</p>`
-      : html`<p class="muted" style="margin:0">No days off asked for in the ${range === 'past' ? 'past' : 'next'} 14 days.</p>`}
-  </div>`;
+    <span class=${'rq-st ' + s.cls}>${s.text}</span>
+    <button class="ghost rq-x" title="Remove this day off" aria-label=${`Remove ${r.name}'s day off on ${label}`}
+      disabled=${busy} onClick=${remove}>✕</button>
+  </li>`;
 }
 
 const lc1 = (s) => String(s || '').charAt(0).toLowerCase() + String(s || '').slice(1);
@@ -227,52 +195,145 @@ function OfferCard({ o }) {
   </div>`;
 }
 
-// days = the published weeks' days (the Live board's view.days shape) the offer form can post for
-function OffersCard({ days, today }) {
-  const rows = useOffers();
+const SHOW = [['all', 'All'], ['off', 'Days off'], ['vet', 'VET'], ['vto', 'VTO']];
+
+// Show: All / Days off / VET / VTO · Driver: everyone, or one (type to search the roster).
+function FilterCard({ show, setShow, driver, setDriver }) {
+  return html`<div class="card rq-filter">
+    <div class="rq-fld"><span class="rq-lab">Show</span>
+      <div class="seg" role="group" aria-label="Show">
+        ${SHOW.map(([k, t]) => html`<button class=${show === k ? 'on' : ''} aria-pressed=${show === k} onClick=${() => setShow(k)}>${t}</button>`)}
+      </div></div>
+    <div class="rq-fld"><span class="rq-lab">Driver</span>
+      <input type="text" class="rq-drv" list="rq-names" placeholder="All drivers" value=${driver} autocomplete="off"
+        aria-label="Driver" onInput=${(e) => setDriver(e.target.value)} />
+      ${driver ? html`<button class="small ghost" onClick=${() => setDriver('')}>All drivers</button>` : ''}</div>
+  </div>`;
+}
+
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MAX_CHIPS = 3;
+
+function CalendarCard({ grid, views, today, sel, onPick, onMonth, onToday, loading }) {
+  return html`<div class="card rq-calcard">
+    <div class="rq-calhead"><h2>${grid.label}</h2>
+      ${loading ? html`<${Spinner}/>` : ''}
+      <div class="row rq-calnav">
+        <button class="small" onClick=${onToday}>Today</button>
+        <button class="small" aria-label="Previous month" onClick=${() => onMonth(-1)}>‹</button>
+        <button class="small" aria-label="Next month" onClick=${() => onMonth(1)}>›</button>
+      </div></div>
+    <div class="rq-cal" role="grid" aria-label=${grid.label}>
+      ${DOW.map((d) => html`<div class="rq-dow" role="columnheader">${d}</div>`)}
+      ${grid.cells.map((c) => {
+        const v = views[c.date] || { chips: [] };
+        const more = v.chips.length - MAX_CHIPS;
+        return html`<button key=${c.date} role="gridcell" aria-selected=${c.date === sel}
+          class=${'rq-cell' + (c.inMonth ? '' : ' out') + (c.date === today ? ' today' : '') + (c.date === sel ? ' sel' : '')}
+          aria-label=${`${longDate(c.date)}${v.chips.length ? ': ' + v.chips.map((x) => x.text).join(', ') : ''}`}
+          onClick=${() => onPick(c.date)}>
+          <span class="rq-num">${c.num}</span>
+          ${v.chips.slice(0, MAX_CHIPS).map((x) => html`<span class=${'rq-chip ' + x.kind + (x.faded ? ' faded' : '')}>${x.text}</span>`)}
+          ${more > 0 ? html`<span class="rq-moretxt">+${more} more</span>` : ''}
+        </button>`;
+      })}
+    </div>
+  </div>`;
+}
+
+function LegendCard() {
+  const items = [['off', 'Days off'], ['conflict', 'Still scheduled'], ['pending', 'Pending'], ['vet', 'VET'], ['vto', 'VTO']];
+  return html`<div class="card rq-legend">
+    ${items.map(([k, t]) => html`<span class="rq-leg"><span class=${'rq-chip rq-sw ' + k}></span>${t}</span>`)}
+  </div>`;
+}
+
+// The picked day: its days off and its VET / VTO, "+ Add a day off" (that date) and "Post an offer"
+// (that date when it can still be posted for — the Live board's own form; else the Live schedule).
+function DayPanel({ date, view, days, today, names, show }) {
+  const [adding, setAdding] = useState(false);
   const [posting, setPosting] = useState(false);
-  const [showClosed, setShowClosed] = useState(false);
-  if (!canOffers()) {
-    return html`<div class="card rq-card"><h2>VET / VTO offers</h2>
-      <p class="muted" style="margin:0">VET / VTO offers aren't available on this connection.</p></div>`;
-  }
-  // the Live board's own form when a published day is left to post for; else the Live schedule
-  const canPost = offerDays(days, today).length > 0;
-  const { open, closed } = offerLists(rows, today);
-  return html`<div class="card rq-card">
-    <div class="rq-head"><h2>VET / VTO offers</h2>
-      ${posting ? '' : html`<button class="small" onClick=${() => (canPost ? setPosting(true) : openLive())}>Post an offer</button>`}</div>
-    ${posting ? html`<div class="rq-form"><${OfferForm} days=${days} today=${today} date=${today} uid="rq"
+  const label = dayLabel(date);
+  const postable = canOffers() ? offerDays(days, today) : [];
+  const post = () => { setAdding(false); if (postable.length) setPosting(true); else openLive(); };
+  const nothing = !view.offs.length && !view.offers.length;
+  return html`<div class="card rq-panel">
+    <h2>${longDate(date)}</h2>
+    <div class="row rq-panelbtns">
+      ${canTimeoff() && !adding ? html`<button class="small" onClick=${() => { setAdding(true); setPosting(false); }}>+ Add a day off</button>` : ''}
+      ${canOffers() && !posting ? html`<button class="small" onClick=${post}>Post an offer</button>` : ''}
+    </div>
+    ${adding ? html`<${AddDayOff} date=${date} names=${names} onDone=${() => setAdding(false)} />` : ''}
+    ${posting ? html`<div class="rq-form"><${OfferForm} days=${days} today=${today}
+      date=${postable.some((x) => x.date === date) ? date : today} uid="rq"
       onDone=${() => setPosting(false)} onCancel=${() => setPosting(false)} /></div>` : ''}
-    ${rows === undefined ? html`<p class="muted"><${Spinner}/> Loading…</p>`
-      : rows === null ? html`<p class="muted" style="margin:0">Could not read the VET / VTO offers.</p>`
-      : html`
-        ${open.length ? html`<div class="rq-offers">${open.map((o) => html`<${OfferCard} o=${o} key=${o.id} />`)}</div>`
-          : html`<p class="muted">No open offers.</p>`}
-        ${closed.length ? html`<button class="link rq-more" aria-expanded=${showClosed} onClick=${() => setShowClosed((v) => !v)}>
-          Closed / past offers ${showClosed ? '▾' : '▸'}</button>
-          ${showClosed ? html`<div class="rq-offers rq-closed">${closed.map((o) => html`<${OfferCard} o=${o} key=${o.id} />`)}</div>` : ''}` : ''}`}
+    ${!canTimeoff() && show !== 'vet' && show !== 'vto' ? html`<p class="muted">Days off need the JAJB hub's connection — open the Schedule Builder from the hub.</p>` : ''}
+    ${nothing ? html`<p class="muted" style="margin:0">Nothing asked for this day.</p>` : ''}
+    ${view.offs.length ? html`<h3>Days off (${view.offs.length})</h3>
+      <ul class="rq-list">${view.offs.map((r) => html`<${OffRow} r=${r} label=${label} key=${r.key} />`)}</ul>` : ''}
+    ${view.offers.length ? html`<h3>VET / VTO</h3>
+      <div class="rq-offers">${view.offers.map((o) => html`<${OfferCard} o=${o} key=${o.id} />`)}</div>` : ''}
   </div>`;
 }
 
 export function Requests() {
   const today = todayNow();
-  // the weeks both ranges touch: the past 14 days and the next 14 (the alert + the offer form use the next ones)
-  const weeks = weeksBetween(shiftISO(today, -14), shiftISO(today, 13));
-  const st = useWeeks(canLive() ? weeks : []);
-  const c = conflictsOf(st.off, st.sm, today);
-  const nextWeeks = weeksBetween(today, shiftISO(today, 13));
-  const days = nextWeeks.flatMap((w) => (st.sm[w] && Array.isArray(st.sm[w].days) ? st.sm[w].days : []));
+  const [ym, setYm] = useState(() => monthOf(today));
+  const [sel, setSel] = useState(today);
+  const [show, setShow] = useState('all');
+  const [driver, setDriver] = useState('');
+  const [roster, setRoster] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    if (canLive()) loadDriverRoster({ active: true }).then((r) => { if (alive) setRoster((r || []).map((x) => x.name)); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const grid = monthGrid(ym);
+  // the visible month's 6 weeks, the picked day's week, and the next 14 days (the alert + the offer form)
+  const weeks = canLive() ? [...new Set([...grid.weeks, sundayOf(sel), ...weeksBetween(today, shiftISO(today, 13))])].sort() : [];
+  const off = useFeed(subOff, weeks);
+  const sm = useFeed(subSm, weeks);
+  const offerWeeks = useFeed(subOffers, canOffers() ? weeks : []);
+  const offers = weeks.flatMap((w) => (Array.isArray(offerWeeks[w]) ? offerWeeks[w] : []));
+  const takesById = useTakesMap(offers.map((o) => o.id).sort());
 
   if (!canLive()) return html`<${Banner} kind="info">Requests need the JAJB hub's connection — open the Schedule Builder from the hub.<//>`;
+
+  const src = { offByWeek: off, smByWeek: sm, offers, takesById };
+  const filter = { show, driver };
+  const first = grid.cells[0].date, last = grid.cells[41].date;
+  const views = dayViews(first, last, src, filter);
+  const selView = (sel >= first && sel <= last ? views : dayViews(sel, sel, src, filter))[sel];
+  const c = conflictsOf(off, sm, today);
+  const loading = grid.weeks.some((w) => (canTimeoff() && off[w] === undefined) || (canOffers() && offerWeeks[w] === undefined));
+  const failed = grid.weeks.some((w) => off[w] === null || offerWeeks[w] === null);
+  // the offer form's days: the published days of the next 14 days (the Live board's view.days shape)
+  const days = weeksBetween(today, shiftISO(today, 13)).flatMap((w) => (sm[w] && Array.isArray(sm[w].days) ? sm[w].days : []));
+  // the driver search list: the roster + anyone named in the loaded days off / takes
+  const names = [...new Set([...roster,
+    ...Object.values(off).flatMap((d) => Object.values(d || {}).map((t) => t && t.name)),
+    ...Object.values(takesById).flatMap((t) => (Array.isArray(t) ? t.map((x) => x && x.name) : []))].filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  const pick = (d) => { setSel(d); if (monthOf(d) !== ym) setYm(monthOf(d)); };
+
   return html`<div class="rq">
     ${c.drivers ? html`<div class="card rq-alert" role="alert">
       <b>${c.drivers} driver${c.drivers === 1 ? '' : 's'} asked off but ${c.drivers === 1 ? 'is' : 'are'} still on the schedule —</b>
       ${c.groups.map((g) => html`<button class="link rq-alert-it" title="Open the Live schedule" onClick=${openLive}>${g.label}: ${g.names.join(', ')}</button>`)}
     </div>` : ''}
-    <div class="rq-cols">
-      <${DaysOffCard} st=${st} today=${today} />
-      <${OffersCard} days=${days} today=${today} />
+    <datalist id="rq-names">${names.map((n) => html`<option value=${n} />`)}</datalist>
+    <div class="rq-layout">
+      <div class="rq-left">
+        <${FilterCard} show=${show} setShow=${setShow} driver=${driver} setDriver=${setDriver} />
+        ${failed ? html`<${Banner} kind="warn">Couldn't load everything for this month — check the connection.<//>` : ''}
+        <${CalendarCard} grid=${grid} views=${views} today=${today} sel=${sel} loading=${loading}
+          onPick=${pick} onMonth=${(n) => setYm((m) => shiftMonth(m, n))} onToday=${() => { setYm(monthOf(today)); setSel(today); }} />
+        <${LegendCard} />
+      </div>
+      <div class="rq-right">
+        <${DayPanel} key=${sel} date=${sel} view=${selView} days=${days} today=${today} names=${names} show=${show} />
+      </div>
     </div>
   </div>`;
 }

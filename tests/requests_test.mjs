@@ -3,6 +3,7 @@
 import {
   APP_BY, fold, shiftISO, sundayOf, rangeOf, weeksBetween, sourceOf, askedLabel, shiftWords, scheduleStatus,
   requestRows, weekWord, groupByDay, conflictsOf, offerLists, offerRole, offerLine, takeTone,
+  monthOf, shiftMonth, longDate, monthGrid, driverMatch, dayViews,
 } from '../public/app/live/requests-model.js';
 
 let pass = 0, fail = 0;
@@ -113,6 +114,53 @@ eq('offerLine window', offerLine(offers[1], []), '0 of 2 taken · open · picks 
 eq('offerLine full / closed', [offerLine(offers[4]), offerLine(offers[2])], ['2 of 2 taken · full · first come', '0 of 1 taken · closed · first come']);
 eq('takeTone', ['approved', 'applied', 'waiting', 'pending', 'refused', 'declined', 'x'].map((s) => takeTone({ status: s })),
   ['ok', 'ok', 'wait', 'wait', 'gray', 'gray', 'gray']);
+
+// --- the calendar
+eq('monthOf / shiftMonth', [monthOf('2026-10-19'), shiftMonth('2026-10', 1), shiftMonth('2026-12', 1), shiftMonth('2026-01', -1)],
+  ['2026-10', '2026-11', '2027-01', '2025-12']);
+eq('longDate', longDate('2026-10-14'), 'Wednesday, October 14, 2026');
+const G = monthGrid('2026-10');
+eq('grid label', G.label, 'October 2026');
+eq('grid 42 days, Sunday first', [G.cells.length, G.cells[0].date, G.cells[41].date], [42, '2026-09-27', '2026-11-07']);
+eq('grid in month', [G.cells[3].inMonth, G.cells[4], G.cells.filter((x) => x.inMonth).length], [false, { date: '2026-10-01', num: 1, inMonth: true }, 31]);
+eq('grid weeks', G.weeks, ['2026-09-27', '2026-10-04', '2026-10-11', '2026-10-18', '2026-10-25', '2026-11-01']);
+eq('grid Feb 2026 (starts on a Sunday)', [monthGrid('2026-02').cells[0].date, monthGrid('2026-02').cells[41].date], ['2026-02-01', '2026-03-14']);
+eq('driverMatch', [driverMatch('Jason Leidy', ''), driverMatch('Jason Leidy', 'jason leidy'), driverMatch('Jason Leidy', 'leid'), driverMatch('Ana Road', 'jason')],
+  [true, true, true, false]);
+
+// days off on Tue Oct 20 (one still scheduled) + Wed Oct 21, a VET with a waiting take + a counter on Tue,
+// a VTO filled on Tue, a closed VET on Wed with a stale pending take (closed: not pending)
+const CO = [
+  { id: 'v1', kind: 'vet', date: '2026-10-20', role: 'road', wave: '10:45 AM', slots: 3, taken: 1, status: 'open', at: 1 },
+  { id: 't1', kind: 'vto', date: '2026-10-20', slots: 2, taken: 2, status: 'filled', at: 2 },
+  { id: 'v2', kind: 'vet', date: '2026-10-21', role: 'backup', wave: '', slots: 1, taken: 0, status: 'closed', at: 3 },
+  { id: 'x', kind: 'vet', date: '2026-12-01', slots: 1, taken: 0, status: 'open', at: 4 },               // outside: ignored
+];
+const TK = {
+  v1: [{ name: 'Gus Fewer', status: 'approved' }, { name: 'Ivy Blank', status: 'waiting' }, { name: 'Hal Dispatch', status: 'pending', counter: true }],
+  t1: [{ name: 'Ana Road', status: 'approved' }, { name: 'Eve Extra', status: 'applied' }],
+  v2: [{ name: 'Ivy Blank', status: 'pending' }],
+};
+const SRC = { offByWeek: OFF, smByWeek: SMW, offers: CO, takesById: TK };
+const V = dayViews('2026-10-18', '2026-10-24', SRC);
+eq('dayViews dates', Object.keys(V), ['2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23', '2026-10-24']);
+eq('chips Tue (order: still scheduled, pending, off, VET, VTO)', V['2026-10-20'].chips, [
+  { kind: 'conflict', text: '2 still scheduled ⊘' }, { kind: 'pending', text: '2 pending ⏱' }, { kind: 'off', text: '2 off ✓' },
+  { kind: 'vet', text: 'VET 1/3', faded: false, id: 'v1' }, { kind: 'vto', text: 'VTO 2/2', faded: true, id: 't1' }]);
+eq('chips Wed (closed VET faded, its take not pending)', V['2026-10-21'].chips, [
+  { kind: 'off', text: '1 off ✓' }, { kind: 'vet', text: 'VET 0/1', faded: true, id: 'v2' }]);
+eq('chips empty day', V['2026-10-22'], { offs: [], offers: [], chips: [] });
+eq('day offers VET first', V['2026-10-20'].offers.map((o) => o.id), ['v1', 't1']);
+eq('day offs', V['2026-10-20'].offs.map((r) => [r.name, r.status.state]), [['Ana Road', 'scheduled'], ['Jason Leidy', 'scheduled']]);
+eq('filter days off only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'off' })['2026-10-20'].chips.map((c) => c.kind), ['conflict', 'off']);
+eq('filter VTO only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'vto' })['2026-10-20'].chips.map((c) => c.text), ['VTO 2/2']);
+eq('filter VET only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'vet' })['2026-10-20'].chips.map((c) => c.text), ['2 pending ⏱', 'VET 1/3']);
+const IV = dayViews('2026-10-20', '2026-10-21', SRC, { driver: 'ivy blank' });
+eq('driver filter: their offers and pending only', [IV['2026-10-20'].chips.map((c) => c.text), IV['2026-10-21'].chips.map((c) => c.text)],
+  [['1 pending ⏱', 'VET 1/3'], ['VET 0/1']]);
+eq('driver filter: their days off', dayViews('2026-10-20', '2026-10-21', SRC, { driver: 'Jason' })['2026-10-21'].chips.map((c) => c.text), ['1 off ✓']);
+eq('takes not read yet: counts from the offer, no pending', dayViews('2026-10-20', '2026-10-20', { offers: CO })['2026-10-20'].chips.map((c) => c.text),
+  ['VET 1/3', 'VTO 2/2']);
 
 console.log(`requests_test: ${pass} passed, ${fail} failed`);
 if (fail) { for (const f of fails) console.log('  FAIL ' + f); process.exit(1); }

@@ -7,7 +7,7 @@
 //   smByWeek   {weekSunday: summary (the published week's per-driver JSON, parsed) | null (not published) | undefined (loading)}
 // A day off with by == 'Driver app' was asked in the drivers' app (Driver App timeoff.ts); any other by
 // is the manager who typed it in (Driver preferences / this page).
-import { dayLabel, timeLabel, offerWhat, offerCounts, stripStatus } from './offers-model.js';
+import { dayLabel, timeLabel, offerWhat, offerCounts, stripStatus, dayOffers } from './offers-model.js';
 
 export const APP_BY = 'Driver app';
 export const SPAN = 14;     // "Next 14 days" / "Past 14 days"
@@ -166,4 +166,96 @@ export function takeTone(t) {
   if (s === 'approved' || s === 'applied') return 'ok';
   if (s === 'waiting' || s === 'pending') return 'wait';
   return 'gray';
+}
+
+// --- The calendar (Jose 2026-10-19: a month grid like Paycom's time-off calendar, a day panel beside it)
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+// 'YYYY-MM' of a date; a month moved by n
+export const monthOf = (iso) => String(iso).slice(0, 7);
+export function shiftMonth(ym, n) {
+  const [y, m] = String(ym).split('-').map(Number);
+  const t = new Date(y, m - 1 + n, 1, 12);
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// "Wednesday, October 14, 2026"
+export function longDate(iso) {
+  const t = parse(iso);
+  return `${WEEKDAYS[t.getDay()]}, ${MONTHS[t.getMonth()]} ${t.getDate()}, ${t.getFullYear()}`;
+}
+
+// The month as the calendar draws it: Sunday first, always 6 rows (42 days, the days of the months
+// around it greyed). -> {label: 'October 2026', weeks: [6 Sundays], cells: [{date, num, inMonth}]}
+export function monthGrid(ym) {
+  const first = `${ym}-01`;
+  const start = sundayOf(first);
+  const cells = Array.from({ length: 42 }, (_, i) => {
+    const date = shiftISO(start, i);
+    return { date, num: Number(date.slice(8)), inMonth: monthOf(date) === ym };
+  });
+  const [y, m] = ym.split('-').map(Number);
+  return { label: `${MONTHS[m - 1]} ${y}`, weeks: [0, 1, 2, 3, 4, 5].map((k) => shiftISO(start, 7 * k)), cells };
+}
+
+// The driver filter: '' = everyone; else the same name (case / accents aside), or a part of it.
+export function driverMatch(name, driver) {
+  const d = fold(driver);
+  if (!d) return true;
+  const n = fold(name);
+  return n === d || n.includes(d);
+}
+
+const PENDING = new Set(['waiting', 'pending']);   // a counter is a 'pending' take too
+const offerDone = (o, c) => o.status === 'closed' || o.status === 'filled' || (c.offered > 0 && c.taken >= c.offered);
+
+// Every date in [from, to] -> {offs, offers, chips} under the filter {show: 'all'|'off'|'vet'|'vto', driver}.
+// src = {offByWeek, smByWeek, offers: schedule_offers rows, takesById: {offerId: takes | undefined}}.
+//   offs    the days off that date (requestRows rows, with their Live status)
+//   offers  that date's offers (VET first, then by wave) — with a driver picked, only those they took
+//   chips   what the calendar cell shows, in this order: still scheduled (red), pending takes (grey),
+//           days off (orange), then one per offer: VET (green) / VTO (amber) taken/spots, faded once closed or full.
+// Days off have no pending state: the Driver app approves them at once (or refuses and stores nothing).
+export function dayViews(from, to, src, filter = {}) {
+  const show = filter.show || 'all', driver = filter.driver || '';
+  const s = src || {};
+  const takesOf = (o) => (s.takesById || {})[o.id];
+  const out = {};
+  for (let d = from; d <= to; d = shiftISO(d, 1)) out[d] = { offs: [], offers: [], chips: [] };
+  if (show === 'all' || show === 'off') {
+    for (const r of requestRows(s.offByWeek, s.smByWeek, { from, to })) {
+      if (out[r.day] && driverMatch(r.name, driver)) out[r.day].offs.push(r);
+    }
+  }
+  const kinds = show === 'all' ? ['vet', 'vto'] : show === 'vet' || show === 'vto' ? [show] : [];
+  const byDate = {};
+  for (const o of s.offers || []) {
+    if (!o || !out[o.date] || !kinds.includes(o.kind === 'vto' ? 'vto' : 'vet')) continue;
+    if (driver) {
+      const t = takesOf(o);
+      if (!Array.isArray(t) || !t.some((x) => x && driverMatch(x.name, driver))) continue;
+    }
+    (byDate[o.date] = byDate[o.date] || []).push(o);
+  }
+  for (const [date, v] of Object.entries(out)) {
+    v.offers = dayOffers(byDate[date] || [], date);
+    const conflicts = v.offs.filter((r) => r.status.state === 'scheduled').length;
+    let pending = 0;
+    for (const o of v.offers) {
+      if (o.status === 'closed') continue;
+      for (const t of takesOf(o) || []) if (t && PENDING.has(t.status) && driverMatch(t.name, driver)) pending++;
+    }
+    if (conflicts) v.chips.push({ kind: 'conflict', text: `${conflicts} still scheduled ⊘` });
+    if (pending) v.chips.push({ kind: 'pending', text: `${pending} pending ⏱` });
+    if (v.offs.length) v.chips.push({ kind: 'off', text: `${v.offs.length} off ✓` });
+    for (const k of ['vet', 'vto']) {
+      for (const o of v.offers.filter((x) => (x.kind === 'vto' ? 'vto' : 'vet') === k)) {
+        const c = offerCounts(o, takesOf(o));
+        v.chips.push({ kind: k, text: `${k.toUpperCase()} ${c.taken}/${c.offered}`, faded: offerDone(o, c), id: o.id });
+      }
+    }
+  }
+  return out;
 }

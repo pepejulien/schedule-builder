@@ -51,7 +51,7 @@ export function useTakes(id) {
   return t;
 }
 // {offerId: takes} for these offers (ids in a stable order)
-function useTakesMap(ids) {
+export function useTakesMap(ids) {
   const [map, setMap] = useState({});
   const key = ids.join(',');
   useEffect(() => {
