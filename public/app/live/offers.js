@@ -13,9 +13,9 @@ import {
   dayOffers, upcomingGroups, stripHead, offerCounts, countsLabel, stripStatus, daySummary, daySummaryLabel, hasOpenOffer,
 } from './offers-model.js';
 
-// One schedule_offers listener however many strips are mounted.
+// One schedule_offers listener however many strips are mounted (the Requests page shares it too, 2026-10-19).
 const feed = { rows: undefined, subs: new Set(), un: null };
-function useOffers() {
+export function useOffers() {
   const [rows, setRows] = useState(feed.rows);
   useEffect(() => {
     feed.subs.add(setRows);
@@ -45,7 +45,7 @@ function subTakes(id, fn) {
     if (!f.subs.size) { takeFeeds.delete(id); if (f.un) f.un(); }
   };
 }
-function useTakes(id) {
+export function useTakes(id) {
   const [t, setT] = useState(() => (takeFeeds.get(id) || {}).rows);
   useEffect(() => subTakes(id, setT), [id]);
   return t;
@@ -91,10 +91,10 @@ function TierChecks({ list, onChange, name }) {
 const hoursBox = (value, onInput, label) => html`<input type="number" min="1" max="168" step="1" class="of-num"
   value=${value} onInput=${(e) => onInput(e.target.value)} aria-label=${label} />`;
 
-// The "Post an offer" form, opened inline in the strip. days = the shown week's view.days;
+// The "Post an offer" form, opened inline in the strip (and on the Requests page). days = the shown week's view.days;
 // today = 'YYYY-MM-DD'; date = the day it opens on (the first day left when it isn't postable);
 // onDone = after a post; onCancel shows a Cancel; uid keeps radio names apart.
-function OfferForm({ days, today, date, onDone, onCancel, uid = 's' }) {
+export function OfferForm({ days, today, date, onDone, onCancel, uid = 's' }) {
   const choices = offerDays(days, today);
   const [f, setF] = useState(() => ({ ...defaultForm(), date: date || '' }));
   const [busy, setBusy] = useState(false);

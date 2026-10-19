@@ -1,0 +1,169 @@
+// The Requests page (Jose 2026-10-19: it replaces the Today page) — the pure part: days off drivers
+// asked for (schedule_timeoff) checked against the published Live schedule, and the VET / VTO offers
+// lists. No app imports (offers-model.js has none either), so node tests/requests_test.mjs can load it.
+//
+// Inputs as the page's listeners hand them over:
+//   offByWeek  {weekSunday: {"<day>|<name>": {name, day, note, by, at (ISO | null)}} | null (read failed) | undefined (loading)}
+//   smByWeek   {weekSunday: summary (the published week's per-driver JSON, parsed) | null (not published) | undefined (loading)}
+// A day off with by == 'Driver app' was asked in the drivers' app (Driver App timeoff.ts); any other by
+// is the manager who typed it in (Driver preferences / this page).
+import { dayLabel, timeLabel, offerWhat, offerCounts, stripStatus } from './offers-model.js';
+
+export const APP_BY = 'Driver app';
+export const SPAN = 14;     // "Next 14 days" / "Past 14 days"
+
+// case- and accent-insensitive, like the Live board's search and Driver preferences
+export const fold = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+
+const parse = (iso) => { const [y, m, d] = String(iso).split('-').map(Number); return new Date(y, m - 1, d, 12); };
+const isoOf = (t) => `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+export const shiftISO = (iso, n) => { const t = parse(iso); t.setDate(t.getDate() + n); return isoOf(t); };
+export const sundayOf = (iso) => shiftISO(iso, -parse(iso).getDay());
+
+// The dates a range shows: 'next' = today and the 13 days after; 'past' = the 14 days before today.
+export function rangeOf(today, range) {
+  return range === 'past' ? { from: shiftISO(today, -SPAN), to: shiftISO(today, -1) }
+    : { from: today, to: shiftISO(today, SPAN - 1) };
+}
+
+// The week Sundays a date span touches, earliest first.
+export function weeksBetween(from, to) {
+  const out = [];
+  for (let w = sundayOf(from); w <= to; w = shiftISO(w, 7)) out.push(w);
+  return out;
+}
+
+// Who put the day off in: {app: true, label: 'Driver app'} | {app: false, label: the manager's first name}.
+export function sourceOf(t) {
+  if (t && t.by === APP_BY) return { app: true, label: APP_BY };
+  const first = String((t && t.by) || '').trim().split(/\s+/)[0];
+  return { app: false, label: first || 'Office' };
+}
+
+// "asked Mon 3:12 PM" ('' when the time isn't known yet — a save still on its way)
+export function askedLabel(at) {
+  const ms = at ? Date.parse(at) : NaN;
+  return Number.isFinite(ms) ? `asked ${timeLabel(ms)}` : '';
+}
+
+// A Live schedule cell in words when it puts the driver to work: "10:45 AM", "10:45 AM backup",
+// "10:45 AM trainee", "10:45 AM trainer", "dispatch", "1:00 PM Meeting" — '' when it is a day off
+// (blank, Unavailable, Called out, No-show, Day off). Same cell words as live-model.js cellInfo.
+export function shiftWords(v) {
+  const s = String(v || '').trim();
+  if (!s || s === 'Unavailable' || /^(Called out|No-show|Day off)$/.test(s)) return '';
+  const time = (s.match(/^\d{1,2}:\d{2} [AP]M/) || [''])[0];
+  if (/meeting/i.test(s)) return s;
+  if (/TRAIN helper/.test(s)) return `${time} trainer`.trim();
+  if (/TRAIN drives/.test(s)) return `${time} trainee`.trim();
+  if (/Backup/.test(s)) return `${time} backup`.trim();
+  if (time) return time;
+  if (s === 'Dispatch') return 'dispatch';
+  return s;
+}
+
+// A day off against the published Live week -> {state, what}:
+//   'scheduled' (what = the shift, e.g. "10:45 AM") — still on the schedule that day, not marked off
+//   'off'       — off that day on the Live schedule (or not on it at all, or the station is closed)
+//   'unbuilt'   — that week has no Live schedule yet: the weekly build will use the day off
+//   'loading'   — the week isn't read yet
+export function scheduleStatus(summary, name, date) {
+  if (summary === undefined) return { state: 'loading', what: '' };
+  if (!summary || !Array.isArray(summary.days)) return { state: 'unbuilt', what: '' };
+  const day = summary.days.find((x) => x && x.date === date);
+  if (!day) return { state: 'unbuilt', what: '' };
+  if (day.open === false) return { state: 'off', what: '' };
+  const f = fold(name);
+  const d = (summary.drivers || []).find((x) => x && fold(x.name) === f);
+  const what = d ? shiftWords((d.cells || {})[day.day]) : '';
+  return what ? { state: 'scheduled', what } : { state: 'off', what: '' };
+}
+
+// Every day off in [from, to] (source: 'all' | 'app' | 'office'), each with its source and Live status:
+// [{key, week, name, day, note, by, at, src, status}] by date, then name.
+export function requestRows(offByWeek, smByWeek, { from, to, source = 'all' } = {}) {
+  const out = [];
+  for (const [week, docs] of Object.entries(offByWeek || {})) {
+    const end = shiftISO(week, 6);
+    for (const t of Object.values(docs || {})) {
+      if (!t || !t.name || !t.day || t.day < week || t.day > end) continue;
+      if ((from && t.day < from) || (to && t.day > to)) continue;
+      const src = sourceOf(t);
+      if ((source === 'app' && !src.app) || (source === 'office' && src.app)) continue;
+      out.push({ key: `${t.day}|${t.name}`, week, name: t.name, day: t.day, note: String(t.note || '').trim(),
+        by: t.by || '', at: t.at || null, src, status: scheduleStatus((smByWeek || {})[week], t.name, t.day) });
+    }
+  }
+  return out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.name.localeCompare(b.name)));
+}
+
+// "this week" / "next week" / "week of Nov 2"
+export function weekWord(week, today) {
+  const w0 = sundayOf(today);
+  if (week === w0) return 'this week';
+  if (week === shiftISO(w0, 7)) return 'next week';
+  return `week of ${dayLabel(week).slice(4)}`;
+}
+
+// rows -> day groups: [{date, label: 'Tue Oct 21', n, unbuilt: '' | 'next week, not built yet', rows}].
+// newestFirst: the past range lists the latest day first.
+export function groupByDay(rows, smByWeek, today, newestFirst = false) {
+  const by = new Map();
+  for (const r of rows || []) {
+    if (!by.has(r.day)) by.set(r.day, []);
+    by.get(r.day).push(r);
+  }
+  const dates = [...by.keys()].sort();
+  if (newestFirst) dates.reverse();
+  return dates.map((date) => {
+    const week = sundayOf(date);
+    const unbuilt = (smByWeek || {})[week] === null ? `${weekWord(week, today)}, not built yet` : '';
+    return { date, label: dayLabel(date), n: by.get(date).length, unbuilt, rows: by.get(date) };
+  });
+}
+
+// Drivers who asked off but are still on the Live schedule, from today through the next 13 days:
+// {drivers: how many different drivers, groups: [{date, label, names}]} (the alert line and the nav badge).
+export function conflictsOf(offByWeek, smByWeek, today) {
+  const { from, to } = rangeOf(today, 'next');
+  const rows = requestRows(offByWeek, smByWeek, { from, to }).filter((r) => r.status.state === 'scheduled');
+  const groups = groupByDay(rows, smByWeek, today).map((g) => ({ date: g.date, label: g.label, names: g.rows.map((r) => r.name) }));
+  return { drivers: new Set(rows.map((r) => fold(r.name))).size, groups };
+}
+
+// --- VET / VTO offers (schedule_offers rows as watchScheduleOffers(null) hands them over)
+
+// {open: not closed and dated today or later (earliest first), closed: closed or past (latest first)}
+export function offerLists(rows, today) {
+  const open = [], closed = [];
+  for (const o of rows || []) {
+    if (!o) continue;
+    (o.status !== 'closed' && String(o.date || '') >= today ? open : closed).push(o);
+  }
+  const at = (a, b) => (Number(a.at) || 0) - (Number(b.at) || 0);
+  open.sort((a, b) => String(a.date).localeCompare(String(b.date)) || at(a, b));
+  closed.sort((a, b) => String(b.date).localeCompare(String(a.date)) || at(a, b));
+  return { open, closed };
+}
+
+// "road · 10:45 AM" / "backup · any wave" / "day off"
+export function offerRole(o) {
+  if (!o || o.kind !== 'vet') return offerWhat(o || {});
+  return `${o.role === 'backup' ? 'backup' : 'road'} · ${o.wave || 'any wave'}`;
+}
+
+// "2 of 3 taken · open · first come" / "0 of 1 taken · open · picks at Fri 6 PM" (takes as offerCounts reads them)
+export function offerLine(o, takes) {
+  const c = offerCounts(o, takes);
+  const st = stripStatus(o, c).word;
+  const how = o.mode === 'window' ? (o.decideAt ? `picks at ${timeLabel(o.decideAt)}` : 'waits, then picks') : 'first come';
+  return `${c.taken} of ${c.offered} taken · ${st} · ${how}`;
+}
+
+// A take's colour: 'ok' (approved / on the board), 'wait' (waiting / pending), 'gray' (refused / declined / other)
+export function takeTone(t) {
+  const s = t && t.status;
+  if (s === 'approved' || s === 'applied') return 'ok';
+  if (s === 'waiting' || s === 'pending') return 'wait';
+  return 'gray';
+}

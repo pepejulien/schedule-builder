@@ -31,7 +31,7 @@ function freshWizard() {
 
 let state = {
   auth: 'unknown',                 // 'unknown' | 'in' | 'out'
-  route: 'home',                   // 'home' | 'wizard' | 'settings' | 'live' | 'drivers'
+  route: 'home',                   // 'home' (= the Live schedule when there is one) | 'wizard' | 'settings' | 'live' | 'requests' | 'drivers'
   driversOpen: null,               // a driver name: the Drivers page opens their editor, then clears this
   wizard: freshWizard(),
   toast: null,

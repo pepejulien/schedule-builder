@@ -15,7 +15,7 @@ import { Step7Standing } from './steps/step7-standing.js';
 import { Step9Build } from './steps/step9-build.js';
 import { Settings } from './settings.js';
 import { LiveBoard } from './live/live-board.js';
-import { Today } from './live/today.js';
+import { Requests, useConflictCount } from './live/requests.js';
 import { Drivers } from './drivers.js';
 
 // A step rendered INSIDE another step hides its own Back/Next bar.
@@ -94,30 +94,14 @@ function Login() {
 
 const STATUS_CHIP = { done: ['open', 'Ready'], warn: ['lock', 'Check'], todo: ['todo', 'To do'] };
 
-// Next week's build in one card — the Today page's footer (Jose 2026-10-06:
-// the old Overview was only this checklist).
-function BuildCard() {
-  const wizard = useStore((s) => s.wizard);
-  const r = readiness(wizard);
-  const started = !!(wizard.availability || wizard.priorWeek?.source || wizard.build?.status === 'done');
-  const cont = () => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); };
-  const nWarn = r.warnings.length;
-  return html`<div class="card buildcard">
-    <div>
-      <h2>Next week's build</h2>
-      <p class="hint">${started
-        ? html`<b>${wizard.week?.label || 'In progress'}</b> · ${r.doneCount} of ${STEPS.length} steps ready${nWarn ? ` · ${nWarn} thing${nWarn === 1 ? '' : 's'} to check` : ''}${wizard.build?.published ? ' · published' : ''}`
-        : "Not started yet. Availability comes from Driver preferences, the current week from the Live board."}</p>
-    </div>
-    <div class="row">${started
-      ? html`<button class="primary" onClick=${cont}>Continue ${Icon('arrow', 16)}</button>
-          <button class="ghost" onClick=${() => { if (confirm('Start over? This clears the current build from this browser.')) startFresh(); }}>Start over</button>`
-      : html`<button class="accent" onClick=${startFresh}>Start a new schedule ${Icon('arrow', 16)}</button>`}</div>
-  </div>`;
+// The route as the screens use it (Jose 2026-10-19): with the Live board, "home" IS the Live
+// schedule — the Today page is gone, the app opens on the Live schedule.
+function useRoute() {
+  const route = useStore((s) => s.route);
+  return route === 'home' && canLive() ? 'live' : route;
 }
 
 function Home() {
-  if (canLive()) return html`<${Today} buildCard=${html`<${BuildCard} />`} />`;
   return html`<${BuildHome} />`;
 }
 
@@ -171,13 +155,19 @@ function BuildHome() {
 
 // The pages both navs list: the sidebar, and the Live schedule's top nav (Jose 2026-10-11).
 function useNavItems() {
-  const route = useStore((s) => s.route);
+  const route = useRoute();
   const step = useStore((s) => s.wizard.step);
   const wizard = useStore((s) => s.wizard);
   const r = readiness(wizard);
+  const conflicts = useConflictCount();   // drivers who asked off but are still on the schedule
   return {
-    pages: [
-      { on: route === 'home', icon: 'home', label: canLive() ? 'Today' : 'Overview', onClick: () => setState({ route: 'home' }) },
+    // with the Live board: Live schedule · Requests · Driver preferences (Jose 2026-10-19: Today is gone)
+    pages: canLive() ? [
+      { on: route === 'live', icon: 'live', label: 'Live schedule', onClick: () => setState({ route: 'live' }) },
+      { on: route === 'requests', icon: 'inbox', label: 'Requests', badge: conflicts, onClick: () => setState({ route: 'requests' }) },
+      { on: route === 'drivers', icon: 'users', label: 'Driver preferences', onClick: () => setState({ route: 'drivers' }) },
+    ] : [
+      { on: route === 'home', icon: 'home', label: 'Overview', onClick: () => setState({ route: 'home' }) },
       { on: route === 'live', icon: 'live', label: 'Live schedule', onClick: () => setState({ route: 'live' }) },
       { on: route === 'drivers', icon: 'users', label: 'Driver preferences', onClick: () => setState({ route: 'drivers' }) },
     ],
@@ -188,11 +178,13 @@ function useNavItems() {
 }
 const signOut = async () => { await logout(); setState({ auth: 'out' }); };
 const doneMark = (it) => (it.done ? html`<span class="nvok">${Icon('check', 14)}</span>` : '');
+// the red count on Requests (nothing at 0)
+const badge = (it) => (it.badge ? html`<span class="nvbadge" aria-label=${`${it.badge} to check`}>${it.badge}</span>` : '');
 
 function Sidebar() {
   const { pages, steps, settings } = useNavItems();
   const nav = (it) => html`
-    <a class=${'nv' + (it.on ? ' on' : '')} onClick=${it.onClick}>${Icon(it.icon)}<span>${it.label}</span>${doneMark(it)}</a>`;
+    <a class=${'nv' + (it.on ? ' on' : '')} onClick=${it.onClick}>${Icon(it.icon)}<span>${it.label}</span>${badge(it)}${doneMark(it)}</a>`;
   return html`<aside class="sidebar">
     <div class="sblogo"><img src="assets/logo.png" alt="" />
       <div><div class="sbname">Schedule Builder</div><div class="sbsub">JAJB Logistics · WWV9</div></div></div>
@@ -225,7 +217,7 @@ function TopNav() {
     return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
   }, [open]);
   const item = (it) => html`
-    <a class=${'tn' + (it.on ? ' on' : '')} onClick=${it.onClick}>${Icon(it.icon, 16)}<span>${it.label}</span></a>`;
+    <a class=${'tn' + (it.on ? ' on' : '')} onClick=${it.onClick}>${Icon(it.icon, 16)}<span>${it.label}</span>${badge(it)}</a>`;
   return html`<header class="topnav">
     <div class="tnlogo"><img src="assets/logo.png" alt="" /><span>Schedule Builder</span></div>
     <nav class="tnnav">
@@ -247,19 +239,20 @@ function TopNav() {
 }
 
 function TopBar() {
-  const route = useStore((s) => s.route);
+  const route = useRoute();
   const step = useStore((s) => s.wizard.step);
   const week = useStore((s) => s.wizard.week);
   const begun = useStore((s) => !!(s.wizard.availability || s.wizard.priorWeek?.source));
-  let title = canLive() ? 'Today' : 'Overview';
-  let sub = canLive() ? 'This week at a glance' : 'Where this week\'s schedule stands';
+  let title = 'Overview';
+  let sub = 'Where this week\'s schedule stands';
   if (route === 'settings') { title = 'Settings'; sub = 'Saved for every week'; }
   else if (route === 'drivers') { title = 'Driver preferences'; sub = 'Days each driver can work, and their limits'; }
+  else if (route === 'requests') { title = 'Requests'; sub = 'Days off drivers asked for, and VET / VTO offers'; }
   else if (route === 'live') { title = 'Live schedule'; sub = 'The published week, worked day by day — every change is logged'; }
   else if (route === 'wizard') { title = STEPS[step].title; sub = `Step ${step + 1} of ${STEPS.length} · ${STEPS[step].sub}`; }
   return html`<header class="topbar"><div class="tbrow">
     <div>
-      <div class="tbtitle"><h1>${title}</h1>${week?.label && route !== 'live' && route !== 'drivers' && !(route === 'home' && canLive()) ? html`<span class="wkpill">${week.label}</span>` : ''}</div>
+      <div class="tbtitle"><h1>${title}</h1>${week?.label && route !== 'live' && route !== 'drivers' && route !== 'requests' ? html`<span class="wkpill">${week.label}</span>` : ''}</div>
       <div class="tbsub">${sub}</div>
     </div>
     ${route === 'home' && !canLive() && (begun || step) ? html`<button class="rbtn" onClick=${() => { const rr = readiness(getState().wizard); continueWizard(); setWizard({ step: rr.firstTodoIdx }); }}>
@@ -269,12 +262,11 @@ function TopBar() {
 
 // Below 1000px the sidebar hides; this pill row keeps every page reachable.
 function MobileSteps() {
-  const route = useStore((s) => s.route);
+  const { pages } = useNavItems();
+  const route = useRoute();
   const step = useStore((s) => s.wizard.step);
   return html`<div class="msteps">
-    <button class=${'mstep' + (route === 'home' ? ' on' : '')} onClick=${() => setState({ route: 'home' })}>${canLive() ? 'Today' : 'Overview'}</button>
-    <button class=${'mstep' + (route === 'live' ? ' on' : '')} onClick=${() => setState({ route: 'live' })}>Live schedule</button>
-    <button class=${'mstep' + (route === 'drivers' ? ' on' : '')} onClick=${() => setState({ route: 'drivers' })}>Driver preferences</button>
+    ${pages.map((it) => html`<button class=${'mstep' + (it.on ? ' on' : '')} onClick=${it.onClick}>${it.label}${badge(it)}</button>`)}
     ${STEPS.map((s, i) => html`
     <button class=${'mstep' + (route === 'wizard' && i === step ? ' on' : '')}
       onClick=${() => { continueWizard(); goStep(i); }}>${i + 1}. ${s.title}</button>`)}
@@ -285,7 +277,7 @@ function MobileSteps() {
 
 export function App() {
   const auth = useStore((s) => s.auth);
-  const route = useStore((s) => s.route);
+  const route = useRoute();
   const step = useStore((s) => s.wizard.step);
   const toastVal = useStore((s) => s.toast);
 
@@ -316,6 +308,7 @@ export function App() {
   let body;
   if (route === 'settings') body = html`<${Settings}/>`;
   else if (route === 'live') body = html`<${LiveBoard}/>`;
+  else if (route === 'requests' && canLive()) body = html`<${Requests}/>`;
   else if (route === 'drivers') body = html`<${Drivers}/>`;
   else if (route === 'wizard') { const Comp = STEPS[Math.min(step, STEPS.length - 1)].comp; body = html`<${Comp}/>`; }
   else body = html`<${Home}/>`;
