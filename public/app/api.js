@@ -313,6 +313,18 @@ export function timeoffOnce(weekISO, ms = 6000) {
   });
 }
 
+// Day-off reviews (Driver App SPEC-v4, 2026-10-19): Firestore timeoff_reviews/{TID_YYYY-MM-DD} — a day off the
+// Driver app refused (full / closed / published) that the driver sent for review. Answered on the Requests page
+// (approve / deny with a reason); the hub's timeoff_review_apply then puts an approved day on the schedule and
+// writes applyResult. Field names: jajb.js watchTimeoffReviews. An older jajb.js has none: canReviews() is false.
+export const canReviews = () => onFirebase() && typeof window.JAJB.watchTimeoffReviews === 'function'
+  && typeof window.JAJB.decideTimeoffReview === 'function';
+// fromISO / toISO ('YYYY-MM-DD' | null = no bound) -> cb(rows sorted by day | null when refused)
+export const watchReviews = (fromISO, toISO, cb) => (canReviews()
+  ? window.JAJB.watchTimeoffReviews(fromISO || null, toISO || null, cb) : (cb([]), () => {}));
+// decision 'approved' | 'denied'; why = the reason the driver sees (≤ 200, '' for an approval)
+export const decideReview = (id, decision, why) => window.JAJB.decideTimeoffReview(id, decision, why || '');
+
 // VET / VTO offers for drivers (Driver App SPEC-v2 §6, 2026-10-12): Firestore schedule_offers/{id}
 // + takes/{tid}, posted and closed from the Live board's VET / VTO strip (live/offers.js). Field names:
 // jajb.js saveScheduleOffer. An older jajb.js has none of these: canOffers() is false and the strip stays hidden.

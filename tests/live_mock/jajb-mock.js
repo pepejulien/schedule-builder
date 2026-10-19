@@ -64,6 +64,37 @@
     fire();
     return next;
   }
+  // timeoff_review_apply, simplified (TEST ONLY): an approved review onto the schedule, applyResult on the review
+  let failApply = null;
+  function applyReview(id) {
+    const all = get('reviews') || {}, r = all[id];
+    if (!r || r.status !== 'approved') return;
+    let res;
+    if (failApply) { res = { ok: false, how: 'live', text: failApply }; failApply = null; }
+    else {
+      const w = weeks()[r.week];
+      if (!w) {
+        const t = get('timeoff/' + r.week) || {};
+        if (!t[r.day + '|' + r.name]) t[r.day + '|' + r.name] = { name: r.name, day: r.day, by: 'Driver app', at: now(),
+          note: ('Day-off review approved by ' + r.decidedBy + (r.note ? ' - ' + r.note : '')).slice(0, 300) };
+        put('timeoff/' + r.week, t);
+        res = { ok: true, how: 'timeoff', text: 'Saved as a day off (not published yet).' };
+      } else {
+        const sm = JSON.parse(w.summary), d = (sm.days || []).find((x) => x.date === r.day);
+        const drv = (sm.drivers || []).find((x) => x.name.toLowerCase() === String(r.name).toLowerCase());
+        if (!d || !drv) res = { ok: false, how: 'live', text: "The driver isn't on that week's Live schedule." };
+        else if (['', 'Unavailable', 'Day off', 'Called out', 'No-show'].includes(drv.cells[d.day] || '')) res = { ok: true, how: 'already', text: 'Already off.' };
+        else {
+          drv.cells[d.day] = 'Day off';
+          const all2 = weeks(); all2[r.week].summary = JSON.stringify(sm); all2[r.week].meta.rev += 1; put('weeks', all2);
+          res = { ok: true, how: 'live', text: 'Marked Day off on the Live schedule.' };
+        }
+      }
+    }
+    Object.assign(r, { appliedAt: Date.now(), applyResult: res });
+    put('reviews', all); fire();
+  }
+
   // a doc path as the generic watch() reads it
   function readPath(path) {
     const p = path.split('/');
@@ -209,6 +240,23 @@
       delete all[day + '|' + nm];
       put('timeoff/' + week, all); fire();
     },
+    // day-off reviews (Driver App SPEC-v4, 2026-10-19): timeoff_reviews/{TID_day} in 'reviews' (times as ms, like
+    // jajb.js). __mock.putReview seeds one (the Driver App's server makes them for real); an answer here plays the
+    // hub's timeoff_review_apply too: an approved day goes in schedule_timeoff (week not published) or as a
+    // "Day off" cell on the published week (+ applyResult); __mock.failApplyNext(text) makes the next one fail.
+    watchTimeoffReviews: (fromISO, toISO, cb) => listen('reviews', () => Object.values(get('reviews') || {})
+      .filter((r) => (!fromISO || r.day >= fromISO) && (!toISO || r.day <= toISO))
+      .sort((a, b) => String(a.day).localeCompare(String(b.day)) || a.at - b.at), cb),
+    decideTimeoffReview: async (id, decision, why) => {
+      await delay(LAT);
+      if (decision !== 'approved' && decision !== 'denied') throw new Error('decision must be approved or denied');
+      const all = get('reviews') || {}, r = all[id];
+      if (!r || r.status !== 'pending') throw new Error('Missing or insufficient permissions.');
+      Object.assign(r, { status: decision, decidedBy: name, decidedAt: Date.now(),
+        why: decision === 'denied' ? String(why || '').replace(/\s+/g, ' ').trim().slice(0, 200) : '' });
+      put('reviews', all); fire();
+      if (decision === 'approved') setTimeout(() => applyReview(id), 400);
+    },
     // VET / VTO offers (Driver App SPEC-v2 §6, 2026-10-12): schedule_offers/{id} in 'offers', takes in
     // 'offertakes/{id}' — same fields and checks as jajb.js (timestamps as ms). Drivers' takes come from
     // __mock.takeOffer below (the Driver App's server makes them for real).
@@ -319,6 +367,15 @@
         all[p.tid] = { at: Date.now(), status: 'pending', ...p };
         put('tradeprops/' + id, all); fire();
       },
+      // a day-off review as the Driver App's server writes it: r = {tid, name, day, note, refused, status, at?, ...}
+      putReview: (r) => {
+        const all = get('reviews') || {}, id = r.id || `${r.tid}_${r.day}`;
+        const t = new Date(r.day + 'T12:00:00'), sun = new Date(t); sun.setDate(t.getDate() - t.getDay());
+        all[id] = { v: 1, week: iso(sun), note: '', refused: 'full', status: 'pending', at: Date.now(), ...r, id };
+        put('reviews', all); fire();
+        return id;
+      },
+      failApplyNext: (text) => { failApply = text || 'The Live schedule said no.'; },
       get,
       reset: () => { Object.keys(localStorage).filter((k) => k.startsWith(K)).forEach((k) => localStorage.removeItem(k)); },
     },

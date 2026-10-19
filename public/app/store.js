@@ -33,6 +33,7 @@ let state = {
   auth: 'unknown',                 // 'unknown' | 'in' | 'out'
   route: 'home',                   // 'home' (= the Live schedule when there is one) | 'wizard' | 'settings' | 'live' | 'requests' | 'drivers'
   driversOpen: null,               // a driver name: the Drivers page opens their editor, then clears this
+  requestsDay: null,               // a day (#requests/YYYY-MM-DD): the Requests page picks it, then clears this
   wizard: freshWizard(),
   toast: null,
 };

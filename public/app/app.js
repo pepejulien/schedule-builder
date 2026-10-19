@@ -73,7 +73,7 @@ function Login() {
     setBusy(true); setErr('');
     const ok = await login(pw);
     setBusy(false);
-    if (ok) setState({ auth: 'in', route: 'home' });
+    if (ok) setState({ auth: 'in', route: 'home', ...(takeHash() || {}) });
     else setErr('That password was not accepted.');
   };
   return html`
@@ -93,6 +93,18 @@ function Login() {
 }
 
 const STATUS_CHIP = { done: ['open', 'Ready'], warn: ['lock', 'Check'], todo: ['todo', 'To do'] };
+
+// #requests or #requests/YYYY-MM-DD (the HR notification's link, 2026-10-19): the Requests page, that day
+// picked. -> {route, requestsDay} | null. takeHash() also clears the hash once it's used.
+function hashRoute() {
+  const m = String(location.hash || '').match(/^#requests(?:\/(\d{4}-\d{2}-\d{2}))?$/);
+  return m ? { route: 'requests', requestsDay: m[1] || null } : null;
+}
+function takeHash() {
+  const h = hashRoute();
+  if (h) { try { history.replaceState(null, '', location.pathname + location.search); } catch { /* old browser */ } }
+  return h;
+}
 
 // The route as the screens use it (Jose 2026-10-19): with the Live board, "home" IS the Live
 // schedule — the Today page is gone, the app opens on the Live schedule.
@@ -287,8 +299,12 @@ export function App() {
         const d = await loadDraft();
         if (d && d.wizard) hydrateWizard(d.wizard);
       }
-      setState({ auth: ok === 'no-app' ? 'no-app' : ok ? 'in' : 'out' });
+      setState({ auth: ok === 'no-app' ? 'no-app' : ok ? 'in' : 'out', ...(ok === true ? takeHash() || {} : {}) });
     });
+    // a #requests link opened while the app is already up
+    const onHash = () => { if (getState().auth === 'in' && hashRoute()) setState(takeHash()); };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
   if (auth === 'unknown') {

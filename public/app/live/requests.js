@@ -1,24 +1,26 @@
 // The Requests page (Jose 2026-10-19: it replaces the Today page, which nobody used — the Live
 // schedule is the landing page now). A month calendar like Paycom's time-off calendar: each day
 // shows the days off asked for (schedule_timeoff, from the drivers' app or typed in by a manager),
-// who asked off but is still on the published Live schedule, VET / VTO takes waiting for an answer,
-// and that day's VET / VTO offers; clicking a day opens it in the panel beside the calendar. A red
-// line on top names whoever asked off in the next 14 days but is still on the schedule; the nav's
-// Requests item carries the same count (useConflictCount). The words and the counts come from
+// who asked off but is still on the published Live schedule, what waits for an answer (day-off reviews:
+// a day the Driver app refused that the driver sent for review, 2026-10-19 — and VET / VTO takes), and
+// that day's VET / VTO offers; clicking a day opens it in the panel beside the calendar, where reviews
+// are approved or denied. A red line on top names whoever asked off in the next 14 days but is still on
+// the schedule, and the reviews waiting; the nav's Requests item counts both (useConflictCount).
+// #requests / #requests/YYYY-MM-DD (the HR notification's link) opens this page on that day (app.js). The words and the counts come from
 // requests-model.js (pure, tested by tests/requests_test.mjs). Everything is live: Firestore
 // listeners, one per week however many readers (the page + the nav badge), dropped when nobody reads it.
 import { html } from '../preact-setup.js';
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { setState, toast } from '../store.js';
+import { setState, toast, useStore } from '../store.js';
 import { Banner, Spinner } from '../ui.js';
 import { canLive, canTimeoff, watchTimeoff, saveTimeoff, clearTimeoff, liveWeeks, liveWeek, watchLiveWeek,
-  watchLiveSummary, canWatchSummary, canOffers, watchOffers } from '../api.js';
+  watchLiveSummary, canWatchSummary, canOffers, watchOffers, canReviews, watchReviews, decideReview } from '../api.js';
 import { loadDriverRoster } from '../lib/driver-prefs.js';
 import { toISODate } from '../lib/weeks.js';
 import { useTakes, useTakesMap, OfferForm } from './offers.js';
 import { dayLabel, takeStatus, offerDays } from './offers-model.js';
 import { fold, shiftISO, sundayOf, rangeOf, weeksBetween, askedLabel, conflictsOf, offerRole, offerLine, takeTone,
-  monthOf, shiftMonth, longDate, monthGrid, dayViews } from './requests-model.js';
+  monthOf, shiftMonth, longDate, monthGrid, dayViews, refusedText, reviewsWaiting, applyProblem, denyReason } from './requests-model.js';
 
 const AHEAD = 12;   // weeks past this one a day off can be added for, as on Driver preferences
 const todayNow = () => toISODate(new Date());
@@ -67,6 +69,8 @@ function makeFeed(watch) {
 const subOff = makeFeed((week, cb) => watchTimeoff(week, (d) => cb(d && typeof d === 'object' ? d : null)));
 const subSm = makeFeed(watchSummary);
 const subOffers = makeFeed((week, cb) => watchOffers(week, cb));
+// day-off reviews for a day range: key "from|to" ('' = no bound)
+const subReviews = makeFeed((key, cb) => { const [f, t] = key.split('|'); return watchReviews(f || null, t || null, cb); });
 // {key: value} for these keys (undefined = not read yet); a key dropped from the list stops its listener
 function useFeed(sub, keys) {
   const [map, setMap] = useState({});
@@ -79,13 +83,16 @@ function useFeed(sub, keys) {
   return map;
 }
 
-// The nav badge: how many drivers asked off in the next 14 days but are still on the Live schedule.
+// The nav badge: what needs an answer — drivers who asked off in the next 14 days but are still on the
+// Live schedule, plus the day-off reviews waiting (from today on).
 export function useConflictCount() {
   const today = todayNow();
   const { from, to } = rangeOf(today, 'next');
   const weeks = canLive() && canTimeoff() ? weeksBetween(from, to) : [];
   const off = useFeed(subOff, weeks), sm = useFeed(subSm, weeks);
-  return conflictsOf(off, sm, today).drivers;
+  const rk = `${today}|`;
+  const rv = useFeed(subReviews, canLive() && canReviews() ? [rk] : []);
+  return conflictsOf(off, sm, today, rv[rk]).drivers + reviewsWaiting(rv[rk], today).n;
 }
 
 // "+ Add a day off": a driver (the roster, or any typed name, as on Driver preferences), a date, a note.
@@ -158,6 +165,8 @@ const STATUS = {
 };
 
 // One day off: name, who put it in, the note, when; its status against the Live schedule; ✕ remove.
+// From an approved review: "approved by <name>", and a red line when it couldn't go on the schedule
+// (a day put on the Live week by the review has no schedule_timeoff doc: nothing to remove here).
 function OffRow({ r, label }) {
   const [busy, setBusy] = useState(false);
   const s = STATUS[r.status.state](r.status);
@@ -174,10 +183,60 @@ function OffRow({ r, label }) {
       <span class=${'chip ' + (r.src.app ? 'blue' : 'gray')}>${r.src.label}</span>
       ${r.note ? html`<span class="muted rq-note">“${r.note}”</span>` : ''}
       ${asked ? html`<span class="muted rq-asked">${asked}</span>` : ''}
+      ${r.approvedBy ? html`<span class="muted rq-asked">approved by ${r.approvedBy}</span>` : ''}
     </div>
     <span class=${'rq-st ' + s.cls}>${s.text}</span>
-    <button class="ghost rq-x" title="Remove this day off" aria-label=${`Remove ${r.name}'s day off on ${label}`}
-      disabled=${busy} onClick=${remove}>✕</button>
+    ${r.fromReview ? html`<span class="rq-x-space"></span>` : html`<button class="ghost rq-x" title="Remove this day off" aria-label=${`Remove ${r.name}'s day off on ${label}`}
+      disabled=${busy} onClick=${remove}>✕</button>`}
+    ${r.review && applyProblem(r.review) ? html`<div class="rq-bad">${applyProblem(r.review)}</div>` : ''}
+  </li>`;
+}
+
+// A day-off review waiting: who, why the app said no, their note, when; scheduled that day? Approve / Deny…
+// (a reason, required — the driver sees it).
+function ReviewRow({ r }) {
+  const [busy, setBusy] = useState(false);
+  const [denying, setDenying] = useState(false);
+  const [why, setWhy] = useState('');
+  const [err, setErr] = useState('');
+  const asked = askedLabel(r.at);
+  const decide = async (decision, reason) => {
+    setBusy(true); setErr('');
+    try {
+      await decideReview(r.id, decision, reason);
+      toast(decision === 'approved' ? `Approved — ${r.name}'s day off goes on the schedule in a moment.` : 'Denied — the driver sees your reason.');
+    } catch (e) {
+      setErr(`Couldn't save the answer: ${e.message || e}`);
+      setBusy(false);
+    }
+  };
+  const deny = (e) => {
+    if (e) e.preventDefault();
+    const d = denyReason(why);
+    if (d.error) { setErr(d.error); return; }
+    decide('denied', d.why);
+  };
+  return html`<li class="rq-row rq-review">
+    <div class="rq-who">
+      <b>${r.name}</b>
+      <span class="chip blue">Driver app</span>
+      <span class="rq-refused">${refusedText(r)}</span>
+      ${r.note ? html`<span class="muted rq-note">“${r.note}”</span>` : ''}
+      ${asked ? html`<span class="muted rq-asked">${asked}</span>` : ''}
+      ${r.live && r.live.state === 'scheduled' ? html`<span class="muted rq-asked">scheduled ${r.live.what}</span>` : ''}
+      ${denying ? html`<form class="rq-deny" onSubmit=${deny}>
+        <input type="text" maxLength="200" value=${why} disabled=${busy} placeholder="Reason" aria-label="Reason for the driver"
+          onInput=${(e) => { setWhy(e.target.value); setErr(''); }} />
+        <div class="hint">The driver sees this reason — don't name anyone.</div>
+        <div class="row"><button class="small" disabled=${busy}>Deny</button>
+          <button type="button" class="small ghost" disabled=${busy} onClick=${() => { setDenying(false); setErr(''); }}>Cancel</button></div>
+      </form>` : ''}
+      ${err ? html`<div class="rq-bad" role="alert">${err}</div>` : ''}
+    </div>
+    ${denying ? '' : html`<div class="row rq-revbtns">
+      <button class="primary small" disabled=${busy} onClick=${() => decide('approved', '')}>Approve</button>
+      <button class="small" disabled=${busy} onClick=${() => setDenying(true)}>Deny…</button>
+    </div>`}
   </li>`;
 }
 
@@ -256,7 +315,8 @@ function DayPanel({ date, view, days, today, names, show }) {
   const label = dayLabel(date);
   const postable = canOffers() ? offerDays(days, today) : [];
   const post = () => { setAdding(false); if (postable.length) setPosting(true); else openLive(); };
-  const nothing = !view.offs.length && !view.offers.length;
+  const [showDenied, setShowDenied] = useState(false);
+  const nothing = !view.waiting.length && !view.offs.length && !view.denied.length && !view.offers.length;
   return html`<div class="card rq-panel">
     <h2>${longDate(date)}</h2>
     <div class="row rq-panelbtns">
@@ -269,8 +329,17 @@ function DayPanel({ date, view, days, today, names, show }) {
       onDone=${() => setPosting(false)} onCancel=${() => setPosting(false)} /></div>` : ''}
     ${!canTimeoff() && show !== 'vet' && show !== 'vto' ? html`<p class="muted">Days off need the JAJB hub's connection — open the Schedule Builder from the hub.</p>` : ''}
     ${nothing ? html`<p class="muted" style="margin:0">Nothing asked for this day.</p>` : ''}
+    ${view.waiting.length ? html`<h3 class="rq-waith">Waiting for your answer (${view.waiting.length})</h3>
+      <ul class="rq-list">${view.waiting.map((r) => html`<${ReviewRow} r=${r} key=${r.id} />`)}</ul>` : ''}
     ${view.offs.length ? html`<h3>Days off (${view.offs.length})</h3>
       <ul class="rq-list">${view.offs.map((r) => html`<${OffRow} r=${r} label=${label} key=${r.key} />`)}</ul>` : ''}
+    ${view.denied.length ? html`<button class="link rq-answered" aria-expanded=${showDenied} onClick=${() => setShowDenied((x) => !x)}>
+      Answered (${view.denied.length}) ${showDenied ? '▾' : '▸'}</button>
+      ${showDenied ? html`<ul class="rq-list">${view.denied.map((r) => html`<li class="rq-row" key=${r.id}>
+        <div class="rq-who"><b>${r.name}</b><span class="chip gray">Denied</span>
+          ${r.why ? html`<span class="muted rq-note">“${r.why}”</span>` : ''}
+          ${r.decidedBy ? html`<span class="muted rq-asked">by ${r.decidedBy}</span>` : ''}</div>
+      </li>`)}</ul>` : ''}` : ''}
     ${view.offers.length ? html`<h3>VET / VTO</h3>
       <div class="rq-offers">${view.offers.map((o) => html`<${OfferCard} o=${o} key=${o.id} />`)}</div>` : ''}
   </div>`;
@@ -283,6 +352,13 @@ export function Requests() {
   const [show, setShow] = useState('all');
   const [driver, setDriver] = useState('');
   const [roster, setRoster] = useState([]);
+  // #requests/YYYY-MM-DD (app.js puts the day here): pick it once, then clear it
+  const deep = useStore((st) => st.requestsDay);
+  useEffect(() => {
+    if (!deep) return;
+    setSel(deep); setYm(monthOf(deep));
+    setState({ requestsDay: null });
+  }, [deep]);
   useEffect(() => {
     let alive = true;
     if (canLive()) loadDriverRoster({ active: true }).then((r) => { if (alive) setRoster((r || []).map((x) => x.name)); }).catch(() => {});
@@ -301,6 +377,10 @@ export function Requests() {
   const offerWeeks = useFeed(subOffers, canOffers() ? weeks : []);
   const offers = weeks.flatMap((w) => (Array.isArray(offerWeeks[w]) ? offerWeeks[w] : []));
   const takesById = useTakesMap(offers.map((o) => o.id).sort());
+  // day-off reviews: the visible month's days, and every one from today on (the alert)
+  const rkMonth = `${grid.cells[0].date}|${grid.cells[41].date}`, rkNext = `${today}|`;
+  const rv = useFeed(subReviews, canLive() && canReviews() ? [rkMonth, rkNext] : []);
+  const reviews = [...new Map([...(rv[rkMonth] || []), ...(rv[rkNext] || [])].filter(Boolean).map((r) => [r.id, r])).values()];
   useEffect(() => {
     if (!tap) return;
     if (window.innerWidth < 1000 && panelRef.current) panelRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -308,27 +388,35 @@ export function Requests() {
 
   if (!canLive()) return html`<${Banner} kind="info">Requests need the JAJB hub's connection — open the Schedule Builder from the hub.<//>`;
 
-  const src = { offByWeek: off, smByWeek: sm, offers, takesById };
+  const src = { offByWeek: off, smByWeek: sm, offers, takesById, reviews };
   const filter = { show, driver };
   const first = grid.cells[0].date, last = grid.cells[41].date;
   const views = dayViews(first, last, src, filter);
   const selView = (sel >= first && sel <= last ? views : dayViews(sel, sel, src, filter))[sel];
-  const c = conflictsOf(off, sm, today);
+  const c = conflictsOf(off, sm, today, reviews);
+  const rw = reviewsWaiting(reviews, today);
   const loading = grid.weeks.some((w) => (canTimeoff() && off[w] === undefined) || (canOffers() && offerWeeks[w] === undefined));
-  const failed = grid.weeks.some((w) => off[w] === null || offerWeeks[w] === null);
+  const failed = grid.weeks.some((w) => off[w] === null || offerWeeks[w] === null) || rv[rkMonth] === null;
   // the offer form's days: the published days of the next 14 days (the Live board's view.days shape)
   const days = weeksBetween(today, shiftISO(today, 13)).flatMap((w) => (sm[w] && Array.isArray(sm[w].days) ? sm[w].days : []));
   // the driver search list: the roster + anyone named in the loaded days off / takes
   const names = [...new Set([...roster,
     ...Object.values(off).flatMap((d) => Object.values(d || {}).map((t) => t && t.name)),
-    ...Object.values(takesById).flatMap((t) => (Array.isArray(t) ? t.map((x) => x && x.name) : []))].filter(Boolean))]
+    ...Object.values(takesById).flatMap((t) => (Array.isArray(t) ? t.map((x) => x && x.name) : [])),
+    ...reviews.map((r) => r.name)].filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
   const pick = (d) => { setTap((n) => n + 1); setSel(d); if (monthOf(d) !== ym) setYm(monthOf(d)); };
 
   return html`<div class="rq">
-    ${c.drivers ? html`<div class="card rq-alert" role="alert">
-      <b>${c.drivers} driver${c.drivers === 1 ? '' : 's'} asked off but ${c.drivers === 1 ? 'is' : 'are'} still on the schedule —</b>
-      ${c.groups.map((g) => html`<button class="link rq-alert-it" title="Open the Live schedule" onClick=${openLive}>${g.label}: ${g.names.join(', ')}</button>`)}
+    ${c.drivers || rw.n ? html`<div class="card rq-alert" role="alert">
+      ${c.drivers ? html`<div class="rq-alert-line">
+        <b>${c.drivers} driver${c.drivers === 1 ? '' : 's'} asked off but ${c.drivers === 1 ? 'is' : 'are'} still on the schedule —</b>
+        ${c.groups.map((g) => html`<button class="link rq-alert-it" title="Show this day" onClick=${() => pick(g.date)}>${g.label}: ${g.names.join(', ')}</button>`)}
+      </div>` : ''}
+      ${rw.n ? html`<div class="rq-alert-line">
+        <b>${rw.n} day-off review${rw.n === 1 ? '' : 's'} waiting —</b>
+        ${rw.groups.map((g) => html`<button class="link rq-alert-it" title="Show this day" onClick=${() => pick(g.date)}>${g.label}: ${g.names.join(', ')}</button>`)}
+      </div>` : ''}
     </div>` : ''}
     <datalist id="rq-names">${names.map((n) => html`<option value=${n} />`)}</datalist>
     <div class="rq-layout">

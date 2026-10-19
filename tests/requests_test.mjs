@@ -4,6 +4,7 @@ import {
   APP_BY, fold, shiftISO, sundayOf, rangeOf, weeksBetween, sourceOf, askedLabel, shiftWords, scheduleStatus,
   requestRows, weekWord, groupByDay, conflictsOf, offerLists, offerRole, offerLine, takeTone,
   monthOf, shiftMonth, longDate, monthGrid, driverMatch, dayViews,
+  refusedText, pendingReviews, reviewsWaiting, applyProblem, denyReason,
 } from '../public/app/live/requests-model.js';
 
 let pass = 0, fail = 0;
@@ -152,7 +153,7 @@ eq('chip titles', V['2026-10-20'].chips.map((c) => c.title), [
   'VET · road · 10:45 AM · 1 of 3 taken · open · first come', 'VTO · day off · 2 of 2 taken · full · first come']);
 eq('chips Wed (closed VET faded, its take not pending)', V['2026-10-21'].chips.map((c) => [c.kind, c.text, !!c.faded, c.title]), [
   ['off', '✓ 1 off', false, '1 driver asked for the day off'], ['vet', 'VET 0/1', true, 'VET · backup · any wave · 0 of 1 taken · closed · first come']]);
-eq('chips empty day', V['2026-10-22'], { offs: [], offers: [], chips: [] });
+eq('chips empty day', V['2026-10-22'], { waiting: [], offs: [], denied: [], offers: [], chips: [] });
 eq('day offers VET first', V['2026-10-20'].offers.map((o) => o.id), ['v1', 't1']);
 eq('day offs', V['2026-10-20'].offs.map((r) => [r.name, r.status.state]), [['Ana Road', 'scheduled'], ['Jason Leidy', 'scheduled']]);
 eq('filter days off only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'off' })['2026-10-20'].chips.map((c) => c.kind), ['conflict', 'off']);
@@ -164,6 +165,57 @@ eq('driver filter: their offers and pending only', [IV['2026-10-20'].chips.map((
 eq('driver filter: their days off', dayViews('2026-10-20', '2026-10-21', SRC, { driver: 'Jason' })['2026-10-21'].chips.map((c) => c.text), ['✓ 1 off']);
 eq('takes not read yet: counts from the offer, no pending', dayViews('2026-10-20', '2026-10-20', { offers: CO })['2026-10-20'].chips.map((c) => c.text),
   ['VET 1/3', 'VTO 2/2']);
+
+// --- day-off reviews
+const ms = (d, h) => new Date(2026, 9, d, h, 0).getTime();
+const RV = [
+  { id: 'A_2026-10-20', name: 'Kathy Deaton', week: '2026-10-18', day: '2026-10-20', note: 'funeral', refused: 'full', status: 'pending', at: ms(18, 9) },
+  { id: 'B_2026-10-20', name: 'Jason Leidy', week: '2026-10-18', day: '2026-10-20', note: '', refused: 'published', status: 'pending', at: ms(18, 8) },
+  { id: 'C_2026-10-21', name: 'Ana Road', week: '2026-10-18', day: '2026-10-21', refused: 'closed', status: 'approved', decidedBy: 'Jose A Julien', at: ms(17, 8),
+    applyResult: { ok: false, how: 'live', text: 'Wed is a training-pair day (10:45 AM TRAIN helper): only a rebuild of the week changes it. Change it by hand.' } },
+  { id: 'D_2026-10-20', name: 'Ben Backup', week: '2026-10-18', day: '2026-10-20', refused: 'full', status: 'denied', why: 'Short on drivers', decidedBy: 'Maria Lopez', at: ms(16, 8) },
+  { id: 'E_2026-10-20', name: 'Eve Extra', week: '2026-10-18', day: '2026-10-20', refused: 'full', status: 'cancelled', at: ms(16, 9) },
+  { id: 'F_2026-10-27', name: 'Gus Fewer', week: '2026-10-25', day: '2026-10-27', refused: 'closed', status: 'approved', decidedBy: 'Jose A Julien', at: ms(17, 9),
+    applyResult: { ok: true, how: 'timeoff', text: 'Saved as a day off' } },
+  { id: 'G_2026-10-12', name: 'Old One', week: '2026-10-11', day: '2026-10-12', refused: 'full', status: 'pending', at: ms(10, 9) },
+];
+eq('refusedText', ['full', 'closed', 'published', 'x'].map((k) => refusedText({ refused: k })),
+  ['the day was full', 'requests were closed for that week', 'the schedule was already out', 'the app said no']);
+eq('pendingReviews from today', pendingReviews(RV, T).map((r) => r.id), ['B_2026-10-20', 'A_2026-10-20']);
+eq('pendingReviews all', pendingReviews(RV).length, 3);
+eq('reviewsWaiting', reviewsWaiting(RV, T), { n: 2, groups: [{ date: '2026-10-20', label: 'Tue Oct 20', names: ['Jason Leidy', 'Kathy Deaton'] }] });
+eq('applyProblem', [applyProblem(RV[2]), applyProblem(RV[5]), applyProblem(RV[0])], [
+  "Couldn't put it on the schedule: Wed is a training-pair day (10:45 AM TRAIN helper): only a rebuild of the week changes it. Change it by hand — fix it on the Live schedule",
+  '', '']);
+eq('denyReason', [denyReason('  '), denyReason(' Short   on\n drivers '), denyReason('x'.repeat(201)).error ? 'long' : 'ok'],
+  [{ error: 'Write the reason — the driver sees it.' }, { why: 'Short on drivers' }, 'long']);
+
+const OFF3 = { '2026-10-25': { '2026-10-27|Gus Fewer': { name: 'Gus Fewer', day: '2026-10-27', note: 'Day-off review approved by Jose A Julien', by: APP_BY, at } } };
+const SRC3 = { offByWeek: { ...OFF, ...OFF3 }, smByWeek: { ...SMW, '2026-10-25': null }, offers: CO, takesById: TK, reviews: RV };
+const W = dayViews('2026-10-18', '2026-10-31', SRC3);
+eq('waiting Tue: by sent time, Live status', W['2026-10-20'].waiting.map((r) => [r.name, r.live.state, r.live.what]),
+  [['Jason Leidy', 'scheduled', '10:45 AM'], ['Kathy Deaton', 'off', '']]);
+eq('denied Tue (cancelled hidden)', W['2026-10-20'].denied.map((r) => [r.name, r.why]), [['Ben Backup', 'Short on drivers']]);
+eq('waiting chip: reviews + takes', W['2026-10-20'].chips.find((c) => c.kind === 'pending'),
+  { kind: 'pending', text: '⏱ 4 wait', title: '2 day-off reviews and 2 VET / VTO takes waiting for an answer' });
+eq('approved review, no timeoff doc: its own row', W['2026-10-21'].offs.map((r) => [r.name, r.status.state, r.approvedBy || '', !!r.fromReview]),
+  [['Ana Road', 'off', 'Jose A Julien', true], ['Jason Leidy', 'off', '', false]]);
+ok('approved review, apply failed: its problem', applyProblem(W['2026-10-21'].offs[0].review).startsWith("Couldn't put it on the schedule"));
+eq('approved review joins its timeoff doc', W['2026-10-27'].offs.map((r) => [r.name, r.approvedBy, !!r.fromReview, r.key]),
+  [['Gus Fewer', 'Jose A Julien', false, '2026-10-27|Gus Fewer']]);
+eq('reviews only: one wait chip', dayViews('2026-10-20', '2026-10-20', { reviews: RV })['2026-10-20'].chips,
+  [{ kind: 'pending', text: '⏱ 2 wait', title: '2 day-off reviews waiting for an answer' }]);
+eq('filter Days off keeps reviews', dayViews('2026-10-20', '2026-10-20', SRC3, { show: 'off' })['2026-10-20'].waiting.length, 2);
+eq('filter VET drops reviews', dayViews('2026-10-20', '2026-10-20', SRC3, { show: 'vet' })['2026-10-20'].chips.map((c) => c.text), ['⏱ 2 wait', 'VET 1/3']);
+eq('driver filter on reviews', dayViews('2026-10-20', '2026-10-20', SRC3, { driver: 'kathy' })['2026-10-20'].waiting.map((r) => r.name), ['Kathy Deaton']);
+eq('conflicts count an approved review still on the schedule', conflictsOf(OFF, SMW, T, [
+  { name: 'Jason Leidy', week: '2026-10-18', day: '2026-10-20', status: 'approved' },           // same as his day off: once
+  { name: 'Zoé Ñame', week: '2026-10-18', day: '2026-10-23', status: 'approved' },             // Fri dispatch: counts
+  { name: 'Ana Road', week: '2026-10-18', day: '2026-10-22', status: 'approved' },             // Thu Unavailable: off
+  { name: 'Zoé Ñame', week: '2026-10-18', day: '2026-10-23', status: 'pending' }]), {
+  drivers: 3, groups: [{ date: '2026-10-20', label: 'Tue Oct 20', names: ['Ana Road', 'Jason Leidy'] },
+    { date: '2026-10-23', label: 'Fri Oct 23', names: ['Zoé Ñame'] }] });
+eq('askedLabel ms', [askedLabel(ms(18, 9)), askedLabel(0)], ['asked Sun 9 AM', '']);
 
 console.log(`requests_test: ${pass} passed, ${fail} failed`);
 if (fail) { for (const f of fails) console.log('  FAIL ' + f); process.exit(1); }

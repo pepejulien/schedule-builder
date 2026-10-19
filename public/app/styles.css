@@ -887,3 +887,18 @@ button.rq-cell.sel { outline: 2px solid var(--navy); outline-offset: -1px; }
   button.rq-cell { min-height: 64px; padding: 3px 2px; }
   .rq-chip { font-size: 10px; line-height: 14px; padding: 0 3px; border-radius: 4px; }
 }
+/* day-off reviews (2026-10-19) */
+.rq-alert { flex-direction: column; align-items: stretch; }
+.rq-alert-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.rq-waith { color: var(--err) !important; }
+.rq-review { align-items: flex-start; }
+.rq-refused { font-size: 12.5px; color: var(--ink2); }
+.rq-revbtns { gap: 6px; flex-wrap: nowrap; }
+.rq-deny { flex-basis: 100%; margin-top: 6px; }
+.rq-deny input { width: 100%; }
+.rq-deny .hint { margin: 4px 0 6px; }
+.rq-row { flex-wrap: wrap; }
+.rq-bad { flex-basis: 100%; color: var(--err); font-size: 12.5px; font-weight: 600; }
+.rq-x-space { width: 34px; flex: none; }
+button.rq-answered { display: block; margin: 14px 0 4px; }
+@media (max-width: 600px) { .rq-revbtns { flex-basis: 100%; } }

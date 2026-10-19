@@ -40,9 +40,9 @@ export function sourceOf(t) {
   return { app: false, label: first || 'Office' };
 }
 
-// "asked Mon 3:12 PM" ('' when the time isn't known yet — a save still on its way)
+// "asked Mon 3:12 PM" ('' when the time isn't known yet — a save still on its way). at = ISO or ms.
 export function askedLabel(at) {
-  const ms = at ? Date.parse(at) : NaN;
+  const ms = typeof at === 'number' ? (at > 0 ? at : NaN) : at ? Date.parse(at) : NaN;
   return Number.isFinite(ms) ? `asked ${timeLabel(ms)}` : '';
 }
 
@@ -124,11 +124,20 @@ export function groupByDay(rows, smByWeek, today, newestFirst = false) {
 
 // Drivers who asked off but are still on the Live schedule, from today through the next 13 days:
 // {drivers: how many different drivers, groups: [{date, label, names}]} (the alert line and the nav badge).
-export function conflictsOf(offByWeek, smByWeek, today) {
+// reviews (optional): an approved day-off review whose day didn't go on the schedule counts too.
+export function conflictsOf(offByWeek, smByWeek, today, reviews) {
   const { from, to } = rangeOf(today, 'next');
-  const rows = requestRows(offByWeek, smByWeek, { from, to }).filter((r) => r.status.state === 'scheduled');
-  const groups = groupByDay(rows, smByWeek, today).map((g) => ({ date: g.date, label: g.label, names: g.rows.map((r) => r.name) }));
-  return { drivers: new Set(rows.map((r) => fold(r.name))).size, groups };
+  const rows = requestRows(offByWeek, smByWeek, { from, to });
+  const have = new Set(rows.map((r) => `${r.day}|${fold(r.name)}`));
+  for (const r of reviews || []) {
+    if (!r || r.status !== 'approved' || !r.day || r.day < from || r.day > to || have.has(`${r.day}|${fold(r.name)}`)) continue;
+    have.add(`${r.day}|${fold(r.name)}`);
+    rows.push({ name: r.name, day: r.day, status: scheduleStatus((smByWeek || {})[r.week || sundayOf(r.day)], r.name, r.day) });
+  }
+  rows.sort((x, y) => (x.day < y.day ? -1 : x.day > y.day ? 1 : x.name.localeCompare(y.name)));
+  const hit = rows.filter((r) => r.status.state === 'scheduled');
+  const groups = groupByDay(hit, smByWeek, today).map((g) => ({ date: g.date, label: g.label, names: g.rows.map((r) => r.name) }));
+  return { drivers: new Set(hit.map((r) => fold(r.name))).size, groups };
 }
 
 // --- VET / VTO offers (schedule_offers rows as watchScheduleOffers(null) hands them over)
@@ -211,23 +220,86 @@ export function driverMatch(name, driver) {
 const PENDING = new Set(['waiting', 'pending']);   // a counter is a 'pending' take too
 const offerDone = (o, c) => o.status === 'closed' || o.status === 'filled' || (c.offered > 0 && c.taken >= c.offered);
 
-// Every date in [from, to] -> {offs, offers, chips} under the filter {show: 'all'|'off'|'vet'|'vto', driver}.
-// src = {offByWeek, smByWeek, offers: schedule_offers rows, takesById: {offerId: takes | undefined}}.
-//   offs    the days off that date (requestRows rows, with their Live status)
+// --- Day-off reviews (Driver App SPEC-v4, Jose 2026-10-19): a day off the Driver app refused (the day was
+// full, requests closed, the week published) that the driver sent for review. timeoff_reviews rows as
+// jajb.js watchTimeoffReviews hands them over: {id, tid, name, week, day, note, refused: full|closed|published,
+// status: pending|approved|denied|cancelled, at (ms), decidedBy?, decidedAt?, why?, appliedAt?,
+// applyResult? {ok, how: timeoff|live|already|none, text}}. Cancelled ones are never shown.
+
+const REFUSED = { full: 'the day was full', closed: 'requests were closed for that week', published: 'the schedule was already out' };
+export const refusedText = (r) => REFUSED[r && r.refused] || 'the app said no';
+
+// The ones still to answer (from a day on, '' = every day), by day then sent time.
+export function pendingReviews(reviews, from = '') {
+  return (reviews || []).filter((r) => r && r.status === 'pending' && r.day && String(r.day) >= from)
+    .sort((a, b) => String(a.day).localeCompare(String(b.day)) || (Number(a.at) || 0) - (Number(b.at) || 0));
+}
+
+// The alert's second line: {n, groups: [{date, label, names}]} of the reviews waiting, from today on.
+export function reviewsWaiting(reviews, today) {
+  const rows = pendingReviews(reviews, today);
+  const by = new Map();
+  for (const r of rows) { if (!by.has(r.day)) by.set(r.day, []); by.get(r.day).push(r.name); }
+  return { n: rows.length, groups: [...by.entries()].map(([date, names]) => ({ date, label: dayLabel(date), names })) };
+}
+
+// The red line under a day off approved from a review that couldn't go on the schedule ('' = fine / not yet).
+export function applyProblem(r) {
+  const a = r && r.applyResult;
+  if (!a || a.ok !== false) return '';
+  return `Couldn't put it on the schedule: ${String(a.text || '').replace(/[.\s]+$/, '')} — fix it on the Live schedule`;
+}
+
+// A deny reason: one line, required, at most 200 characters -> {why} | {error}
+export function denyReason(text) {
+  const why = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!why) return { error: 'Write the reason — the driver sees it.' };
+  if (why.length > 200) return { error: 'Keep the reason to 200 characters.' };
+  return { why };
+}
+
+// Every date in [from, to] -> {waiting, offs, denied, offers, chips} under the filter
+// {show: 'all'|'off'|'vet'|'vto', driver} ("Days off" includes the reviews; VET / VTO don't).
+// src = {offByWeek, smByWeek, offers: schedule_offers rows, takesById: {offerId: takes | undefined}, reviews}.
+//   waiting the day-off reviews still to answer that date (+ live: their Live status, as for offs)
+//   offs    the days off that date (requestRows rows, with their Live status); an approved review adds
+//           approvedBy / review to the same driver's day off, or is a row of its own (fromReview: the Live
+//           week was marked instead, or not yet — no schedule_timeoff doc, so nothing to remove)
+//   denied  the reviews answered no that date (the "Answered" list)
 //   offers  that date's offers (VET first, then by wave) — with a driver picked, only those they took
 //   chips   what the calendar cell shows, one short line each ({kind, text, title = the long words}), in this
-//           order: still scheduled (red), pending takes (grey), days off (orange), then one per offer:
+//           order: still scheduled (red), waiting (grey: day-off reviews + VET / VTO takes), days off (orange), then one per offer:
 //           VET (green) / VTO (amber) taken/spots, faded once closed or full.
-// Days off have no pending state: the Driver app approves them at once (or refuses and stores nothing).
+// A day off itself has no pending state (the Driver app approves it at once); only a review waits.
 export function dayViews(from, to, src, filter = {}) {
   const show = filter.show || 'all', driver = filter.driver || '';
   const s = src || {};
   const takesOf = (o) => (s.takesById || {})[o.id];
   const out = {};
-  for (let d = from; d <= to; d = shiftISO(d, 1)) out[d] = { offs: [], offers: [], chips: [] };
+  for (let d = from; d <= to; d = shiftISO(d, 1)) out[d] = { waiting: [], offs: [], denied: [], offers: [], chips: [] };
   if (show === 'all' || show === 'off') {
     for (const r of requestRows(s.offByWeek, s.smByWeek, { from, to })) {
       if (out[r.day] && driverMatch(r.name, driver)) out[r.day].offs.push(r);
+    }
+    for (const r of s.reviews || []) {
+      if (!r || !out[r.day] || !driverMatch(r.name, driver)) continue;
+      const v = out[r.day];
+      const week = r.week || sundayOf(r.day);
+      const live = scheduleStatus((s.smByWeek || {})[week], r.name, r.day);
+      if (r.status === 'pending') v.waiting.push({ ...r, live });
+      else if (r.status === 'denied') v.denied.push(r);
+      else if (r.status === 'approved') {
+        const same = v.offs.find((x) => fold(x.name) === fold(r.name));
+        if (same) { same.approvedBy = r.decidedBy || ''; same.review = r; continue; }
+        v.offs.push({ key: `${r.day}|${r.name}|review`, week, name: r.name, day: r.day, note: String(r.note || '').trim(),
+          by: APP_BY, at: r.at || null, src: sourceOf({ by: APP_BY }), status: live,
+          approvedBy: r.decidedBy || '', review: r, fromReview: true });
+      }
+    }
+    const byAt = (a, b) => (Number(a.at) || 0) - (Number(b.at) || 0);
+    for (const v of Object.values(out)) {
+      v.waiting.sort(byAt); v.denied.sort(byAt);
+      v.offs.sort((a, b) => a.name.localeCompare(b.name));
     }
   }
   const kinds = show === 'all' ? ['vet', 'vto'] : show === 'vet' || show === 'vto' ? [show] : [];
@@ -243,17 +315,21 @@ export function dayViews(from, to, src, filter = {}) {
   for (const [date, v] of Object.entries(out)) {
     v.offers = dayOffers(byDate[date] || [], date);
     const conflicts = v.offs.filter((r) => r.status.state === 'scheduled').length;
-    let pending = 0;
+    let takesWaiting = 0;
     for (const o of v.offers) {
       if (o.status === 'closed') continue;
-      for (const t of takesOf(o) || []) if (t && PENDING.has(t.status) && driverMatch(t.name, driver)) pending++;
+      for (const t of takesOf(o) || []) if (t && PENDING.has(t.status) && driverMatch(t.name, driver)) takesWaiting++;
     }
+    const reviewsW = v.waiting.length;
+    const pending = takesWaiting + reviewsW;
+    const waitWords = [reviewsW ? `${reviewsW} day-off review${reviewsW === 1 ? '' : 's'}` : '',
+      takesWaiting ? `${takesWaiting} VET / VTO take${takesWaiting === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
     // one short line each (icon, count, word); title = the long words for the tooltip
     const n = v.offs.length;
     if (conflicts) v.chips.push({ kind: 'conflict', text: `⊘ ${conflicts} sched`,
       title: `${conflicts} driver${conflicts === 1 ? '' : 's'} asked off but ${conflicts === 1 ? 'is' : 'are'} still on the schedule` });
     if (pending) v.chips.push({ kind: 'pending', text: `⏱ ${pending} wait`,
-      title: `${pending} VET / VTO take${pending === 1 ? '' : 's'} waiting for an answer` });
+      title: `${waitWords} waiting for an answer` });
     if (n) v.chips.push({ kind: 'off', text: `✓ ${n} off`, title: `${n} driver${n === 1 ? '' : 's'} asked for the day off` });
     for (const k of ['vet', 'vto']) {
       for (const o of v.offers.filter((x) => (x.kind === 'vto' ? 'vto' : 'vet') === k)) {
