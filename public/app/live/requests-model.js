@@ -359,17 +359,17 @@ export function offCounts(mode, offNames, prefsDoc, activeNames, date, driver = 
   return { mode: m, requested: shownRequested, weekly, also, total: shownRequested.length + weekly.length };
 }
 
-// Both: the sum in words — "Requested 10 + Weekly 16 − 1 counted once = 25" ("Requested 4 + Weekly 9 = 13"
+// Both: the sum in words — "24 people off: 10 requested + 15 weekly − 1 on both lists" ("Requested 4 + Weekly 9 = 13"
 // when nobody is on both lists). Weekly here = everyone their preferences keep off (the Weekly preference mode's
 // number). '' outside Both.
 export function bothLine(c) {
   if (!c || c.mode !== 'both') return '';
   const n = c.requested.length, w = c.weekly.length, a = (c.also || []).length;
-  return a ? `Requested ${n} + Weekly ${w + a} − ${a} counted once = ${c.total}` : `Requested ${n} + Weekly ${w} = ${c.total}`;
+  return a ? `${c.total} people off: ${n} requested + ${w + a} weekly − ${a} on both lists` : `${c.total} people off: ${n} requested + ${w} weekly`;
 }
 
 // The calendar chip for a day's counts, or null (nothing to count). `long` = the full words ("✓ 4 requested",
-// "↻ 9 weekly off", "Σ 13 off: Requested 4 + Weekly 10 − 1 counted once = 13": the screen reader's and the
+// "↻ 9 weekly off", "Σ 13 people off: 4 requested + 10 weekly − 1 on both lists": the screen reader's and the
 // tooltip's); `text` = what fits a day cell (71 px at 1440 wide, measured 2026-10-19: the full words were cut) —
 // "✓ 4 req", "↻ 9 wkly", "Σ 13 off".
 export function offChip(c) {
@@ -381,7 +381,7 @@ export function offChip(c) {
     return { kind: 'weekly', text: `↻ ${w} wkly`, long, title: `${long} — ${w} driver${s(w)} off this weekday every week (Driver preferences)` };
   }
   if (c.mode === 'both') {
-    const long = `Σ ${c.total} off: ${bothLine(c)}`;
+    const long = `Σ ${bothLine(c)}`;
     return { kind: 'both', text: `Σ ${c.total} off`, long, title: long };
   }
   const long = `✓ ${n} requested`;

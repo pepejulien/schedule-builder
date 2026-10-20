@@ -377,13 +377,13 @@ function BlockBox({ date, today, blocked }) {
 
 // "Weekly preference (N)": drivers whose Driver preferences keep them off this weekday going forward, with the
 // rule in words (in Both, without the ones already under Requested). also = (Both) those drivers: listed after,
-// greyed, "(also requested — counted once)", so the panel's sum line adds up on screen.
+// greyed, "(on both lists — counted only once)", so the panel's sum line adds up on screen.
 function WeeklyList({ list, also = [] }) {
   return html`<h3>Weekly preference (${list.length})</h3>
     ${list.length || also.length ? html`<ul class="rq-list">${list.map((u) => html`<li class="rq-row" key=${u.name}>
       <div class="rq-who"><b>${u.name}</b><span class="muted rq-asked">${u.rule}</span></div></li>`)}
       ${also.map((u) => html`<li class="rq-row muted" key=${'also|' + u.name}>
-      <div class="rq-who"><span>${u.name}</span><span class="rq-asked">${u.rule} (also requested — counted once)</span></div></li>`)}</ul>`
+      <div class="rq-who"><span>${u.name}</span><span class="rq-asked">${u.rule} (on both lists — counted only once)</span></div></li>`)}</ul>`
       : html`<p class="muted rq-evnote">Nobody.</p>`}`;
 }
 
@@ -400,7 +400,7 @@ function DayPanel({ date, view, days, today, names, show, blocked, mode }) {
   const showReq = mode !== 'weekly';
   const weekly = view.counts && mode !== 'requested' ? view.counts.weekly : null;
   const also = (view.counts && view.counts.also) || [];
-  // Both: "Requested 10 + Weekly 16 − 1 counted once = 25" above the lists (Jose 2026-10-19)
+  // Both: "24 people off: 10 requested + 15 weekly − 1 on both lists" above the lists (Jose 2026-10-19)
   const sum = view.counts && view.counts.total ? bothLine(view.counts) : '';
   const nothing = !view.waiting.length && !(showReq && view.offs.length) && !view.denied.length && !view.offers.length
     && !(weekly && weekly.length) && !also.length;

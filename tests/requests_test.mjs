@@ -284,11 +284,11 @@ eq('offCounts both: also = on both lists (counted once, as requested); [] in the
   [[['Ana Road', 'never works Tuesdays']], [], []]);
 eq('offCounts: Both total = Requested + Weekly - also', CB.total, CR.total + CW.total - CB.also.length);
 eq('bothLine', [bothLine(CB), bothLine(offCounts('both', ['Jason Leidy'], PREFS, ACTIVE, '2026-10-20')), bothLine(CR), bothLine(CW), bothLine(null)],
-  ['Requested 2 + Weekly 2 − 1 counted once = 3', 'Requested 1 + Weekly 2 = 3', '', '', '']);
+  ['3 people off: 2 requested + 2 weekly − 1 on both lists', '3 people off: 1 requested + 2 weekly', '', '', '']);
 eq('offChip per mode', [offChip(CR), offChip(CW), offChip(CB)], [
   { kind: 'off', text: '✓ 2 req', long: '✓ 2 requested', title: '✓ 2 requested — 2 drivers asked for the day off' },
   { kind: 'weekly', text: '↻ 2 wkly', long: '↻ 2 weekly off', title: '↻ 2 weekly off — 2 drivers off this weekday every week (Driver preferences)' },
-  { kind: 'both', text: 'Σ 3 off', long: 'Σ 3 off: Requested 2 + Weekly 2 − 1 counted once = 3', title: 'Σ 3 off: Requested 2 + Weekly 2 − 1 counted once = 3' }]);
+  { kind: 'both', text: 'Σ 3 off', long: 'Σ 3 people off: 2 requested + 2 weekly − 1 on both lists', title: 'Σ 3 people off: 2 requested + 2 weekly − 1 on both lists' }]);
 eq('offChip: nothing to count', [offChip(offCounts('weekly', [], null, ACTIVE, '2026-10-20')), offChip(null)], [null, null]);
 eq('offCounts weekly: the every-other-weekend rule on its off Saturday', offCounts('weekly', [], PREFS, ACTIVE, '2026-10-24').weekly.map((u) => u.name), ['Wes Weekend']);
 eq('liveWorking: active drivers with a shift (any), marks and blanks out', [liveWorking(LW, ACTIVE, '2026-10-20'), liveWorking(LW, null, '2026-10-20')], [3, 3]);
