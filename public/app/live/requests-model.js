@@ -343,21 +343,35 @@ export function standingUnavailable(prefsDoc, activeNames, date) {
 export const OFF_MODES = ['requested', 'weekly', 'both'];
 export const offMode = (m) => (OFF_MODES.includes(m) ? m : 'requested');
 
-// The day's off counts under a mode -> {mode, requested: [names], weekly: [{name, why, rule}], total}.
+// The day's off counts under a mode -> {mode, requested: [names], weekly: [{name, why, rule}], also, total}.
 // offNames = the day's days-off names (already driver-filtered); weekly is driver-filtered here.
+// Both: `also` = the drivers on BOTH lists (asked off AND their preferences keep them off) — counted once, as
+// requested, so they're left out of `weekly`; the panel lists them greyed so 10 + 16 − 1 = 25 adds up on screen
+// (Jose 2026-10-19). [] in the other modes.
 export function offCounts(mode, offNames, prefsDoc, activeNames, date, driver = '') {
   const m = offMode(mode);
   const seen = new Set();
   const requested = (offNames || []).filter((n) => { const f = fold(n); if (!f || seen.has(f)) return false; seen.add(f); return true; });
   const weeklyAll = m === 'requested' ? [] : standingUnavailable(prefsDoc, activeNames, date).filter((u) => driverMatch(u.name, driver));
   const weekly = m === 'both' ? weeklyAll.filter((u) => !seen.has(fold(u.name))) : weeklyAll;
+  const also = m === 'both' ? weeklyAll.filter((u) => seen.has(fold(u.name))) : [];
   const shownRequested = m === 'weekly' ? [] : requested;
-  return { mode: m, requested: shownRequested, weekly, total: shownRequested.length + weekly.length };
+  return { mode: m, requested: shownRequested, weekly, also, total: shownRequested.length + weekly.length };
+}
+
+// Both: the sum in words — "Requested 10 + Weekly 16 − 1 counted once = 25" ("Requested 4 + Weekly 9 = 13"
+// when nobody is on both lists). Weekly here = everyone their preferences keep off (the Weekly preference mode's
+// number). '' outside Both.
+export function bothLine(c) {
+  if (!c || c.mode !== 'both') return '';
+  const n = c.requested.length, w = c.weekly.length, a = (c.also || []).length;
+  return a ? `Requested ${n} + Weekly ${w + a} − ${a} counted once = ${c.total}` : `Requested ${n} + Weekly ${w} = ${c.total}`;
 }
 
 // The calendar chip for a day's counts, or null (nothing to count). `long` = the full words ("✓ 4 requested",
-// "↻ 9 weekly off", "Σ 13 off (4 req + 9 weekly)": the screen reader's and the tooltip's); `text` = what fits a
-// day cell (71 px at 1440 wide, measured 2026-10-19: the full words were cut) — "✓ 4 req", "↻ 9 wkly", "Σ 13 off".
+// "↻ 9 weekly off", "Σ 13 off: Requested 4 + Weekly 10 − 1 counted once = 13": the screen reader's and the
+// tooltip's); `text` = what fits a day cell (71 px at 1440 wide, measured 2026-10-19: the full words were cut) —
+// "✓ 4 req", "↻ 9 wkly", "Σ 13 off".
 export function offChip(c) {
   if (!c || !c.total) return null;
   const n = c.requested.length, w = c.weekly.length;
@@ -367,8 +381,8 @@ export function offChip(c) {
     return { kind: 'weekly', text: `↻ ${w} wkly`, long, title: `${long} — ${w} driver${s(w)} off this weekday every week (Driver preferences)` };
   }
   if (c.mode === 'both') {
-    const long = `Σ ${c.total} off (${n} req + ${w} weekly)`;
-    return { kind: 'both', text: `Σ ${c.total} off`, long, title: `${long} — each driver once` };
+    const long = `Σ ${c.total} off: ${bothLine(c)}`;
+    return { kind: 'both', text: `Σ ${c.total} off`, long, title: long };
   }
   const long = `✓ ${n} requested`;
   return { kind: 'off', text: `✓ ${n} req`, long, title: `${long} — ${n} driver${s(n)} asked for the day off` };

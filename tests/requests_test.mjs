@@ -5,7 +5,7 @@ import {
   requestRows, weekWord, groupByDay, conflictsOf, offerLists, offerRole, offerLine, takeTone,
   monthOf, shiftMonth, longDate, monthGrid, driverMatch, dayViews,
   refusedText, pendingReviews, reviewsWaiting, applyProblem, denyReason, weekPublished, reviewActions, CALL_OFF_WHY, PUBLISHED_NOTE,
-  BLOCKED_WARN, blockReason, blockedOf, unavailRule, standingUnavailable, OFF_MODES, offMode, offCounts, offChip, liveWorking,
+  BLOCKED_WARN, blockReason, blockedOf, unavailRule, standingUnavailable, OFF_MODES, offMode, offCounts, offChip, bothLine, liveWorking,
 } from '../public/app/live/requests-model.js';
 
 let pass = 0, fail = 0;
@@ -155,7 +155,7 @@ eq('chip titles', V['2026-10-20'].chips.map((c) => c.title), [
 eq('chips Wed (closed VET faded, its take not pending)', V['2026-10-21'].chips.map((c) => [c.kind, c.text, !!c.faded, c.title]), [
   ['off', '✓ 1 req', false, '✓ 1 requested — 1 driver asked for the day off'], ['vet', 'VET 0/1', true, 'VET · backup · any wave · 0 of 1 taken · closed · first come']]);
 eq('chips empty day', V['2026-10-22'], { waiting: [], offs: [], denied: [], offers: [], chips: [], blocked: null,
-  counts: { mode: 'requested', requested: [], weekly: [], total: 0 }, working: 0 });
+  counts: { mode: 'requested', requested: [], weekly: [], also: [], total: 0 }, working: 0 });
 eq('day offers VET first', V['2026-10-20'].offers.map((o) => o.id), ['v1', 't1']);
 eq('day offs', V['2026-10-20'].offs.map((r) => [r.name, r.status.state]), [['Ana Road', 'scheduled'], ['Jason Leidy', 'scheduled']]);
 eq('filter days off only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'off' })['2026-10-20'].chips.map((c) => c.kind), ['conflict', 'off']);
@@ -279,10 +279,16 @@ eq('offCounts requested', [CR.requested, CR.weekly, CR.total], [['Jason Leidy', 
 eq('offCounts weekly: every driver whose prefs keep them off that weekday (active only)', [CW.requested, CW.weekly.map((u) => [u.name, u.rule]), CW.total],
   [[], [['Ana Road', 'never works Tuesdays'], ['Kim Pref', 'never works Tuesdays']], 2]);
 eq('offCounts both: each driver once, requested wins', [CB.requested, CB.weekly.map((u) => u.name), CB.total], [['Jason Leidy', 'Ana Road'], ['Kim Pref'], 3]);
+// Jose 2026-10-19 (Oct 31: Requested 10, Weekly 16, Both 25): the one on both lists is named, and the sum adds up in words
+eq('offCounts both: also = on both lists (counted once, as requested); [] in the other modes', [CB.also.map((u) => [u.name, u.rule]), CR.also, CW.also],
+  [[['Ana Road', 'never works Tuesdays']], [], []]);
+eq('offCounts: Both total = Requested + Weekly - also', CB.total, CR.total + CW.total - CB.also.length);
+eq('bothLine', [bothLine(CB), bothLine(offCounts('both', ['Jason Leidy'], PREFS, ACTIVE, '2026-10-20')), bothLine(CR), bothLine(CW), bothLine(null)],
+  ['Requested 2 + Weekly 2 − 1 counted once = 3', 'Requested 1 + Weekly 2 = 3', '', '', '']);
 eq('offChip per mode', [offChip(CR), offChip(CW), offChip(CB)], [
   { kind: 'off', text: '✓ 2 req', long: '✓ 2 requested', title: '✓ 2 requested — 2 drivers asked for the day off' },
   { kind: 'weekly', text: '↻ 2 wkly', long: '↻ 2 weekly off', title: '↻ 2 weekly off — 2 drivers off this weekday every week (Driver preferences)' },
-  { kind: 'both', text: 'Σ 3 off', long: 'Σ 3 off (2 req + 1 weekly)', title: 'Σ 3 off (2 req + 1 weekly) — each driver once' }]);
+  { kind: 'both', text: 'Σ 3 off', long: 'Σ 3 off: Requested 2 + Weekly 2 − 1 counted once = 3', title: 'Σ 3 off: Requested 2 + Weekly 2 − 1 counted once = 3' }]);
 eq('offChip: nothing to count', [offChip(offCounts('weekly', [], null, ACTIVE, '2026-10-20')), offChip(null)], [null, null]);
 eq('offCounts weekly: the every-other-weekend rule on its off Saturday', offCounts('weekly', [], PREFS, ACTIVE, '2026-10-24').weekly.map((u) => u.name), ['Wes Weekend']);
 eq('liveWorking: active drivers with a shift (any), marks and blanks out', [liveWorking(LW, ACTIVE, '2026-10-20'), liveWorking(LW, null, '2026-10-20')], [3, 3]);

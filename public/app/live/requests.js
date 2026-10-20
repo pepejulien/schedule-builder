@@ -22,7 +22,7 @@ import { useTakes, useTakesMap, OfferForm } from './offers.js';
 import { dayLabel, takeStatus, offerDays } from './offers-model.js';
 import { fold, shiftISO, sundayOf, rangeOf, weeksBetween, askedLabel, conflictsOf, offerRole, offerLine, takeTone,
   monthOf, shiftMonth, longDate, monthGrid, dayViews, refusedText, reviewsWaiting, applyProblem, denyReason,
-  reviewActions, CALL_OFF_WHY, BLOCKED_WARN, BLOCK_REASON_MAX, blockReason, blockedOf, offMode } from './requests-model.js';
+  reviewActions, CALL_OFF_WHY, BLOCKED_WARN, BLOCK_REASON_MAX, blockReason, blockedOf, offMode, bothLine } from './requests-model.js';
 
 // "Off counts:" Requested / Weekly preference / Both (Jose 2026-10-19): remembered per browser (default
 // Requested; storage blocked = Requested)
@@ -376,11 +376,14 @@ function BlockBox({ date, today, blocked }) {
 }
 
 // "Weekly preference (N)": drivers whose Driver preferences keep them off this weekday going forward, with the
-// rule in words (in Both, without the ones already under Requested).
-function WeeklyList({ list }) {
+// rule in words (in Both, without the ones already under Requested). also = (Both) those drivers: listed after,
+// greyed, "(also requested — counted once)", so the panel's sum line adds up on screen.
+function WeeklyList({ list, also = [] }) {
   return html`<h3>Weekly preference (${list.length})</h3>
-    ${list.length ? html`<ul class="rq-list">${list.map((u) => html`<li class="rq-row" key=${u.name}>
-      <div class="rq-who"><b>${u.name}</b><span class="muted rq-asked">${u.rule}</span></div></li>`)}</ul>`
+    ${list.length || also.length ? html`<ul class="rq-list">${list.map((u) => html`<li class="rq-row" key=${u.name}>
+      <div class="rq-who"><b>${u.name}</b><span class="muted rq-asked">${u.rule}</span></div></li>`)}
+      ${also.map((u) => html`<li class="rq-row muted" key=${'also|' + u.name}>
+      <div class="rq-who"><span>${u.name}</span><span class="rq-asked">${u.rule} (also requested — counted once)</span></div></li>`)}</ul>`
       : html`<p class="muted rq-evnote">Nobody.</p>`}`;
 }
 
@@ -396,8 +399,11 @@ function DayPanel({ date, view, days, today, names, show, blocked, mode }) {
   const [showDenied, setShowDenied] = useState(false);
   const showReq = mode !== 'weekly';
   const weekly = view.counts && mode !== 'requested' ? view.counts.weekly : null;
+  const also = (view.counts && view.counts.also) || [];
+  // Both: "Requested 10 + Weekly 16 − 1 counted once = 25" above the lists (Jose 2026-10-19)
+  const sum = view.counts && view.counts.total ? bothLine(view.counts) : '';
   const nothing = !view.waiting.length && !(showReq && view.offs.length) && !view.denied.length && !view.offers.length
-    && !(weekly && weekly.length);
+    && !(weekly && weekly.length) && !also.length;
   return html`<div class="card rq-panel">
     <h2>${longDate(date)}</h2>
     <${BlockBox} date=${date} today=${today} blocked=${view.blocked} />
@@ -411,12 +417,13 @@ function DayPanel({ date, view, days, today, names, show, blocked, mode }) {
       onDone=${() => setPosting(false)} onCancel=${() => setPosting(false)} /></div>` : ''}
     ${!canTimeoff() && show !== 'vet' && show !== 'vto' ? html`<p class="muted">Days off need the JAJB hub's connection — open the Schedule Builder from the hub.</p>` : ''}
     ${view.working != null ? html`<p class="muted rq-evnote">Live schedule: ${view.working} working</p>` : ''}
+    ${sum ? html`<p class="rq-evnote"><b>${sum}</b></p>` : ''}
     ${nothing ? html`<p class="muted" style="margin:0">Nothing asked for this day.</p>` : ''}
     ${view.waiting.length ? html`<h3 class="rq-waith">Waiting for your answer (${view.waiting.length})</h3>
       <ul class="rq-list">${view.waiting.map((r) => html`<${ReviewRow} r=${r} key=${r.id} />`)}</ul>` : ''}
     ${showReq && view.offs.length ? html`<h3>Requested (${view.offs.length})</h3>
       <ul class="rq-list">${view.offs.map((r) => html`<${OffRow} r=${r} label=${label} key=${r.key} />`)}</ul>` : ''}
-    ${weekly ? html`<${WeeklyList} list=${weekly} />` : ''}
+    ${weekly ? html`<${WeeklyList} list=${weekly} also=${also} />` : ''}
     ${view.denied.length ? html`<button class="link rq-answered" aria-expanded=${showDenied} onClick=${() => setShowDenied((x) => !x)}>
       Answered (${view.denied.length}) ${showDenied ? '▾' : '▸'}</button>
       ${showDenied ? html`<ul class="rq-list">${view.denied.map((r) => html`<li class="rq-row" key=${r.id}>
