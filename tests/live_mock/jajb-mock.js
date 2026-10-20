@@ -257,6 +257,23 @@
       put('reviews', all); fire();
       if (decision === 'approved') setTimeout(() => applyReview(id), 400);
     },
+    // blocked days ("blackout", 2026-10-19): schedule_blocked_days/{day} in 'blocked' — same fields as jajb.js
+    watchBlockedDays: (fromISO, toISO, cb) => listen('blocked', () => Object.fromEntries(Object.entries(get('blocked') || {})
+      .filter(([d]) => (!fromISO || d >= fromISO) && (!toISO || d <= toISO))), cb),
+    blockDay: async (day, reason) => {
+      await delay(LAT);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) throw new Error('day must be YYYY-MM-DD');
+      const t = new Date(day + 'T12:00:00'); t.setDate(t.getDate() - t.getDay());
+      const all = get('blocked') || {};
+      all[day] = { day, week: iso(t), reason: String(reason || '').replace(/\s+/g, ' ').trim().slice(0, 120), by: name, at: Date.now() };
+      put('blocked', all); fire();
+    },
+    unblockDay: async (day) => {
+      await delay(LAT);
+      const all = get('blocked') || {};
+      delete all[day];
+      put('blocked', all); fire();
+    },
     // VET / VTO offers (Driver App SPEC-v2 §6, 2026-10-12): schedule_offers/{id} in 'offers', takes in
     // 'offertakes/{id}' — same fields and checks as jajb.js (timestamps as ms). Drivers' takes come from
     // __mock.takeOffer below (the Driver App's server makes them for real).

@@ -325,6 +325,17 @@ export const watchReviews = (fromISO, toISO, cb) => (canReviews()
 // decision 'approved' | 'denied'; why = the reason the driver sees (≤ 200, '' for an approval)
 export const decideReview = (id, decision, why) => window.JAJB.decideTimeoffReview(id, decision, why || '');
 
+// Blocked days ("blackout", Jose 2026-10-19): Firestore schedule_blocked_days/{YYYY-MM-DD} {day, week, reason
+// (≤ 120, managers only), by, at}. The Drivers app refuses day-off requests (and reviews) for them; days off
+// already on file stay. Set / cleared on the Requests page. An older jajb.js has none: canBlocks() is false.
+export const canBlocks = () => onFirebase() && typeof window.JAJB.watchBlockedDays === 'function'
+  && typeof window.JAJB.blockDay === 'function' && typeof window.JAJB.unblockDay === 'function';
+// fromISO / toISO ('YYYY-MM-DD' | null) -> cb({day: {day, week, reason, by, at (ms)}} | null when refused)
+export const watchBlocked = (fromISO, toISO, cb) => (canBlocks()
+  ? window.JAJB.watchBlockedDays(fromISO || null, toISO || null, cb) : (cb({}), () => {}));
+export const blockDay = (dayISO, reason) => window.JAJB.blockDay(dayISO, reason || '');
+export const unblockDay = (dayISO) => window.JAJB.unblockDay(dayISO);
+
 // VET / VTO offers for drivers (Driver App SPEC-v2 §6, 2026-10-12): Firestore schedule_offers/{id}
 // + takes/{tid}, posted and closed from the Live board's VET / VTO strip (live/offers.js). Field names:
 // jajb.js saveScheduleOffer. An older jajb.js has none of these: canOffers() is false and the strip stays hidden.

@@ -5,6 +5,7 @@ import {
   requestRows, weekWord, groupByDay, conflictsOf, offerLists, offerRole, offerLine, takeTone,
   monthOf, shiftMonth, longDate, monthGrid, driverMatch, dayViews,
   refusedText, pendingReviews, reviewsWaiting, applyProblem, denyReason, weekPublished, reviewActions, CALL_OFF_WHY, PUBLISHED_NOTE,
+  BLOCKED_WARN, blockReason, blockedOf, unavailRule, standingUnavailable, everyoneOff, everyoneTitle, workingLine,
 } from '../public/app/live/requests-model.js';
 
 let pass = 0, fail = 0;
@@ -153,7 +154,7 @@ eq('chip titles', V['2026-10-20'].chips.map((c) => c.title), [
   'VET · road · 10:45 AM · 1 of 3 taken · open · first come', 'VTO · day off · 2 of 2 taken · full · first come']);
 eq('chips Wed (closed VET faded, its take not pending)', V['2026-10-21'].chips.map((c) => [c.kind, c.text, !!c.faded, c.title]), [
   ['off', '✓ 1 off', false, '1 driver asked for the day off'], ['vet', 'VET 0/1', true, 'VET · backup · any wave · 0 of 1 taken · closed · first come']]);
-eq('chips empty day', V['2026-10-22'], { waiting: [], offs: [], denied: [], offers: [], chips: [] });
+eq('chips empty day', V['2026-10-22'], { waiting: [], offs: [], denied: [], offers: [], chips: [], blocked: null, everyone: null });
 eq('day offers VET first', V['2026-10-20'].offers.map((o) => o.id), ['v1', 't1']);
 eq('day offs', V['2026-10-20'].offs.map((r) => [r.name, r.status.state]), [['Ana Road', 'scheduled'], ['Jason Leidy', 'scheduled']]);
 eq('filter days off only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'off' })['2026-10-20'].chips.map((c) => c.kind), ['conflict', 'off']);
@@ -230,6 +231,67 @@ eq('conflicts count an approved review still on the schedule', conflictsOf(OFF, 
   drivers: 3, groups: [{ date: '2026-10-20', label: 'Tue Oct 20', names: ['Ana Road', 'Jason Leidy'] },
     { date: '2026-10-23', label: 'Fri Oct 23', names: ['Zoé Ñame'] }] });
 eq('askedLabel ms', [askedLabel(ms(18, 9)), askedLabel(0)], ['asked Sun 9 AM', '']);
+
+// --- blocked days (blackout, Jose 2026-10-19)
+eq('blockReason', [blockReason(''), blockReason('  Thanksgiving \n week '), blockReason('x'.repeat(121)).error ? 'long' : 'ok'],
+  [{ reason: '' }, { reason: 'Thanksgiving week' }, 'long']);
+eq('blockedOf', [blockedOf({ '2026-10-20': { reason: 'x' } }, '2026-10-20'), blockedOf({}, '2026-10-20'), blockedOf(null, 'x')],
+  [{ reason: 'x' }, null, null]);
+ok('BLOCKED_WARN mentions adding by hand', /blocked/.test(BLOCKED_WARN) && /by hand/.test(BLOCKED_WARN));
+const BLK = { '2026-10-20': { day: '2026-10-20', week: '2026-10-18', reason: 'Peak week', by: 'Jose', at: 1 } };
+const WB = dayViews('2026-10-20', '2026-10-21', { ...SRC3, blocked: BLK });
+eq('blocked chip first, with the reason in the title', WB['2026-10-20'].chips[0],
+  { kind: 'blocked', text: '⛔ Blocked', title: "Blocked — no day-off requests from the drivers' app (Peak week)" });
+eq('blocked entry on the view; other days none', [WB['2026-10-20'].blocked.reason, WB['2026-10-21'].blocked], ['Peak week', null]);
+eq('blocked chip whatever the filter', dayViews('2026-10-20', '2026-10-20', { blocked: BLK }, { show: 'vet' })['2026-10-20'].chips.map((c) => c.kind), ['blocked']);
+eq('blocked without a reason', dayViews('2026-10-20', '2026-10-20', { blocked: { '2026-10-20': { reason: '' } } })['2026-10-20'].chips[0].title,
+  "Blocked — no day-off requests from the drivers' app");
+
+// --- everyone off a day ("Show everyone's unavailable days", Jose 2026-10-19)
+eq('unavailRule', [unavailRule({ days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] }, 'days'), unavailRule({ days: ['Thu', 'Fri', 'Sat', 'Sun'] }, 'days'),
+  unavailRule({ days: ['Mon', 'Wed', 'Fri'] }, 'days'), unavailRule({ days: ['Sat'] }, 'days'), unavailRule({ weekends: { mode: 'alternate', on: '2026-10-24' } }, 'weekend')],
+  ['never works Sundays', 'not available Mon–Wed', 'not available Sun, Tue, Thu, Sat', 'only works Saturdays', 'every other weekend — this one is off']);
+const NO_TUE = ['Sun', 'Mon', 'Wed', 'Thu', 'Fri', 'Sat'];
+const PREFS = { v: 1, drivers: {
+  'Kim Pref': { days: NO_TUE }, 'Ana Road': { days: NO_TUE }, 'Gone Person': { days: NO_TUE },
+  'Wes Weekend': { weekends: { mode: 'alternate', on: '2026-10-17' } },      // ON Oct 17 -> OFF Oct 24/25
+  'Max Days': { maxDays: 4 },                                                 // no day rule: never listed
+} };
+const ACTIVE = ['Jason Leidy', 'Ana Road', 'Kim Pref', 'Lee Live', 'Pat Work', 'Mo Mark', 'Nina New', 'Wes Weekend', 'Max Days'];
+eq('standingUnavailable: active roster only, by name', standingUnavailable(PREFS, ACTIVE, '2026-10-20').map((u) => [u.name, u.why, u.rule]),
+  [['Ana Road', 'days', 'never works Tuesdays'], ['Kim Pref', 'days', 'never works Tuesdays']]);
+eq('standingUnavailable: no roster = everyone in the prefs', standingUnavailable(PREFS, null, '2026-10-20').map((u) => u.name), ['Ana Road', 'Gone Person', 'Kim Pref']);
+eq('standingUnavailable: the weekend rule', standingUnavailable(PREFS, ACTIVE, '2026-10-24').map((u) => [u.name, u.rule]),
+  [['Wes Weekend', 'every other weekend — this one is off']]);
+const LW = { ...week('2026-10-18', {
+  'Jason Leidy': { Tue: '10:45 AM' }, 'Ana Road': { Tue: '' }, 'Kim Pref': { Tue: 'Unavailable' }, 'Lee Live': { Tue: '' },
+  'Pat Work': { Tue: '10:45 AM' }, 'Mo Mark': { Tue: '10:45 AM' }, 'Wes Weekend': { Tue: 'Dispatch' }, 'Max Days': { Tue: 'Day off' },
+  'Left Driver': { Tue: '' },
+}, ['Sat']), marks: [{ name: 'Mo Mark', day: 'Tue', kind: 'off' }] };
+const E = everyoneOff(['Jason Leidy', 'Ana Road'], LW, PREFS, ACTIVE, '2026-10-20');
+eq('everyoneOff: each driver once — asked > preference > Live', [E.asked, E.standing.map((u) => u.name), E.live],
+  [['Jason Leidy', 'Ana Road'], ['Kim Pref'],
+    [{ name: 'Lee Live', what: 'not scheduled' }, { name: 'Max Days', what: 'Day off' }, { name: 'Mo Mark', what: 'Day off' },
+      { name: 'Nina New', what: 'not on this week' }]]);
+eq('everyoneOff: working + totals (an inactive driver on the week is not counted)', [E.liveState, E.working, E.total], ['published', 3, 7]);
+eq('everyoneTitle', everyoneTitle(E), '7 drivers off: 2 asked off, 1 standing preferences, 4 off on the Live schedule');
+eq('workingLine', workingLine(E), 'Working: 3 · Off: 7');
+const EU = everyoneOff(['Jason Leidy'], null, PREFS, ACTIVE, '2026-10-27');
+eq('everyoneOff: week not published', [EU.liveState, EU.working, EU.live, EU.total, everyoneTitle(EU), workingLine(EU)],
+  ['unbuilt', null, [], 3, '3 drivers off: 1 asked off, 2 standing preferences, week not published yet', 'Off: 3']);
+eq('everyoneOff: loading', everyoneOff([], undefined, PREFS, ACTIVE, '2026-10-20').liveState, 'loading');
+const EC = everyoneOff([], LW, {}, ['Pat Work', 'Lee Live'], '2026-10-24');
+eq('everyoneOff: no routes that day', [EC.liveState, EC.working, EC.live], ['closed', 0,
+  [{ name: 'Lee Live', what: 'no routes this day' }, { name: 'Pat Work', what: 'no routes this day' }]]);
+eq('everyoneOff: driver filter', [everyoneOff(['Jason Leidy'], LW, PREFS, ACTIVE, '2026-10-20', 'lee').live.map((x) => x.name),
+  everyoneOff(['Jason Leidy'], LW, PREFS, ACTIVE, '2026-10-20', 'lee').total], [['Lee Live'], 1]);
+const SRC5 = { offByWeek: OFF, smByWeek: { '2026-10-18': LW }, prefs: PREFS, activeNames: ACTIVE };
+const W5 = dayViews('2026-10-20', '2026-10-20', SRC5, { unavail: true });
+eq('dayViews unavail: the combined chip after days off', W5['2026-10-20'].chips.map((c) => c.text), ['⊘ 1 sched', '✓ 2 off', '7 off in all']);
+eq('dayViews unavail: the chip title', W5['2026-10-20'].chips[2].title, '7 drivers off: 2 asked off, 1 standing preferences, 4 off on the Live schedule');
+eq('dayViews without the box: no everyone, no chip', [dayViews('2026-10-20', '2026-10-20', SRC5)['2026-10-20'].everyone,
+  dayViews('2026-10-20', '2026-10-20', SRC5)['2026-10-20'].chips.map((c) => c.kind)], [null, ['conflict', 'off']]);
+eq('dayViews unavail + driver filter', dayViews('2026-10-20', '2026-10-20', SRC5, { unavail: true, driver: 'kim' })['2026-10-20'].everyone.standing.map((u) => u.name), ['Kim Pref']);
 
 console.log(`requests_test: ${pass} passed, ${fail} failed`);
 if (fail) { for (const f of fails) console.log('  FAIL ' + f); process.exit(1); }
