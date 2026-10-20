@@ -20,7 +20,8 @@ import { toISODate } from '../lib/weeks.js';
 import { useTakes, useTakesMap, OfferForm } from './offers.js';
 import { dayLabel, takeStatus, offerDays } from './offers-model.js';
 import { fold, shiftISO, sundayOf, rangeOf, weeksBetween, askedLabel, conflictsOf, offerRole, offerLine, takeTone,
-  monthOf, shiftMonth, longDate, monthGrid, dayViews, refusedText, reviewsWaiting, applyProblem, denyReason } from './requests-model.js';
+  monthOf, shiftMonth, longDate, monthGrid, dayViews, refusedText, reviewsWaiting, applyProblem, denyReason,
+  reviewActions, CALL_OFF_WHY } from './requests-model.js';
 
 const AHEAD = 12;   // weeks past this one a day off can be added for, as on Driver preferences
 const todayNow = () => toISODate(new Date());
@@ -193,18 +194,21 @@ function OffRow({ r, label }) {
 }
 
 // A day-off review waiting: who, why the app said no, their note, when; scheduled that day? Approve / Deny…
-// (a reason, required — the driver sees it).
+// (a reason, required — the driver sees it). Its week already published (Jose 2026-10-19): no Approve — the note
+// "Week already published — it's a call-off now" and only "Close it" (= deny with the call-off reason).
 function ReviewRow({ r }) {
   const [busy, setBusy] = useState(false);
   const [denying, setDenying] = useState(false);
   const [why, setWhy] = useState('');
   const [err, setErr] = useState('');
   const asked = askedLabel(r.at);
-  const decide = async (decision, reason) => {
+  const can = reviewActions(r);
+  const decide = async (decision, reason, closing = false) => {
     setBusy(true); setErr('');
     try {
       await decideReview(r.id, decision, reason);
-      toast(decision === 'approved' ? `Approved — ${r.name}'s day off goes on the schedule in a moment.` : 'Denied — the driver sees your reason.');
+      toast(closing ? 'Closed — the driver is told to call off instead.'
+        : decision === 'approved' ? `Approved — ${r.name}'s day off goes on the schedule in a moment.` : 'Denied — the driver sees your reason.');
     } catch (e) {
       setErr(`Couldn't save the answer: ${e.message || e}`);
       setBusy(false);
@@ -224,7 +228,8 @@ function ReviewRow({ r }) {
       ${r.note ? html`<span class="muted rq-note">“${r.note}”</span>` : ''}
       ${asked ? html`<span class="muted rq-asked">${asked}</span>` : ''}
       ${r.live && r.live.state === 'scheduled' ? html`<span class="muted rq-asked">scheduled ${r.live.what}</span>` : ''}
-      ${denying ? html`<form class="rq-deny" onSubmit=${deny}>
+      ${can.note ? html`<div class="rq-bad">${can.note}</div>` : ''}
+      ${denying && can.deny ? html`<form class="rq-deny" onSubmit=${deny}>
         <input type="text" maxLength="200" value=${why} disabled=${busy} placeholder="Reason" aria-label="Reason for the driver"
           onInput=${(e) => { setWhy(e.target.value); setErr(''); }} />
         <div class="hint">The driver sees this reason — don't name anyone.</div>
@@ -233,9 +238,11 @@ function ReviewRow({ r }) {
       </form>` : ''}
       ${err ? html`<div class="rq-bad" role="alert">${err}</div>` : ''}
     </div>
-    ${denying ? '' : html`<div class="row rq-revbtns">
-      <button class="primary small" disabled=${busy} onClick=${() => decide('approved', '')}>Approve</button>
-      <button class="small" disabled=${busy} onClick=${() => setDenying(true)}>Deny…</button>
+    ${denying && can.deny ? '' : html`<div class="row rq-revbtns">
+      ${can.approve ? html`<button class="primary small" disabled=${busy} onClick=${() => decide('approved', '')}>Approve</button>` : ''}
+      ${can.deny ? html`<button class="small" disabled=${busy} onClick=${() => setDenying(true)}>Deny…</button>` : ''}
+      ${can.close ? html`<button class="small" disabled=${busy} title="Deny it: the driver reads that the schedule is out and to call off"
+        onClick=${() => decide('denied', CALL_OFF_WHY, true)}>Close it</button>` : ''}
     </div>`}
   </li>`;
 }

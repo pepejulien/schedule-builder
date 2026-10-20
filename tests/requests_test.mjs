@@ -4,7 +4,7 @@ import {
   APP_BY, fold, shiftISO, sundayOf, rangeOf, weeksBetween, sourceOf, askedLabel, shiftWords, scheduleStatus,
   requestRows, weekWord, groupByDay, conflictsOf, offerLists, offerRole, offerLine, takeTone,
   monthOf, shiftMonth, longDate, monthGrid, driverMatch, dayViews,
-  refusedText, pendingReviews, reviewsWaiting, applyProblem, denyReason,
+  refusedText, pendingReviews, reviewsWaiting, applyProblem, denyReason, weekPublished, reviewActions, CALL_OFF_WHY, PUBLISHED_NOTE,
 } from '../public/app/live/requests-model.js';
 
 let pass = 0, fail = 0;
@@ -170,7 +170,7 @@ eq('takes not read yet: counts from the offer, no pending', dayViews('2026-10-20
 const ms = (d, h) => new Date(2026, 9, d, h, 0).getTime();
 const RV = [
   { id: 'A_2026-10-20', name: 'Kathy Deaton', week: '2026-10-18', day: '2026-10-20', note: 'funeral', refused: 'full', status: 'pending', at: ms(18, 9) },
-  { id: 'B_2026-10-20', name: 'Jason Leidy', week: '2026-10-18', day: '2026-10-20', note: '', refused: 'published', status: 'pending', at: ms(18, 8) },
+  { id: 'B_2026-10-20', name: 'Jason Leidy', week: '2026-10-18', day: '2026-10-20', note: '', refused: 'closed', status: 'pending', at: ms(18, 8) },
   { id: 'C_2026-10-21', name: 'Ana Road', week: '2026-10-18', day: '2026-10-21', refused: 'closed', status: 'approved', decidedBy: 'Jose A Julien', at: ms(17, 8),
     applyResult: { ok: false, how: 'live', text: 'Wed is a training-pair day (10:45 AM TRAIN helper): only a rebuild of the week changes it. Change it by hand.' } },
   { id: 'D_2026-10-20', name: 'Ben Backup', week: '2026-10-18', day: '2026-10-20', refused: 'full', status: 'denied', why: 'Short on drivers', decidedBy: 'Maria Lopez', at: ms(16, 8) },
@@ -180,7 +180,7 @@ const RV = [
   { id: 'G_2026-10-12', name: 'Old One', week: '2026-10-11', day: '2026-10-12', refused: 'full', status: 'pending', at: ms(10, 9) },
 ];
 eq('refusedText', ['full', 'closed', 'published', 'x'].map((k) => refusedText({ refused: k })),
-  ['the day was full', 'requests were closed for that week', 'the schedule was already out', 'the app said no']);
+  ['the day was full', 'requests were closed for that week', 'the app said no', 'the app said no']);
 eq('pendingReviews from today', pendingReviews(RV, T).map((r) => r.id), ['B_2026-10-20', 'A_2026-10-20']);
 eq('pendingReviews all', pendingReviews(RV).length, 3);
 eq('reviewsWaiting', reviewsWaiting(RV, T), { n: 2, groups: [{ date: '2026-10-20', label: 'Tue Oct 20', names: ['Jason Leidy', 'Kathy Deaton'] }] });
@@ -203,6 +203,20 @@ eq('approved review, no timeoff doc: its own row', W['2026-10-21'].offs.map((r) 
 ok('approved review, apply failed: its problem', applyProblem(W['2026-10-21'].offs[0].review).startsWith("Couldn't put it on the schedule"));
 eq('approved review joins its timeoff doc', W['2026-10-27'].offs.map((r) => [r.name, r.approvedBy, !!r.fromReview, r.key]),
   [['Gus Fewer', 'Jose A Julien', false, '2026-10-27|Gus Fewer']]);
+// week already published (Jose 2026-10-19): a waiting review there offers only Close it (= deny, call-off words)
+eq('waiting Tue: week 10-18 is published', W['2026-10-20'].waiting.map((r) => [r.name, r.published]), [['Jason Leidy', true], ['Kathy Deaton', true]]);
+const RV4 = [{ id: 'H_2026-10-27', name: 'Hal Open', week: '2026-10-25', day: '2026-10-27', refused: 'full', status: 'pending', at: ms(19, 9) },
+  { id: 'I_2026-10-20', name: 'Ida Pub', week: '2026-10-18', day: '2026-10-20', refused: 'closed', status: 'pending', at: ms(19, 9) }];
+const W4 = dayViews('2026-10-20', '2026-10-27', { smByWeek: { '2026-10-18': SMW['2026-10-18'], '2026-10-25': null }, reviews: RV4 });
+eq('not published week: Approve / Deny', [W4['2026-10-27'].waiting[0].published, reviewActions(W4['2026-10-27'].waiting[0])],
+  [false, { approve: true, deny: true, close: false, note: '' }]);
+eq('published week: only Close it + the note', [W4['2026-10-20'].waiting[0].published, reviewActions(W4['2026-10-20'].waiting[0])],
+  [true, { approve: false, deny: false, close: true, note: "Week already published — it's a call-off now" }]);
+eq('summary still loading: not known yet -> not published', dayViews('2026-10-20', '2026-10-20', { reviews: RV4 })['2026-10-20'].waiting[0].published, false);
+eq('weekPublished', [weekPublished({ a: { drivers: [] } }, 'a'), weekPublished({ a: null }, 'a'), weekPublished({}, 'a'), weekPublished(null, 'a')], [true, false, false, false]);
+eq('CALL_OFF_WHY = the hub server words', CALL_OFF_WHY, "The schedule for that week is already out. To miss a day you're scheduled, call off.");
+ok('CALL_OFF_WHY passes denyReason as is', denyReason(CALL_OFF_WHY).why === CALL_OFF_WHY);
+eq('PUBLISHED_NOTE', PUBLISHED_NOTE, "Week already published — it's a call-off now");
 eq('reviews only: one wait chip', dayViews('2026-10-20', '2026-10-20', { reviews: RV })['2026-10-20'].chips,
   [{ kind: 'pending', text: '⏱ 2 wait', title: '2 day-off reviews waiting for an answer' }]);
 eq('filter Days off keeps reviews', dayViews('2026-10-20', '2026-10-20', SRC3, { show: 'off' })['2026-10-20'].waiting.length, 2);

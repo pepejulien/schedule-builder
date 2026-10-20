@@ -221,13 +221,34 @@ const PENDING = new Set(['waiting', 'pending']);   // a counter is a 'pending' t
 const offerDone = (o, c) => o.status === 'closed' || o.status === 'filled' || (c.offered > 0 && c.taken >= c.offered);
 
 // --- Day-off reviews (Driver App SPEC-v4, Jose 2026-10-19): a day off the Driver app refused (the day was
-// full, requests closed, the week published) that the driver sent for review. timeoff_reviews rows as
-// jajb.js watchTimeoffReviews hands them over: {id, tid, name, week, day, note, refused: full|closed|published,
+// full, or requests closed) that the driver sent for review. timeoff_reviews rows as jajb.js
+// watchTimeoffReviews hands them over: {id, tid, name, week, day, note, refused: full|closed,
 // status: pending|approved|denied|cancelled, at (ms), decidedBy?, decidedAt?, why?, appliedAt?,
-// applyResult? {ok, how: timeoff|live|already|none, text}}. Cancelled ones are never shown.
+// applyResult? {ok, how: timeoff|none, text}}. Cancelled ones are never shown.
+// Once the review's WEEK IS PUBLISHED it can't be approved (Jose 2026-10-19: missing a day then is a call-off):
+// the rules refuse it, the server closes pending ones on publish; the page offers only "Close it" (= deny with
+// CALL_OFF_WHY, the same words the server uses).
 
-const REFUSED = { full: 'the day was full', closed: 'requests were closed for that week', published: 'the schedule was already out' };
+const REFUSED = { full: 'the day was full', closed: 'requests were closed for that week' };
 export const refusedText = (r) => REFUSED[r && r.refused] || 'the app said no';
+
+// what the driver reads when a review is closed because its week is published (= hub schedule_reviews.BLOCK_WHY)
+export const CALL_OFF_WHY = "The schedule for that week is already out. To miss a day you're scheduled, call off.";
+export const PUBLISHED_NOTE = "Week already published — it's a call-off now";
+
+// Is this week on the Live schedule? smByWeek[week]: summary (yes) | null (not published) | undefined (loading:
+// treated as not known yet -> false; the rules still refuse an approval of a published week).
+export const weekPublished = (smByWeek, week) => {
+  const s = (smByWeek || {})[week];
+  return !!s && typeof s === 'object';
+};
+
+// What a waiting review offers: {approve, deny, close, note}. Week published -> only "Close it" (deny with
+// CALL_OFF_WHY) and the note; else Approve / Deny… (a reason the manager writes).
+export function reviewActions(r) {
+  if (r && r.published) return { approve: false, deny: false, close: true, note: PUBLISHED_NOTE };
+  return { approve: true, deny: true, close: false, note: '' };
+}
 
 // The ones still to answer (from a day on, '' = every day), by day then sent time.
 export function pendingReviews(reviews, from = '') {
@@ -261,7 +282,8 @@ export function denyReason(text) {
 // Every date in [from, to] -> {waiting, offs, denied, offers, chips} under the filter
 // {show: 'all'|'off'|'vet'|'vto', driver} ("Days off" includes the reviews; VET / VTO don't).
 // src = {offByWeek, smByWeek, offers: schedule_offers rows, takesById: {offerId: takes | undefined}, reviews}.
-//   waiting the day-off reviews still to answer that date (+ live: their Live status, as for offs)
+//   waiting the day-off reviews still to answer that date (+ live: their Live status, as for offs; published:
+//           their week is on the Live schedule -> only "Close it", see reviewActions)
 //   offs    the days off that date (requestRows rows, with their Live status); an approved review adds
 //           approvedBy / review to the same driver's day off, or is a row of its own (fromReview: the Live
 //           week was marked instead, or not yet — no schedule_timeoff doc, so nothing to remove)
@@ -286,7 +308,7 @@ export function dayViews(from, to, src, filter = {}) {
       const v = out[r.day];
       const week = r.week || sundayOf(r.day);
       const live = scheduleStatus((s.smByWeek || {})[week], r.name, r.day);
-      if (r.status === 'pending') v.waiting.push({ ...r, live });
+      if (r.status === 'pending') v.waiting.push({ ...r, live, published: weekPublished(s.smByWeek, week) });
       else if (r.status === 'denied') v.denied.push(r);
       else if (r.status === 'approved') {
         const same = v.offs.find((x) => fold(x.name) === fold(r.name));
