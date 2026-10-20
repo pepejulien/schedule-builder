@@ -317,6 +317,37 @@
       Object.assign(all[id], { status: 'closed', closedBy: name, closedAt: Date.now() });
       put('offers', all); fire();
     },
+    // edit / delete / recipient preview (2026-10-20) — same checks as jajb.js + firestore.rules
+    editScheduleOffer: async (id, f) => {
+      await delay(LAT);
+      f = f || {};
+      const all = get('offers') || {}, o = all[id];
+      const fail = (code, m) => Object.assign(new Error(m), { code });
+      if (!o) throw fail('offer/gone', 'That offer is gone.');
+      if (o.status === 'closed') throw fail('offer/closed', 'That offer was cancelled.');
+      const slots = Number(f.slots);
+      if (!Number.isInteger(slots) || slots < 1 || slots > 50) throw new Error('spots must be 1 to 50');
+      if (slots < (o.taken || 0)) throw fail('offer/below-taken', `Spots can't be below the ${o.taken} already taken.`);
+      const tiers = (x) => (Array.isArray(x) ? x : []).map(String).filter(Boolean).slice(0, 10);
+      const a = f.audience || {};
+      Object.assign(o, { slots, audience: { tiers: tiers(a.tiers), maxWeekHours: a.maxWeekHours == null ? null : Number(a.maxWeekHours) },
+        note: String(f.note || '').trim().slice(0, 300), status: slots > (o.taken || 0) ? 'open' : 'filled', editedBy: name, editedAt: Date.now() });
+      put('offers', all); fire();
+    },
+    deleteScheduleOffer: async (id) => {
+      await delay(LAT);
+      const all = get('offers') || {}, o = all[id];
+      if (!o || o.status !== 'closed' || (o.taken || 0) > 0) throw Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+      delete all[id]; put('offers', all); fire();
+    },
+    // ?preview=err makes it fail; otherwise made-up counts from the audience
+    offerPreview: async (f) => {
+      await delay(LAT + 300);
+      if (/[?&]preview=err/.test(location.search)) throw new Error('internal');
+      const a = (f && f.audience) || {};
+      const eligible = Math.max(0, 22 - 4 * (a.tiers || []).length - (a.maxWeekHours != null ? 5 : 0) - (f.kind === 'vto' ? 6 : 0));
+      return { eligible, withApp: Math.min(eligible, 4), withPush: Math.min(eligible, 1), reasons: {} };
+    },
     decideCounter: async (id, tid, yes) => {
       await delay(LAT);
       const tk = get('offertakes/' + id) || {};

@@ -347,6 +347,17 @@ export const watchOfferTakes = (offerId, cb) => (onFirebase() && typeof window.J
   ? window.JAJB.watchOfferTakes(offerId, cb) : (cb([]), () => {}));
 export const saveOffer = (fields) => window.JAJB.saveScheduleOffer(fields);
 export const closeOffer = (id) => window.JAJB.closeScheduleOffer(id);
+// Edit / Delete (Jose 2026-10-20, run from the Requests tab too): an offer not cancelled -> {slots, audience,
+// note} (rejects with code offer/below-taken | offer/closed | offer/gone, or permission-denied when a driver
+// took a spot meanwhile); a cancelled one nobody took -> deleted. An older jajb.js: canEditOffers() false, no buttons.
+export const canEditOffers = () => canOffers() && typeof window.JAJB.editScheduleOffer === 'function'
+  && typeof window.JAJB.deleteScheduleOffer === 'function';
+export const editOffer = (id, fields) => window.JAJB.editScheduleOffer(id, fields);
+export const deleteOffer = (id) => window.JAJB.deleteScheduleOffer(id);
+// "N drivers can see this · N use the app · N get a phone alert" before Post / Save (Driver App drv_offer_preview,
+// SPEC-v2 §6.5): fields as saveOffer takes -> {eligible, withApp, withPush, reasons}. An older jajb.js: no line.
+export const canPreviewOffer = () => onFirebase() && typeof window.JAJB.offerPreview === 'function';
+export const previewOffer = (fields) => window.JAJB.offerPreview(fields);
 // a VET counter ("I'd rather do a backup"): yes = approved in the other role, no = declined
 export const canDecideCounter = () => onFirebase() && typeof window.JAJB.decideCounter === 'function';
 export const decideCounter = (offerId, tid, yes) => window.JAJB.decideCounter(offerId, tid, yes);

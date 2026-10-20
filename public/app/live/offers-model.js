@@ -5,8 +5,9 @@
 // schedule_offers/{id} as jajb.js watchScheduleOffers hands it over: {id, v, kind: vet|vto, week, date,
 // day, role (vet: road|backup), wave ('10:45 AM' | '' = any), slots, status: open|filled|closed, taken,
 // audience: {tiers, maxWeekHours}, mode: fcfs|window, windowHours, decideAt (ms), priority, note, by,
-// at (ms)}. takes/{tid}: {tid, name, at (ms), role, counter, status: approved|waiting|pending|applied|
-// refused|declined, why?, decidedBy?}.
+// at (ms), closedBy?, closedAt?, editedBy?, editedAt? (ms)}. status closed = cancelled ("Cancel offer",
+// Jose 2026-10-20). takes/{tid}: {tid, name, at (ms), role, counter, status: approved|waiting|pending|applied|
+// refused|declined|removed, why?, decidedBy?, reason? (removed: deleted|moved|back)}.
 
 // the driver tiers as the Driver App names them (SPEC-v2 §9)
 export const TIERS = ['Top performer', 'Solid', 'Fair', 'Underperforming', 'Termination review'];
@@ -104,7 +105,7 @@ export function offerWhat(o) {
   return o.wave ? `${o.wave} ${role}` : `${role}, any wave`;
 }
 
-// The Close confirmation's words: "VET · Sat Oct 17 · 10:45 AM route · 1 of 3 taken"
+// The Cancel / Delete confirmations' words: "VET · Sat Oct 17 · 10:45 AM route · 1 of 3 taken"
 export function offerLabel(o) {
   return `${o.kind === 'vto' ? 'VTO' : 'VET'} · ${dayLabel(o.date)} · ${offerWhat(o)} · ${Number(o.taken) || 0} of ${Number(o.slots) || 0} taken`;
 }
@@ -115,6 +116,8 @@ const WHY = {
   not_on_schedule: 'not on the schedule', no_shift: 'no shift that day', changed: 'the schedule changed',
 };
 export const whyText = (why) => (why ? (WHY[why] || String(why)) : '');
+
+const REMOVED = { deleted: 'Removed (shift deleted)', moved: 'Removed (moved)', back: 'Removed (back on schedule)' };
 
 // The role a VET counter asks for: the take's own role when it differs, else the other one.
 const counterRole = (t, o) => (t.role && t.role !== o.role ? t.role : (o.role === 'backup' ? 'road' : 'backup'));
@@ -129,6 +132,8 @@ export function takeStatus(t, o) {
     case 'waiting': return { text: o.decideAt ? `Waiting until ${timeLabel(o.decideAt)}` : 'Waiting', ask: false };
     case 'refused': { const w = whyText(t.why); return { text: w ? `Couldn't add — ${w}` : "Couldn't add", ask: false }; }
     case 'declined': return { text: 'Declined', ask: false };
+    // a manager took the shift off the Live board again: the Driver App undid the take (2026-10-20)
+    case 'removed': return { text: REMOVED[t.reason] || 'Removed', ask: false };
     case 'pending':
       if (t.counter) return { text: counterRole(t, o) === 'backup' ? 'Asked for backup instead' : 'Asked for a route instead', ask: true };
       return { text: 'Pending', ask: false };
@@ -146,12 +151,106 @@ export function dayOffers(rows, date) {
 }
 
 // Every offer from today on (only those dates when dates is a list), by day, earliest first:
-// [{date, label: 'Tue Oct 13', offers (as dayOffers sorts them)}]
-export function upcomingGroups(rows, today, dates) {
+// [{date, label: 'Tue Oct 13', offers (as dayOffers sorts them)}]. Cancelled offers are left out unless
+// withCancelled (Jose 2026-10-20: no clutter — "Show cancelled (N)" brings them back).
+export function upcomingGroups(rows, today, dates, withCancelled = false) {
   const pick = Array.isArray(dates) && dates.length ? new Set(dates) : null;
-  const ds = [...new Set((rows || []).filter((o) => o && String(o.date || '') >= today && (!pick || pick.has(o.date)))
-    .map((o) => o.date))].sort();
-  return ds.map((date) => ({ date, label: dayLabel(date), offers: dayOffers(rows, date) }));
+  const keep = (rows || []).filter((o) => o && String(o.date || '') >= today && (!pick || pick.has(o.date))
+    && (withCancelled || !isCancelled(o)));
+  const ds = [...new Set(keep.map((o) => o.date))].sort();
+  return ds.map((date) => ({ date, label: dayLabel(date), offers: dayOffers(keep, date) }));
+}
+
+// --- Cancel / edit / delete (Jose 2026-10-20: run offers from the Requests tab too)
+
+// status closed = cancelled
+export const isCancelled = (o) => !!o && o.status === 'closed';
+// offers -> {live (not cancelled), cancelled}, order kept
+export function splitCancelled(offers) {
+  const live = [], cancelled = [];
+  for (const o of offers || []) if (o) (isCancelled(o) ? cancelled : live).push(o);
+  return { live, cancelled };
+}
+// "Show cancelled (2)" / "Hide cancelled (2)"
+export const cancelledToggle = (n, shown) => `${shown ? 'Hide' : 'Show'} cancelled (${n})`;
+
+// takes still alive on an offer: approved / on the board / waiting / a counter to answer
+const LIVE_TAKES = new Set(['approved', 'applied', 'waiting', 'pending']);
+// Delete is offered on a cancelled offer nobody took: taken 0 (what the rules check) and no take approved / on
+// the board / waiting / pending (a manager-approved counter uses no slot, so only the takes show it).
+// takes undefined (not read yet) / null (refused): not yet.
+export function canDelete(o, takes) {
+  return isCancelled(o) && (Number(o.taken) || 0) === 0 && Array.isArray(takes) && !takes.some((t) => t && LIVE_TAKES.has(t.status));
+}
+// Why a cancelled offer can't be deleted ('' when it can, or while its takes aren't read yet)
+export function deleteBlocked(o, takes) {
+  if (!isCancelled(o) || canDelete(o, takes)) return '';
+  if (!Array.isArray(takes) && !(Number(o.taken) > 0)) return '';
+  return 'Kept: a driver took this shift — it stays as the record.';
+}
+
+// "Cancel this offer (VET · …)? Drivers won't be able to take it any more." + when takes are on the board:
+// "N driver(s) already have this shift on the schedule. Cancelling doesn't take it off; remove it on the Live board."
+export function cancelConfirm(o, takes) {
+  const n = Array.isArray(takes) ? takes.filter((t) => t && (t.status === 'approved' || t.status === 'applied')).length
+    : Number(o.taken) || 0;
+  const base = `Cancel this offer (${offerLabel(o)})? Drivers won't be able to take it any more.`;
+  return n ? `${base}\n\n${n} driver${n === 1 ? '' : 's'} already ${n === 1 ? 'has' : 'have'} this shift on the schedule. `
+    + "Cancelling doesn't take it off; remove it on the Live board." : base;
+}
+export const deleteConfirm = (o) => `Delete this cancelled offer (${offerLabel(o)})? It's gone for good.`;
+
+// "Posted by Ann · Tue 6 PM · edited by Bo · Wed 9 AM" (+ " · cancelled by Cy · Wed 10 AM")
+export function postedLine(o) {
+  const who = (by, at) => `${by || '—'}${at ? ' · ' + timeLabel(at) : ''}`;
+  let s = `Posted by ${who(o.by, o.at)}`;
+  if (o.editedBy || o.editedAt) s += ` · edited by ${who(o.editedBy, o.editedAt)}`;
+  if (isCancelled(o) && (o.closedBy || o.closedAt)) s += ` · cancelled by ${who(o.closedBy, o.closedAt)}`;
+  return s;
+}
+
+const hrs = (h, d) => (h == null || h === '' ? d : String(h));
+// An offer -> the form, for Edit (the locked fields come along so the form shows them and the preview counts them)
+export function editForm(o) {
+  const a = (o && o.audience) || {};
+  const tiers = TIERS.filter((t) => (a.tiers || []).includes(t));
+  const under = a.maxWeekHours != null && a.maxWeekHours !== '';
+  const p = (o && o.priority) || {};
+  return {
+    kind: o.kind === 'vto' ? 'vto' : 'vet', date: String(o.date || ''), role: o.role === 'backup' ? 'backup' : 'road',
+    wave: String(o.wave || ''), slots: String(Number(o.slots) || 1),
+    sendTo: tiers.length || under ? 'groups' : 'all', tiers, under, underHours: hrs(a.maxWeekHours, '40'),
+    mode: o.mode === 'window' ? 'window' : 'fcfs', windowHours: hrs(o.windowHours, '24'),
+    prTiers: o.priority ? TIERS.filter((t) => (p.tiers || []).includes(t)) : defaultForm().prTiers, prHours: hrs(p.maxWeekHours, '40'),
+    note: String(o.note || ''),
+  };
+}
+// The edit form -> {fields: {slots, audience, note}} for editScheduleOffer, or {error}. Spots never below
+// what's taken (the offer's own count).
+export function buildEditFields(f, o) {
+  const r = buildOfferFields(f);
+  if (r.error) return r;
+  const taken = Number(o && o.taken) || 0;
+  if (r.fields.slots < taken) return { error: `Spots can't be below the ${taken} already taken.` };
+  return { fields: { slots: r.fields.slots, audience: r.fields.audience, note: r.fields.note || '' } };
+}
+// What the recipient preview sends: the form's offer as posted, spots and note left out (they change nobody's
+// card) -> fields, or null when the form can't be counted yet.
+export function previewFields(f) {
+  const r = buildOfferFields({ ...f, slots: '1', note: '' });
+  return r.error ? null : r.fields;
+}
+// The preview line (drv_offer_preview {eligible, withApp, withPush}): "22 drivers can see this · 4 use the app ·
+// 1 gets a phone alert"; "—" for each number while loading; "Couldn't count" on an error.
+// st = {state: 'loading' | 'err' | 'ok', res}
+export function previewLabel(st) {
+  if (st && st.state === 'err') return "Couldn't count";
+  const r = st && st.state === 'ok' && st.res ? st.res : null;
+  const n = (k) => (r && Number.isFinite(Number(r[k])) ? Number(r[k]) : null);
+  const e = n('eligible'), a = n('withApp'), p = n('withPush');
+  const num = (x) => (x == null ? '—' : String(x));
+  return `${num(e)} driver${e === 1 ? '' : 's'} can see this · ${num(a)} ${a === 1 ? 'uses' : 'use'} the app · `
+    + `${num(p)} ${p === 1 ? 'gets' : 'get'} a phone alert`;
 }
 
 // "VET · 10:45 AM route" / "VET · backup, any wave" / "VTO · day off"
@@ -174,9 +273,9 @@ export function offerCounts(o, takes) {
 // "3 offered · 1 approved · 1 waiting" ("· 0 waiting" left out); same word as the day headers
 export const countsLabel = (c) => `${c.offered} offered · ${c.taken} approved${c.waiting ? ` · ${c.waiting} waiting` : ''}`;
 
-// The strip's chip: {word, chip}: closed (grey), full (grey: filled, or every spot taken), else open (green).
+// The strip's chip: {word, chip}: cancelled (grey), full (grey: filled, or every spot taken), else open (green).
 export function stripStatus(o, c) {
-  if (o.status === 'closed') return { word: 'closed', chip: 'gray' };
+  if (o.status === 'closed') return { word: 'cancelled', chip: 'gray' };
   if (o.status === 'filled' || (c && c.offered > 0 && c.taken >= c.offered)) return { word: 'full', chip: 'gray' };
   return { word: 'open', chip: 'green' };
 }

@@ -113,7 +113,7 @@ eq('offerRole', offers.map(offerRole), ['road · 10:45 AM', 'day off', 'backup �
 eq('offerLine fcfs (offer count)', offerLine(offers[0]), '1 of 3 taken · open · first come');
 eq('offerLine takes', offerLine(offers[0], [{ status: 'approved' }, { status: 'applied' }, { status: 'waiting' }]), '2 of 3 taken · open · first come');
 eq('offerLine window', offerLine(offers[1], []), '0 of 2 taken · open · picks at Fri 6 PM');
-eq('offerLine full / closed', [offerLine(offers[4]), offerLine(offers[2])], ['2 of 2 taken · full · first come', '0 of 1 taken · closed · first come']);
+eq('offerLine full / cancelled', [offerLine(offers[4]), offerLine(offers[2])], ['2 of 2 taken · full · first come', '0 of 1 taken · cancelled · first come']);
 eq('takeTone', ['approved', 'applied', 'waiting', 'pending', 'refused', 'declined', 'x'].map((s) => takeTone({ status: s })),
   ['ok', 'ok', 'wait', 'wait', 'gray', 'gray', 'gray']);
 
@@ -152,9 +152,11 @@ eq('chips Tue (order: still scheduled, pending, off, VET, VTO)', V['2026-10-20']
 eq('chip titles', V['2026-10-20'].chips.map((c) => c.title), [
   '2 drivers asked off but are still on the schedule', '2 VET / VTO takes waiting for an answer', '✓ 2 requested — 2 drivers asked for the day off',
   'VET · road · 10:45 AM · 1 of 3 taken · open · first come', 'VTO · day off · 2 of 2 taken · full · first come']);
-eq('chips Wed (closed VET faded, its take not pending)', V['2026-10-21'].chips.map((c) => [c.kind, c.text, !!c.faded, c.title]), [
-  ['off', '✓ 1 req', false, '✓ 1 requested — 1 driver asked for the day off'], ['vet', 'VET 0/1', true, 'VET · backup · any wave · 0 of 1 taken · closed · first come']]);
-eq('chips empty day', V['2026-10-22'], { waiting: [], offs: [], denied: [], offers: [], chips: [], blocked: null,
+// a cancelled offer: no chip, not in offers, its stale take not pending — only under "Show cancelled" (Jose 2026-10-20)
+eq('chips Wed (cancelled VET: no chip, its take not pending)', V['2026-10-21'].chips.map((c) => [c.kind, c.text, !!c.faded, c.title]), [
+  ['off', '✓ 1 req', false, '✓ 1 requested — 1 driver asked for the day off']]);
+eq('Wed: cancelled kept apart', [V['2026-10-21'].offers.map((o) => o.id), V['2026-10-21'].cancelled.map((o) => o.id)], [[], ['v2']]);
+eq('chips empty day', V['2026-10-22'], { waiting: [], offs: [], denied: [], offers: [], cancelled: [], chips: [], blocked: null,
   counts: { mode: 'requested', requested: [], weekly: [], also: [], total: 0 }, working: 0 });
 eq('day offers VET first', V['2026-10-20'].offers.map((o) => o.id), ['v1', 't1']);
 eq('day offs', V['2026-10-20'].offs.map((r) => [r.name, r.status.state]), [['Ana Road', 'scheduled'], ['Jason Leidy', 'scheduled']]);
@@ -163,7 +165,8 @@ eq('filter VTO only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'vto' })
 eq('filter VET only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'vet' })['2026-10-20'].chips.map((c) => c.text), ['⏱ 2 wait', 'VET 1/3']);
 const IV = dayViews('2026-10-20', '2026-10-21', SRC, { driver: 'ivy blank' });
 eq('driver filter: their offers and pending only', [IV['2026-10-20'].chips.map((c) => c.text), IV['2026-10-21'].chips.map((c) => c.text)],
-  [['⏱ 1 wait', 'VET 1/3'], ['VET 0/1']]);
+  [['⏱ 1 wait', 'VET 1/3'], []]);
+eq('driver filter: their cancelled offer', IV['2026-10-21'].cancelled.map((o) => o.id), ['v2']);
 eq('driver filter: their days off', dayViews('2026-10-20', '2026-10-21', SRC, { driver: 'Jason' })['2026-10-21'].chips.map((c) => c.text), ['✓ 1 req']);
 eq('takes not read yet: counts from the offer, no pending', dayViews('2026-10-20', '2026-10-20', { offers: CO })['2026-10-20'].chips.map((c) => c.text),
   ['VET 1/3', 'VTO 2/2']);

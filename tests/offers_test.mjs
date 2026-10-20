@@ -3,6 +3,8 @@
 import {
   TIERS, defaultForm, dayLabel, timeLabel, offerDays, offerWaves, buildOfferFields, offerWhat, offerLabel,
   takeStatus, whyText, dayOffers, upcomingGroups, headCounts, daySummary, daySummaryLabel, hasOpenOffer, stripHead, offerCounts, countsLabel, stripStatus,
+  isCancelled, splitCancelled, cancelledToggle, canDelete, deleteBlocked, cancelConfirm, deleteConfirm, postedLine, editForm,
+  buildEditFields, previewFields, previewLabel,
 } from '../public/app/live/offers-model.js';
 
 let pass = 0, fail = 0;
@@ -103,6 +105,10 @@ eq('counter on a backup offer', takeStatus({ status: 'pending', counter: true },
 eq('counter approved', takeStatus({ status: 'approved', counter: true }, vet).text, 'Approved — as a backup');
 eq('counter applied', takeStatus({ status: 'applied', counter: true, role: 'road' }, { ...vet, role: 'backup' }).text, 'On the board — as a route');
 eq('pending, not a counter', takeStatus({ status: 'pending' }, vet), { text: 'Pending', ask: false });
+// taken off the Live board again: the Driver App undid the take (2026-10-20)
+eq('removed', ['deleted', 'moved', 'back', undefined, 'x'].map((reason) => takeStatus({ status: 'removed', reason }, vet)),
+  [{ text: 'Removed (shift deleted)', ask: false }, { text: 'Removed (moved)', ask: false }, { text: 'Removed (back on schedule)', ask: false },
+    { text: 'Removed', ask: false }, { text: 'Removed', ask: false }]);
 eq('whyText empty', whyText(''), '');
 
 // --- the day strip
@@ -135,7 +141,74 @@ eq('countsLabel no waiting', countsLabel({ offered: 3, taken: 1, waiting: 0 }), 
 eq('stripStatus open', stripStatus({ status: 'open' }, { offered: 3, taken: 1 }), { word: 'open', chip: 'green' });
 eq('stripStatus filled', stripStatus({ status: 'filled' }, { offered: 3, taken: 3 }), { word: 'full', chip: 'gray' });
 eq('stripStatus every spot taken', stripStatus({ status: 'open' }, { offered: 2, taken: 2 }).word, 'full');
-eq('stripStatus closed', stripStatus({ status: 'closed' }, { offered: 2, taken: 2 }), { word: 'closed', chip: 'gray' });
+eq('stripStatus cancelled', stripStatus({ status: 'closed' }, { offered: 2, taken: 2 }), { word: 'cancelled', chip: 'gray' });
+// no clutter (Jose 2026-10-20): cancelled offers left out unless asked for
+const cx = { id: 'cx', kind: 'vet', role: 'road', wave: '', date: '2026-10-15', slots: 1, status: 'closed', at: 6 };
+const cy = { id: 'cy', kind: 'vto', date: '2026-10-13', slots: 1, status: 'closed', at: 7 };
+eq('upcomingGroups hides cancelled', upcomingGroups([...dayRows, cx, cy], '2026-10-13').map((g) => [g.date, g.offers.map((o) => o.id)]),
+  [['2026-10-13', ['early', 'late', 'any', 'vto']], ['2026-10-14', ['other']]]);
+eq('upcomingGroups with cancelled', upcomingGroups([...dayRows, cx, cy], '2026-10-13', null, true).map((g) => [g.date, g.offers.map((o) => o.id)]),
+  [['2026-10-13', ['early', 'late', 'any', 'vto', 'cy']], ['2026-10-14', ['other']], ['2026-10-15', ['cx']]]);
+eq('isCancelled', [isCancelled(cx), isCancelled(dayRows[0]), isCancelled(null)], [true, false, false]);
+eq('splitCancelled', (({ live, cancelled }) => [live.map((o) => o.id), cancelled.map((o) => o.id)])(splitCancelled([cy, dayRows[0], null, cx])),
+  [['vto'], ['cy', 'cx']]);
+eq('cancelledToggle', [cancelledToggle(2, false), cancelledToggle(1, true)], ['Show cancelled (2)', 'Hide cancelled (1)']);
+
+// --- delete: cancelled, taken 0, no live take (Jose 2026-10-20)
+const cz = { ...cx, taken: 0 };
+eq('canDelete nobody took it', canDelete(cz, []), true);
+eq('canDelete only dead takes', canDelete(cz, [{ status: 'declined' }, { status: 'refused' }, { status: 'removed' }]), true);
+eq('canDelete live takes', ['approved', 'applied', 'waiting', 'pending'].map((st) => canDelete(cz, [{ status: st }])), [false, false, false, false]);
+eq('canDelete taken > 0', canDelete({ ...cz, taken: 1 }, []), false);
+eq('canDelete not cancelled', canDelete({ ...cz, status: 'open' }, []), false);
+eq('canDelete takes not read / refused', [canDelete(cz, undefined), canDelete(cz, null)], [false, false]);
+eq('deleteBlocked', [deleteBlocked(cz, []), deleteBlocked(cz, undefined), deleteBlocked(cz, [{ status: 'applied' }]),
+  deleteBlocked({ ...cz, taken: 1 }, undefined), deleteBlocked({ ...cz, status: 'open' }, [{ status: 'applied' }])],
+  ['', '', 'Kept: a driver took this shift — it stays as the record.', 'Kept: a driver took this shift — it stays as the record.', '']);
+const co = { kind: 'vet', role: 'road', wave: '10:45 AM', date: '2026-10-17', slots: 3, taken: 2, status: 'open' };
+eq('cancelConfirm nobody on the board', cancelConfirm(co, [{ status: 'waiting' }]),
+  "Cancel this offer (VET · Sat Oct 17 · 10:45 AM route · 2 of 3 taken)? Drivers won't be able to take it any more.");
+eq('cancelConfirm takes on the board', cancelConfirm(co, [{ status: 'approved' }, { status: 'applied' }, { status: 'declined' }]),
+  "Cancel this offer (VET · Sat Oct 17 · 10:45 AM route · 2 of 3 taken)? Drivers won't be able to take it any more.\n\n"
+  + "2 drivers already have this shift on the schedule. Cancelling doesn't take it off; remove it on the Live board.");
+ok('cancelConfirm one, takes not read', cancelConfirm({ ...co, taken: 1 }, undefined).includes('1 driver already has this shift'));
+eq('deleteConfirm', deleteConfirm({ ...co, taken: 0, status: 'closed' }), "Delete this cancelled offer (VET · Sat Oct 17 · 10:45 AM route · 0 of 3 taken)? It's gone for good.");
+const t6 = new Date(2026, 9, 13, 18, 0).getTime(), t9 = new Date(2026, 9, 14, 9, 0).getTime();
+eq('postedLine', postedLine({ by: 'Ann Boss', at: t6 }), 'Posted by Ann Boss · Tue 6 PM');
+eq('postedLine edited + cancelled', postedLine({ by: 'Ann Boss', at: t6, editedBy: 'Bo Lead', editedAt: t9, status: 'closed', closedBy: 'Cy', closedAt: t9 }),
+  'Posted by Ann Boss · Tue 6 PM · edited by Bo Lead · Wed 9 AM · cancelled by Cy · Wed 9 AM');
+eq('postedLine nobody', postedLine({}), 'Posted by —');
+
+// --- edit: the form from an offer; only spots / audience / note go out, never below taken
+const wo = { kind: 'vet', date: '2026-10-17', role: 'backup', wave: '10:45 AM', slots: 3, taken: 2, status: 'open',
+  audience: { tiers: ['Solid', 'Top performer'], maxWeekHours: 30 }, mode: 'window', windowHours: 6,
+  priority: { tiers: ['Top performer'], maxWeekHours: 40 }, note: 'call first' };
+const ef = editForm(wo);
+eq('editForm', ef, { kind: 'vet', date: '2026-10-17', role: 'backup', wave: '10:45 AM', slots: '3', sendTo: 'groups',
+  tiers: ['Top performer', 'Solid'], under: true, underHours: '30', mode: 'window', windowHours: '6', prTiers: ['Top performer'],
+  prHours: '40', note: 'call first' });
+eq('editForm everyone, fcfs VTO', editForm({ kind: 'vto', date: '2026-10-17', slots: 2, audience: { tiers: [], maxWeekHours: null }, mode: 'fcfs' }),
+  { ...defaultForm(), kind: 'vto', date: '2026-10-17', slots: '2' });
+eq('buildEditFields', buildEditFields({ ...ef, slots: '5', note: ' more ' }, wo),
+  { fields: { slots: 5, audience: { tiers: ['Top performer', 'Solid'], maxWeekHours: 30 }, note: 'more' } });
+eq('buildEditFields spots == taken, everyone, no note', buildEditFields({ ...ef, slots: '2', sendTo: 'all', note: '' }, wo),
+  { fields: { slots: 2, audience: { tiers: [], maxWeekHours: null }, note: '' } });
+eq('buildEditFields below taken', buildEditFields({ ...ef, slots: '1' }, wo), { error: "Spots can't be below the 2 already taken." });
+eq('buildEditFields bad spots', buildEditFields({ ...ef, slots: '51' }, wo).error, 'Spots must be a whole number from 1 to 50.');
+
+// --- recipient preview (drv_offer_preview, SPEC-v2 §6.5)
+const pf = previewFields(form({ slots: 'x', note: 'secret', sendTo: 'groups', tiers: ['Fair'] }));
+eq('previewFields: the draft without spots / note', pf, { kind: 'vet', date: '2026-10-17', wave: '', slots: 1, role: 'road',
+  audience: { tiers: ['Fair'], maxWeekHours: null }, mode: 'fcfs' });
+eq('previewFields: same key whatever the spots / note', JSON.stringify(previewFields(form({ slots: '9', note: 'a' }))),
+  JSON.stringify(previewFields(form({ slots: '1' }))));
+eq('previewFields: not countable yet', previewFields(form({ sendTo: 'groups', tiers: [] })), null);
+eq('previewLabel', previewLabel({ state: 'ok', res: { eligible: 22, withApp: 4, withPush: 1 } }),
+  '22 drivers can see this · 4 use the app · 1 gets a phone alert');
+eq('previewLabel ones and zeros', previewLabel({ state: 'ok', res: { eligible: 1, withApp: 1, withPush: 0 } }),
+  '1 driver can see this · 1 uses the app · 0 get a phone alert');
+eq('previewLabel loading', previewLabel({ state: 'loading' }), '— drivers can see this · — use the app · — get a phone alert');
+eq('previewLabel error', previewLabel({ state: 'err' }), "Couldn't count");
 
 // --- day headers
 eq('headCounts', headCounts({ routes_filled: 31, routes: 32, backup_filled: 6, backup: 8 }), { drivers: '31/32 drivers', backups: '6/8 backups' });

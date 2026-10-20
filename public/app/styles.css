@@ -811,6 +811,15 @@ button.of-dayline:hover { background: #fff7f1; color: #c0603a; }
 .of-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: #df7332; }
 .lv-grid th.lv-namecol .lv-postbtn { display: block; margin: 0 0 6px; text-transform: none; letter-spacing: 0; white-space: nowrap; }
 .of-strip-row .of-takes li { gap: 8px; padding: 3px 0; font-size: 13px; }
+/* one offer row on the strip and the Requests page (2026-10-20): Delete beside the toggle; the card's ▸ details */
+.of-strip-head { flex-wrap: nowrap; gap: 8px; }
+.of-strip-row .of-strip-head button.of-strip-btn { flex: 1; width: auto; }
+.rq-of1 button.rq-oftog { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; color: inherit; font-weight: inherit; text-align: left; }
+.rq-of1 button.rq-oftog + button { margin-left: auto; }
+.rq-offer .of-indent { margin: 6px 0 2px 18px; font-size: 13px; }
+.rq-offer .of-takes { list-style: none; padding: 0; margin: 4px 0; }
+.rq-offer .of-takes li { gap: 8px; padding: 3px 0; }
+.rq-offer .of-strip-form { padding: 2px 0 8px; }
 
 /* ---- Requests page (Jose 2026-10-19: replaces the Today page) ---- */
 .nvbadge { flex: none !important; min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--err); color: #fff;

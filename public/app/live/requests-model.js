@@ -11,7 +11,7 @@
 //              read with filter.counts 'weekly' / 'both' (the "Off counts" selector, 2026-10-19)
 // A day off with by == 'Driver app' was asked in the drivers' app (Driver App timeoff.ts); any other by
 // is the manager who typed it in (Driver preferences / this page).
-import { dayLabel, timeLabel, offerWhat, offerCounts, stripStatus, dayOffers } from './offers-model.js';
+import { dayLabel, timeLabel, offerWhat, offerCounts, stripStatus, dayOffers, isCancelled } from './offers-model.js';
 import { normPref, prefOffDays } from '../lib/driver-prefs.js';
 
 export const APP_BY = 'Driver app';
@@ -419,11 +419,14 @@ export function liveWorking(summary, activeNames, date) {
 //           approvedBy / review to the same driver's day off, or is a row of its own (fromReview: the Live
 //           week was marked instead, or not yet — no schedule_timeoff doc, so nothing to remove)
 //   denied  the reviews answered no that date (the "Answered" list)
-//   offers  that date's offers (VET first, then by wave) — with a driver picked, only those they took
+//   offers  that date's offers that aren't cancelled (VET first, then by wave) — with a driver picked, only those
+//           they took
+//   cancelled  that date's cancelled offers, same order and filter (hidden behind "Show cancelled (N)", no chip —
+//           Jose 2026-10-20: no clutter)
 //   chips   what the calendar cell shows, one short line each ({kind, text, title = the long words}), in this
 //           order: blocked (dark), still scheduled (red), waiting (grey: day-off reviews + VET / VTO takes), the
 //           off count of the mode (offChip: "✓ 4 requested" orange / "↻ 9 weekly off" / "Σ 13 off" blue-grey), then one per offer:
-//           VET (green) / VTO (amber) taken/spots, faded once closed or full.
+//           VET (green) / VTO (amber) taken/spots, faded once full (cancelled ones get none).
 // A day off itself has no pending state (the Driver app approves it at once); only a review waits.
 export function dayViews(from, to, src, filter = {}) {
   const show = filter.show || 'all', driver = filter.driver || '';
@@ -431,7 +434,7 @@ export function dayViews(from, to, src, filter = {}) {
   const takesOf = (o) => (s.takesById || {})[o.id];
   const out = {};
   for (let d = from; d <= to; d = shiftISO(d, 1)) {
-    out[d] = { waiting: [], offs: [], denied: [], offers: [], chips: [], blocked: blockedOf(s.blocked, d), counts: null,
+    out[d] = { waiting: [], offs: [], denied: [], offers: [], cancelled: [], chips: [], blocked: blockedOf(s.blocked, d), counts: null,
       working: liveWorking((s.smByWeek || {})[sundayOf(d)], s.activeNames, d) };
   }
   if (show === 'all' || show === 'off') {
@@ -474,11 +477,12 @@ export function dayViews(from, to, src, filter = {}) {
     (byDate[o.date] = byDate[o.date] || []).push(o);
   }
   for (const [date, v] of Object.entries(out)) {
-    v.offers = dayOffers(byDate[date] || [], date);
+    const all = dayOffers(byDate[date] || [], date);
+    v.offers = all.filter((o) => !isCancelled(o));
+    v.cancelled = all.filter(isCancelled);
     const conflicts = v.offs.filter((r) => r.status.state === 'scheduled').length;
     let takesWaiting = 0;
     for (const o of v.offers) {
-      if (o.status === 'closed') continue;
       for (const t of takesOf(o) || []) if (t && PENDING.has(t.status) && driverMatch(t.name, driver)) takesWaiting++;
     }
     const reviewsW = v.waiting.length;

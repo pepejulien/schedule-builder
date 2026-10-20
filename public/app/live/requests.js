@@ -18,9 +18,9 @@ import { canLive, canTimeoff, watchTimeoff, saveTimeoff, clearTimeoff, liveWeeks
   canBlocks, watchBlocked, blockDay, unblockDay } from '../api.js';
 import { loadDriverRoster, loadDriverPrefs } from '../lib/driver-prefs.js';
 import { toISODate } from '../lib/weeks.js';
-import { useTakes, useTakesMap, OfferForm } from './offers.js';
-import { dayLabel, takeStatus, offerDays } from './offers-model.js';
-import { fold, shiftISO, sundayOf, rangeOf, weeksBetween, askedLabel, conflictsOf, offerRole, offerLine, takeTone,
+import { useTakesMap, OfferForm, OfferRow, CancelledToggle } from './offers.js';
+import { dayLabel, offerDays } from './offers-model.js';
+import { fold, shiftISO, sundayOf, rangeOf, weeksBetween, askedLabel, conflictsOf,
   monthOf, shiftMonth, longDate, monthGrid, dayViews, refusedText, reviewsWaiting, applyProblem, denyReason,
   reviewActions, CALL_OFF_WHY, BLOCKED_WARN, BLOCK_REASON_MAX, blockReason, blockedOf, offMode, bothLine } from './requests-model.js';
 
@@ -258,20 +258,6 @@ function ReviewRow({ r }) {
   </li>`;
 }
 
-const lc1 = (s) => String(s || '').charAt(0).toLowerCase() + String(s || '').slice(1);
-
-// One offer: VET / VTO, the day, the role + wave; taken / status / how it's decided; who took it.
-function OfferCard({ o }) {
-  const takes = useTakes(o.id);
-  return html`<div class="rq-offer">
-    <div class="rq-of1"><span class=${'chip ' + (o.kind === 'vto' ? 'amber' : 'green')}>${o.kind === 'vto' ? 'VTO' : 'VET'}</span>
-      <b>${dayLabel(o.date)}</b><span>${offerRole(o)}</span></div>
-    <div class="muted rq-of2">${offerLine(o, takes)}</div>
-    ${Array.isArray(takes) && takes.length ? html`<div class="rq-of3">${takes.map((t, i) => html`${i ? ' · ' : ''}<span class="rq-taker">${t.name || t.tid}${' '}<span
-      class=${'rq-tk ' + takeTone(t)}>${lc1(takeStatus(t, o).text)}</span></span>`)}</div>` : ''}
-  </div>`;
-}
-
 const SHOW = [['all', 'All'], ['off', 'Days off'], ['vet', 'VET'], ['vto', 'VTO']];
 
 // Show: All / Days off / VET / VTO · Driver: everyone, or one (type to search the roster) · Off counts:
@@ -388,7 +374,9 @@ function WeeklyList({ list, also = [] }) {
 }
 
 // The picked day: its days off and its VET / VTO, "+ Add a day off" (that date) and "Post an offer"
-// (that date when it can still be posted for — the Live board's own form; else the Live schedule).
+// (that date when it can still be posted for — the Live board's own form; else the Live schedule). Its offers are
+// the Live strip's rows (OfferRow: Edit…, Cancel offer, Delete, Yes / No on counters — Jose 2026-10-20); cancelled
+// ones wait behind "Show cancelled (N)".
 // The off lists follow the "Off counts" mode: Requested (the days off), Weekly preference, or both groups.
 function DayPanel({ date, view, days, today, names, show, blocked, mode }) {
   const [adding, setAdding] = useState(false);
@@ -397,13 +385,17 @@ function DayPanel({ date, view, days, today, names, show, blocked, mode }) {
   const postable = canOffers() ? offerDays(days, today) : [];
   const post = () => { setAdding(false); if (postable.length) setPosting(true); else openLive(); };
   const [showDenied, setShowDenied] = useState(false);
+  const [showCancelled, setShowCancelled] = useState(false);
+  const [openOffer, setOpenOffer] = useState({});
+  const offerRow = (o) => html`<${OfferRow} o=${o} key=${o.id} look="card" uid="rq" expanded=${!!openOffer[o.id]}
+    onToggle=${() => setOpenOffer((m) => ({ ...m, [o.id]: !m[o.id] }))} />`;
   const showReq = mode !== 'weekly';
   const weekly = view.counts && mode !== 'requested' ? view.counts.weekly : null;
   const also = (view.counts && view.counts.also) || [];
   // Both: "24 people off: 10 requested + 15 weekly − 1 on both lists" above the lists (Jose 2026-10-19)
   const sum = view.counts && view.counts.total ? bothLine(view.counts) : '';
   const nothing = !view.waiting.length && !(showReq && view.offs.length) && !view.denied.length && !view.offers.length
-    && !(weekly && weekly.length) && !also.length;
+    && !view.cancelled.length && !(weekly && weekly.length) && !also.length;
   return html`<div class="card rq-panel">
     <h2>${longDate(date)}</h2>
     <${BlockBox} date=${date} today=${today} blocked=${view.blocked} />
@@ -431,8 +423,10 @@ function DayPanel({ date, view, days, today, names, show, blocked, mode }) {
           ${r.why ? html`<span class="muted rq-note">“${r.why}”</span>` : ''}
           ${r.decidedBy ? html`<span class="muted rq-asked">by ${r.decidedBy}</span>` : ''}</div>
       </li>`)}</ul>` : ''}` : ''}
-    ${view.offers.length ? html`<h3>VET / VTO</h3>
-      <div class="rq-offers">${view.offers.map((o) => html`<${OfferCard} o=${o} key=${o.id} />`)}</div>` : ''}
+    ${view.offers.length || view.cancelled.length ? html`<h3>VET / VTO</h3>
+      ${view.offers.length ? html`<div class="rq-offers">${view.offers.map(offerRow)}</div>` : ''}
+      <${CancelledToggle} n=${view.cancelled.length} shown=${showCancelled} onToggle=${() => setShowCancelled((x) => !x)} />
+      ${showCancelled && view.cancelled.length ? html`<div class="rq-offers">${view.cancelled.map(offerRow)}</div>` : ''}` : ''}
   </div>`;
 }
 
