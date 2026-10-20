@@ -22,12 +22,14 @@ import { useTakes, useTakesMap, OfferForm } from './offers.js';
 import { dayLabel, takeStatus, offerDays } from './offers-model.js';
 import { fold, shiftISO, sundayOf, rangeOf, weeksBetween, askedLabel, conflictsOf, offerRole, offerLine, takeTone,
   monthOf, shiftMonth, longDate, monthGrid, dayViews, refusedText, reviewsWaiting, applyProblem, denyReason,
-  reviewActions, CALL_OFF_WHY, BLOCKED_WARN, BLOCK_REASON_MAX, blockReason, blockedOf, workingLine } from './requests-model.js';
+  reviewActions, CALL_OFF_WHY, BLOCKED_WARN, BLOCK_REASON_MAX, blockReason, blockedOf, offMode } from './requests-model.js';
 
-// "Show everyone's unavailable days" (2026-10-19): remembered per browser; storage blocked = off
-const UNAVAIL_KEY = 'sb.rq.unavail';
-const readUnavail = () => { try { return localStorage.getItem(UNAVAIL_KEY) === '1'; } catch { return false; } };
-const saveUnavail = (on) => { try { localStorage.setItem(UNAVAIL_KEY, on ? '1' : '0'); } catch { /* not remembered */ } };
+// "Off counts:" Requested / Weekly preference / Both (Jose 2026-10-19): remembered per browser (default
+// Requested; storage blocked = Requested)
+const OFFC_KEY = 'sb.rq.offcounts';
+const readOffMode = () => { try { return offMode(localStorage.getItem(OFFC_KEY)); } catch { return 'requested'; } };
+const saveOffMode = (m) => { try { localStorage.setItem(OFFC_KEY, m); } catch { /* not remembered */ } };
+const OFF_MODE_LABELS = [['requested', 'Requested'], ['weekly', 'Weekly preference'], ['both', 'Both']];
 
 const AHEAD = 12;   // weeks past this one a day off can be added for, as on Driver preferences
 const todayNow = () => toISODate(new Date());
@@ -272,8 +274,9 @@ function OfferCard({ o }) {
 
 const SHOW = [['all', 'All'], ['off', 'Days off'], ['vet', 'VET'], ['vto', 'VTO']];
 
-// Show: All / Days off / VET / VTO · Driver: everyone, or one (type to search the roster).
-function FilterCard({ show, setShow, driver, setDriver, unavail, setUnavail }) {
+// Show: All / Days off / VET / VTO · Driver: everyone, or one (type to search the roster) · Off counts:
+// Requested / Weekly preference / Both (what the calendar's off chip counts).
+function FilterCard({ show, setShow, driver, setDriver, mode, setMode }) {
   return html`<div class="card rq-filter">
     <div class="rq-fld"><span class="rq-lab">Show</span>
       <div class="seg" role="group" aria-label="Show">
@@ -283,8 +286,10 @@ function FilterCard({ show, setShow, driver, setDriver, unavail, setUnavail }) {
       <input type="text" class="rq-drv" list="rq-names" placeholder="All drivers" value=${driver} autocomplete="off"
         aria-label="Driver" onInput=${(e) => setDriver(e.target.value)} />
       ${driver ? html`<button class="small ghost" onClick=${() => setDriver('')}>All drivers</button>` : ''}</div>
-    <label class="rq-fld rq-unavail"><input type="checkbox" checked=${unavail} onChange=${(e) => setUnavail(e.target.checked)} />
-      Show everyone's unavailable days</label>
+    <div class="rq-fld"><span class="rq-lab">Off counts:</span>
+      <div class="seg" role="group" aria-label="Off counts">
+        ${OFF_MODE_LABELS.map(([k, t]) => html`<button class=${mode === k ? 'on' : ''} aria-pressed=${mode === k} onClick=${() => setMode(k)}>${t}</button>`)}
+      </div></div>
   </div>`;
 }
 
@@ -307,7 +312,7 @@ function CalendarCard({ grid, views, today, sel, onPick, onMonth, onToday, loadi
         const more = v.chips.length - MAX_CHIPS;
         return html`<button key=${c.date} role="gridcell" aria-selected=${c.date === sel}
           class=${'rq-cell' + (c.inMonth ? '' : ' out') + (c.date === today ? ' today' : '') + (c.date === sel ? ' sel' : '') + (v.blocked ? ' blocked' : '')}
-          aria-label=${`${longDate(c.date)}${v.chips.length ? ': ' + v.chips.map((x) => x.text).join(', ') : ''}`}
+          aria-label=${`${longDate(c.date)}${v.chips.length ? ': ' + v.chips.map((x) => x.long || x.text).join(', ') : ''}`}
           onClick=${() => onPick(c.date)}>
           <span class="rq-num">${c.num}</span>
           ${v.chips.slice(0, MAX_CHIPS).map((x) => html`<span class=${'rq-chip ' + x.kind + (x.faded ? ' faded' : '')} title=${x.title}>${x.text}</span>`)}
@@ -318,9 +323,11 @@ function CalendarCard({ grid, views, today, sel, onPick, onMonth, onToday, loadi
   </div>`;
 }
 
-function LegendCard({ unavail }) {
-  const items = [['blocked', 'Blocked — no requests'], ['off', 'Days off'], ['conflict', 'Asked off, still scheduled'], ['pending', 'Pending'],
-    ...(unavail ? [['alloff', 'Everyone off that day']] : []), ['vet', 'VET'], ['vto', 'VTO']];
+// the off-count chip of each "Off counts" mode, in the legend
+const MODE_LEGEND = { requested: ['off', 'Requested days off'], weekly: ['weekly', 'Weekly preference off'], both: ['both', 'Requested + weekly (each driver once)'] };
+function LegendCard({ mode }) {
+  const items = [['blocked', 'Blocked — no requests'], MODE_LEGEND[mode] || MODE_LEGEND.requested, ['conflict', 'Asked off, still scheduled'],
+    ['pending', 'Pending'], ['vet', 'VET'], ['vto', 'VTO']];
   return html`<div class="card rq-legend">
     ${items.map(([k, t]) => html`<span class="rq-leg"><span class=${'rq-chip rq-sw ' + k}></span>${t}</span>`)}
   </div>`;
@@ -368,39 +375,29 @@ function BlockBox({ date, today, blocked }) {
   </form>`;
 }
 
-// "Everyone off this day (N)" (with "Show everyone's unavailable days"): each driver once — asked off (listed
-// under Days off), standing preferences, off on the Live schedule — and "Working: 58 · Off: 21".
-function EveryoneOff({ e }) {
-  if (!e) return null;
-  const live = e.liveState === 'unbuilt' ? html`<p class="muted rq-evnote">Week not published yet.</p>`
-    : e.liveState === 'loading' ? html`<p class="muted rq-evnote">Loading the Live schedule…</p>`
-      : e.live.length ? html`<ul class="rq-list">${e.live.map((x) => html`<li class="rq-row" key=${x.name}>
-        <div class="rq-who"><b>${x.name}</b><span class="muted rq-asked">${x.what}</span></div></li>`)}</ul>`
-        : html`<p class="muted rq-evnote">Nobody else.</p>`;
-  return html`<div class="rq-everyone">
-    <h3>Everyone off this day (${e.total})</h3>
-    <p class="muted rq-evnote">${workingLine(e)}</p>
-    <h4>Asked off (${e.asked.length})</h4>
-    <p class="muted rq-evnote">${e.asked.length ? 'Listed under Days off.' : 'Nobody.'}</p>
-    <h4>Standing preferences (${e.standing.length})</h4>
-    ${e.standing.length ? html`<ul class="rq-list">${e.standing.map((u) => html`<li class="rq-row" key=${u.name}>
+// "Weekly preference (N)": drivers whose Driver preferences keep them off this weekday going forward, with the
+// rule in words (in Both, without the ones already under Requested).
+function WeeklyList({ list }) {
+  return html`<h3>Weekly preference (${list.length})</h3>
+    ${list.length ? html`<ul class="rq-list">${list.map((u) => html`<li class="rq-row" key=${u.name}>
       <div class="rq-who"><b>${u.name}</b><span class="muted rq-asked">${u.rule}</span></div></li>`)}</ul>`
-      : html`<p class="muted rq-evnote">Nobody.</p>`}
-    <h4>Off on the Live schedule (${e.live.length})</h4>
-    ${live}
-  </div>`;
+      : html`<p class="muted rq-evnote">Nobody.</p>`}`;
 }
 
 // The picked day: its days off and its VET / VTO, "+ Add a day off" (that date) and "Post an offer"
 // (that date when it can still be posted for — the Live board's own form; else the Live schedule).
-function DayPanel({ date, view, days, today, names, show, blocked }) {
+// The off lists follow the "Off counts" mode: Requested (the days off), Weekly preference, or both groups.
+function DayPanel({ date, view, days, today, names, show, blocked, mode }) {
   const [adding, setAdding] = useState(false);
   const [posting, setPosting] = useState(false);
   const label = dayLabel(date);
   const postable = canOffers() ? offerDays(days, today) : [];
   const post = () => { setAdding(false); if (postable.length) setPosting(true); else openLive(); };
   const [showDenied, setShowDenied] = useState(false);
-  const nothing = !view.waiting.length && !view.offs.length && !view.denied.length && !view.offers.length;
+  const showReq = mode !== 'weekly';
+  const weekly = view.counts && mode !== 'requested' ? view.counts.weekly : null;
+  const nothing = !view.waiting.length && !(showReq && view.offs.length) && !view.denied.length && !view.offers.length
+    && !(weekly && weekly.length);
   return html`<div class="card rq-panel">
     <h2>${longDate(date)}</h2>
     <${BlockBox} date=${date} today=${today} blocked=${view.blocked} />
@@ -413,11 +410,13 @@ function DayPanel({ date, view, days, today, names, show, blocked }) {
       date=${postable.some((x) => x.date === date) ? date : today} uid="rq"
       onDone=${() => setPosting(false)} onCancel=${() => setPosting(false)} /></div>` : ''}
     ${!canTimeoff() && show !== 'vet' && show !== 'vto' ? html`<p class="muted">Days off need the JAJB hub's connection — open the Schedule Builder from the hub.</p>` : ''}
+    ${view.working != null ? html`<p class="muted rq-evnote">Live schedule: ${view.working} working</p>` : ''}
     ${nothing ? html`<p class="muted" style="margin:0">Nothing asked for this day.</p>` : ''}
     ${view.waiting.length ? html`<h3 class="rq-waith">Waiting for your answer (${view.waiting.length})</h3>
       <ul class="rq-list">${view.waiting.map((r) => html`<${ReviewRow} r=${r} key=${r.id} />`)}</ul>` : ''}
-    ${view.offs.length ? html`<h3>Days off (${view.offs.length})</h3>
+    ${showReq && view.offs.length ? html`<h3>Requested (${view.offs.length})</h3>
       <ul class="rq-list">${view.offs.map((r) => html`<${OffRow} r=${r} label=${label} key=${r.key} />`)}</ul>` : ''}
+    ${weekly ? html`<${WeeklyList} list=${weekly} />` : ''}
     ${view.denied.length ? html`<button class="link rq-answered" aria-expanded=${showDenied} onClick=${() => setShowDenied((x) => !x)}>
       Answered (${view.denied.length}) ${showDenied ? '▾' : '▸'}</button>
       ${showDenied ? html`<ul class="rq-list">${view.denied.map((r) => html`<li class="rq-row" key=${r.id}>
@@ -425,7 +424,6 @@ function DayPanel({ date, view, days, today, names, show, blocked }) {
           ${r.why ? html`<span class="muted rq-note">“${r.why}”</span>` : ''}
           ${r.decidedBy ? html`<span class="muted rq-asked">by ${r.decidedBy}</span>` : ''}</div>
       </li>`)}</ul>` : ''}` : ''}
-    <${EveryoneOff} e=${view.everyone} />
     ${view.offers.length ? html`<h3>VET / VTO</h3>
       <div class="rq-offers">${view.offers.map((o) => html`<${OfferCard} o=${o} key=${o.id} />`)}</div>` : ''}
   </div>`;
@@ -438,16 +436,16 @@ export function Requests() {
   const [show, setShow] = useState('all');
   const [driver, setDriver] = useState('');
   const [roster, setRoster] = useState([]);       // [{name, active?}] (loadDriverRoster with the active list)
-  // "Show everyone's unavailable days" (off by default, remembered) and the Driver preferences it reads
-  const [unavail, setUnavailState] = useState(readUnavail);
-  const setUnavail = (on) => { setUnavailState(on); saveUnavail(on); };
+  // "Off counts:" Requested / Weekly preference / Both (remembered) and the Driver preferences the weekly reads
+  const [mode, setModeState] = useState(readOffMode);
+  const setMode = (m) => { const v = offMode(m); setModeState(v); saveOffMode(v); };
   const [prefs, setPrefs] = useState(null);
   useEffect(() => {
-    if (!unavail || prefs) return undefined;
+    if (mode === 'requested' || prefs) return undefined;
     let alive = true;
     loadDriverPrefs().then((p) => { if (alive) setPrefs(p); }).catch(() => {});
     return () => { alive = false; };
-  }, [unavail]);
+  }, [mode]);
   // #requests/YYYY-MM-DD (app.js puts the day here): pick it once, then clear it
   const deep = useStore((st) => st.requestsDay);
   useEffect(() => {
@@ -491,8 +489,8 @@ export function Requests() {
   // the active roster (no `active` marks = the active list couldn't be read: everyone on it)
   const activeNames = (roster.some((r) => 'active' in r) ? roster.filter((r) => r.active) : roster).map((r) => r.name);
   const src = { offByWeek: off, smByWeek: sm, offers, takesById, reviews, blocked,
-    prefs: unavail ? prefs : null, activeNames: roster.length ? activeNames : null };
-  const filter = { show, driver, unavail };
+    prefs: mode !== 'requested' ? prefs : null, activeNames: roster.length ? activeNames : null };
+  const filter = { show, driver, counts: mode };
   const first = grid.cells[0].date, last = grid.cells[41].date;
   const views = dayViews(first, last, src, filter);
   const selView = (sel >= first && sel <= last ? views : dayViews(sel, sel, src, filter))[sel];
@@ -524,14 +522,14 @@ export function Requests() {
     <datalist id="rq-names">${names.map((n) => html`<option value=${n} />`)}</datalist>
     <div class="rq-layout">
       <div class="rq-left">
-        <${FilterCard} show=${show} setShow=${setShow} driver=${driver} setDriver=${setDriver} unavail=${unavail} setUnavail=${setUnavail} />
+        <${FilterCard} show=${show} setShow=${setShow} driver=${driver} setDriver=${setDriver} mode=${mode} setMode=${setMode} />
         ${failed ? html`<${Banner} kind="warn">Couldn't load everything for this month — check the connection.<//>` : ''}
         <${CalendarCard} grid=${grid} views=${views} today=${today} sel=${sel} loading=${loading}
           onPick=${pick} onMonth=${(n) => setYm((m) => shiftMonth(m, n))} onToday=${() => { setYm(monthOf(today)); setSel(today); }} />
-        <${LegendCard} unavail=${unavail} />
+        <${LegendCard} mode=${mode} />
       </div>
       <div class="rq-right" ref=${panelRef}>
-        <${DayPanel} key=${sel} date=${sel} view=${selView} days=${days} today=${today} names=${names} show=${show} blocked=${blocked} />
+        <${DayPanel} key=${sel} date=${sel} view=${selView} days=${days} today=${today} names=${names} show=${show} blocked=${blocked} mode=${mode} />
       </div>
     </div>
   </div>`;

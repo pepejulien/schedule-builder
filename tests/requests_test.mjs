@@ -5,7 +5,7 @@ import {
   requestRows, weekWord, groupByDay, conflictsOf, offerLists, offerRole, offerLine, takeTone,
   monthOf, shiftMonth, longDate, monthGrid, driverMatch, dayViews,
   refusedText, pendingReviews, reviewsWaiting, applyProblem, denyReason, weekPublished, reviewActions, CALL_OFF_WHY, PUBLISHED_NOTE,
-  BLOCKED_WARN, blockReason, blockedOf, unavailRule, standingUnavailable, everyoneOff, everyoneTitle, workingLine,
+  BLOCKED_WARN, blockReason, blockedOf, unavailRule, standingUnavailable, OFF_MODES, offMode, offCounts, offChip, liveWorking,
 } from '../public/app/live/requests-model.js';
 
 let pass = 0, fail = 0;
@@ -147,14 +147,15 @@ const SRC = { offByWeek: OFF, smByWeek: SMW, offers: CO, takesById: TK };
 const V = dayViews('2026-10-18', '2026-10-24', SRC);
 eq('dayViews dates', Object.keys(V), ['2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23', '2026-10-24']);
 eq('chips Tue (order: still scheduled, pending, off, VET, VTO)', V['2026-10-20'].chips.map((c) => [c.kind, c.text, !!c.faded]), [
-  ['conflict', '⊘ 2 sched', false], ['pending', '⏱ 2 wait', false], ['off', '✓ 2 off', false],
+  ['conflict', '⊘ 2 sched', false], ['pending', '⏱ 2 wait', false], ['off', '✓ 2 req', false],
   ['vet', 'VET 1/3', false], ['vto', 'VTO 2/2', true]]);
 eq('chip titles', V['2026-10-20'].chips.map((c) => c.title), [
-  '2 drivers asked off but are still on the schedule', '2 VET / VTO takes waiting for an answer', '2 drivers asked for the day off',
+  '2 drivers asked off but are still on the schedule', '2 VET / VTO takes waiting for an answer', '✓ 2 requested — 2 drivers asked for the day off',
   'VET · road · 10:45 AM · 1 of 3 taken · open · first come', 'VTO · day off · 2 of 2 taken · full · first come']);
 eq('chips Wed (closed VET faded, its take not pending)', V['2026-10-21'].chips.map((c) => [c.kind, c.text, !!c.faded, c.title]), [
-  ['off', '✓ 1 off', false, '1 driver asked for the day off'], ['vet', 'VET 0/1', true, 'VET · backup · any wave · 0 of 1 taken · closed · first come']]);
-eq('chips empty day', V['2026-10-22'], { waiting: [], offs: [], denied: [], offers: [], chips: [], blocked: null, everyone: null });
+  ['off', '✓ 1 req', false, '✓ 1 requested — 1 driver asked for the day off'], ['vet', 'VET 0/1', true, 'VET · backup · any wave · 0 of 1 taken · closed · first come']]);
+eq('chips empty day', V['2026-10-22'], { waiting: [], offs: [], denied: [], offers: [], chips: [], blocked: null,
+  counts: { mode: 'requested', requested: [], weekly: [], total: 0 }, working: 0 });
 eq('day offers VET first', V['2026-10-20'].offers.map((o) => o.id), ['v1', 't1']);
 eq('day offs', V['2026-10-20'].offs.map((r) => [r.name, r.status.state]), [['Ana Road', 'scheduled'], ['Jason Leidy', 'scheduled']]);
 eq('filter days off only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'off' })['2026-10-20'].chips.map((c) => c.kind), ['conflict', 'off']);
@@ -163,7 +164,7 @@ eq('filter VET only', dayViews('2026-10-20', '2026-10-20', SRC, { show: 'vet' })
 const IV = dayViews('2026-10-20', '2026-10-21', SRC, { driver: 'ivy blank' });
 eq('driver filter: their offers and pending only', [IV['2026-10-20'].chips.map((c) => c.text), IV['2026-10-21'].chips.map((c) => c.text)],
   [['⏱ 1 wait', 'VET 1/3'], ['VET 0/1']]);
-eq('driver filter: their days off', dayViews('2026-10-20', '2026-10-21', SRC, { driver: 'Jason' })['2026-10-21'].chips.map((c) => c.text), ['✓ 1 off']);
+eq('driver filter: their days off', dayViews('2026-10-20', '2026-10-21', SRC, { driver: 'Jason' })['2026-10-21'].chips.map((c) => c.text), ['✓ 1 req']);
 eq('takes not read yet: counts from the offer, no pending', dayViews('2026-10-20', '2026-10-20', { offers: CO })['2026-10-20'].chips.map((c) => c.text),
   ['VET 1/3', 'VTO 2/2']);
 
@@ -268,30 +269,32 @@ const LW = { ...week('2026-10-18', {
   'Pat Work': { Tue: '10:45 AM' }, 'Mo Mark': { Tue: '10:45 AM' }, 'Wes Weekend': { Tue: 'Dispatch' }, 'Max Days': { Tue: 'Day off' },
   'Left Driver': { Tue: '' },
 }, ['Sat']), marks: [{ name: 'Mo Mark', day: 'Tue', kind: 'off' }] };
-const E = everyoneOff(['Jason Leidy', 'Ana Road'], LW, PREFS, ACTIVE, '2026-10-20');
-eq('everyoneOff: each driver once — asked > preference > Live', [E.asked, E.standing.map((u) => u.name), E.live],
-  [['Jason Leidy', 'Ana Road'], ['Kim Pref'],
-    [{ name: 'Lee Live', what: 'not scheduled' }, { name: 'Max Days', what: 'Day off' }, { name: 'Mo Mark', what: 'Day off' },
-      { name: 'Nina New', what: 'not on this week' }]]);
-eq('everyoneOff: working + totals (an inactive driver on the week is not counted)', [E.liveState, E.working, E.total], ['published', 3, 7]);
-eq('everyoneTitle', everyoneTitle(E), '7 drivers off: 2 asked off, 1 standing preferences, 4 off on the Live schedule');
-eq('workingLine', workingLine(E), 'Working: 3 · Off: 7');
-const EU = everyoneOff(['Jason Leidy'], null, PREFS, ACTIVE, '2026-10-27');
-eq('everyoneOff: week not published', [EU.liveState, EU.working, EU.live, EU.total, everyoneTitle(EU), workingLine(EU)],
-  ['unbuilt', null, [], 3, '3 drivers off: 1 asked off, 2 standing preferences, week not published yet', 'Off: 3']);
-eq('everyoneOff: loading', everyoneOff([], undefined, PREFS, ACTIVE, '2026-10-20').liveState, 'loading');
-const EC = everyoneOff([], LW, {}, ['Pat Work', 'Lee Live'], '2026-10-24');
-eq('everyoneOff: no routes that day', [EC.liveState, EC.working, EC.live], ['closed', 0,
-  [{ name: 'Lee Live', what: 'no routes this day' }, { name: 'Pat Work', what: 'no routes this day' }]]);
-eq('everyoneOff: driver filter', [everyoneOff(['Jason Leidy'], LW, PREFS, ACTIVE, '2026-10-20', 'lee').live.map((x) => x.name),
-  everyoneOff(['Jason Leidy'], LW, PREFS, ACTIVE, '2026-10-20', 'lee').total], [['Lee Live'], 1]);
+// --- "Off counts": Requested / Weekly preference / Both (Jose 2026-10-19) — the Live week's own blanks never count
+eq('OFF_MODES / offMode', [OFF_MODES, offMode('both'), offMode('x'), offMode(undefined)], [['requested', 'weekly', 'both'], 'both', 'requested', 'requested']);
+const ASKED = ['Jason Leidy', 'Ana Road', 'jason leidy'];        // the same driver twice counts once
+const CR = offCounts('requested', ASKED, PREFS, ACTIVE, '2026-10-20');
+const CW = offCounts('weekly', ASKED, PREFS, ACTIVE, '2026-10-20');
+const CB = offCounts('both', ASKED, PREFS, ACTIVE, '2026-10-20');
+eq('offCounts requested', [CR.requested, CR.weekly, CR.total], [['Jason Leidy', 'Ana Road'], [], 2]);
+eq('offCounts weekly: every driver whose prefs keep them off that weekday (active only)', [CW.requested, CW.weekly.map((u) => [u.name, u.rule]), CW.total],
+  [[], [['Ana Road', 'never works Tuesdays'], ['Kim Pref', 'never works Tuesdays']], 2]);
+eq('offCounts both: each driver once, requested wins', [CB.requested, CB.weekly.map((u) => u.name), CB.total], [['Jason Leidy', 'Ana Road'], ['Kim Pref'], 3]);
+eq('offChip per mode', [offChip(CR), offChip(CW), offChip(CB)], [
+  { kind: 'off', text: '✓ 2 req', long: '✓ 2 requested', title: '✓ 2 requested — 2 drivers asked for the day off' },
+  { kind: 'weekly', text: '↻ 2 wkly', long: '↻ 2 weekly off', title: '↻ 2 weekly off — 2 drivers off this weekday every week (Driver preferences)' },
+  { kind: 'both', text: 'Σ 3 off', long: 'Σ 3 off (2 req + 1 weekly)', title: 'Σ 3 off (2 req + 1 weekly) — each driver once' }]);
+eq('offChip: nothing to count', [offChip(offCounts('weekly', [], null, ACTIVE, '2026-10-20')), offChip(null)], [null, null]);
+eq('offCounts weekly: the every-other-weekend rule on its off Saturday', offCounts('weekly', [], PREFS, ACTIVE, '2026-10-24').weekly.map((u) => u.name), ['Wes Weekend']);
+eq('liveWorking: active drivers with a shift (any), marks and blanks out', [liveWorking(LW, ACTIVE, '2026-10-20'), liveWorking(LW, null, '2026-10-20')], [3, 3]);
+eq('liveWorking: closed / not published / loading / not that week', [liveWorking(LW, ACTIVE, '2026-10-24'), liveWorking(null, ACTIVE, '2026-10-20'),
+  liveWorking(undefined, ACTIVE, '2026-10-20'), liveWorking(LW, ACTIVE, '2026-10-27')], [0, null, null, null]);
 const SRC5 = { offByWeek: OFF, smByWeek: { '2026-10-18': LW }, prefs: PREFS, activeNames: ACTIVE };
-const W5 = dayViews('2026-10-20', '2026-10-20', SRC5, { unavail: true });
-eq('dayViews unavail: the combined chip after days off', W5['2026-10-20'].chips.map((c) => c.text), ['⊘ 1 sched', '✓ 2 off', '7 off in all']);
-eq('dayViews unavail: the chip title', W5['2026-10-20'].chips[2].title, '7 drivers off: 2 asked off, 1 standing preferences, 4 off on the Live schedule');
-eq('dayViews without the box: no everyone, no chip', [dayViews('2026-10-20', '2026-10-20', SRC5)['2026-10-20'].everyone,
-  dayViews('2026-10-20', '2026-10-20', SRC5)['2026-10-20'].chips.map((c) => c.kind)], [null, ['conflict', 'off']]);
-eq('dayViews unavail + driver filter', dayViews('2026-10-20', '2026-10-20', SRC5, { unavail: true, driver: 'kim' })['2026-10-20'].everyone.standing.map((u) => u.name), ['Kim Pref']);
+const chipsOf = (f) => dayViews('2026-10-20', '2026-10-20', SRC5, f)['2026-10-20'].chips.map((c) => c.text);
+eq('dayViews: the mode decides the count chip (default Requested); no Live-schedule count', [chipsOf({}), chipsOf({ counts: 'weekly' }), chipsOf({ counts: 'both' })],
+  [['⊘ 1 sched', '✓ 2 req'], ['⊘ 1 sched', '↻ 2 wkly'], ['⊘ 1 sched', 'Σ 3 off']]);
+eq('dayViews: working for context only', dayViews('2026-10-20', '2026-10-20', SRC5)['2026-10-20'].working, 3);
+eq('dayViews: driver filter on the weekly list', dayViews('2026-10-20', '2026-10-20', SRC5, { counts: 'weekly', driver: 'kim' })['2026-10-20'].counts.weekly.map((u) => u.name), ['Kim Pref']);
+eq('dayViews: VET / VTO only -> no counts', [dayViews('2026-10-20', '2026-10-20', SRC5, { show: 'vet', counts: 'both' })['2026-10-20'].counts, chipsOf({ show: 'vet', counts: 'both' })], [null, []]);
 
 console.log(`requests_test: ${pass} passed, ${fail} failed`);
 if (fail) { for (const f of fails) console.log('  FAIL ' + f); process.exit(1); }

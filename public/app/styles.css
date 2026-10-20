@@ -902,15 +902,13 @@ button.rq-cell.sel { outline: 2px solid var(--navy); outline-offset: -1px; }
 .rq-x-space { width: 34px; flex: none; }
 button.rq-answered { display: block; margin: 14px 0 4px; }
 @media (max-width: 600px) { .rq-revbtns { flex-basis: 100%; } }
-/* blocked days ("blackout") + everyone off a day (2026-10-19) */
+/* blocked days ("blackout") + the "Off counts" chips (2026-10-19) */
 .rq-chip.blocked { background: #2c2f36; color: #fff; }
-.rq-chip.alloff { background: #dde5ef; color: #34506e; }
+.rq-chip.weekly, .rq-chip.both { background: #dde5ef; color: #34506e; }
 button.rq-cell.blocked { background: repeating-linear-gradient(135deg, #f1f2f5 0 6px, #e4e6eb 6px 12px); color: var(--muted2); }
 .rq-blocked { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; margin-bottom: 12px;
   border-radius: 10px; background: #f1f2f5; }
 .rq-blockform { margin-bottom: 12px; }
 .rq-blockform input { width: 100%; }
 .rq-blockwarn { color: #8f6110; font-weight: 600; margin: 4px 0 8px; }
-.rq-unavail { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
-.rq-everyone h4 { margin: 10px 0 4px; font-size: 13px; }
 .rq-evnote { margin: 0 0 4px; font-size: 12.5px; }
