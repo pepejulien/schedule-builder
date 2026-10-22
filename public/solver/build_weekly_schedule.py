@@ -220,16 +220,66 @@ def load_roster(avail_file):
                 mins = parse_wave_time(v)
                 if mins is not None:
                     seed_time[d] = mins
-        rows.append(dict(name=name, tid=str(ws.cell(r, tidc).value or '').strip(),
-                         unav=unav, seed=seed, seed_time=seed_time,
-                         meet=meet, meet_txt=meet_txt,
-                         std_added=set(), unav_why={}, max_days=None, max_row=None,
-                         soft_max_days=None, likes_ot=False,
-                         usual=[], soft=[],
-                         present=0, prim=[], bk=[], helper=[], extra=set()))
+        rows.append(driver_row(name, str(ws.cell(r, tidc).value or '').strip(),
+                               unav=unav, seed=seed, seed_time=seed_time, meet=meet, meet_txt=meet_txt))
     if not rows:
         raise ScheduleConfigError(f"No driver rows found in {avail_file} (no name rows under the header).")
     return rows
+
+
+def driver_row(name, tid='', unav=None, seed=None, seed_time=None, meet=None, meet_txt=None):
+    """One roster entry, as load_roster makes it (also runner.add_driver / extra_drivers)."""
+    return dict(name=name, tid=tid, unav=set(unav or ()), seed=set(seed or ()), seed_time=dict(seed_time or {}),
+                meet=set(meet or ()), meet_txt=dict(meet_txt or {}),
+                std_added=set(), unav_why={}, max_days=None, max_row=None,
+                soft_max_days=None, likes_ot=False,
+                usual=[], soft=[],
+                present=0, prim=[], bk=[], helper=[], extra=set())
+
+
+def before_hire(start, hire_date):
+    """The week's days (Sun..Sat from `start`) before an ISO hire date -> [Day]. Bad / no date = []."""
+    try:
+        h = datetime.date.fromisoformat(str(hire_date or '')[:10])
+    except ValueError:
+        return []
+    return [ALL[j] for j in range(7) if start + datetime.timedelta(days=j) < h]
+
+
+def _fl(name):
+    t = re.sub(r'[^a-z ]', ' ', str(name).lower()).split()
+    return t[0] + '|' + t[-1] if t else ''
+
+
+def on_roster(name, roster):
+    """Is `name` already one of the roster rows? Loose both ways: same first|last ("Kyle Hickman" =
+    "Kyle Stanley Hickman"), or resolve() either way (a nickname / a missing middle name)."""
+    k, n = _fl(name), norm(name)
+    for dr in roster:
+        if (k and _fl(dr['name']) == k) or resolve(name, [norm(dr['name'])]) or resolve(dr['name'], [n]):
+            return True
+    return False
+
+
+def add_extra_drivers(roster, extra, start):
+    """cfg['extra_drivers'] (2026-10-22, Jose: the build gets every active driver): the cloud's
+    active drivers who aren't in the uploaded availability file -- [{name, tid?, hire_date?}] or
+    [name]. A name that already matches a roster row (resolve) is skipped. Added rows have no
+    submitted days off; days before their hire date are Unavailable ("Not hired yet").
+    Mutates roster -> the names added."""
+    added = []
+    for x in extra or []:
+        x = {'name': x} if isinstance(x, str) else dict(x or {})
+        name = re.sub(r'\s+', ' ', str(x.get('name') or '')).strip()
+        if not _is_data_name(name) or on_roster(name, roster):
+            continue
+        dr = driver_row(name, str(x.get('tid') or '').strip())
+        for d in before_hire(start, x.get('hire_date')):
+            dr['unav'].add(d)
+            dr['unav_why'][d] = 'Not hired yet'
+        roster.append(dr)
+        added.append(name)
+    return added
 
 
 def load_prev_worked(prev_file, start_date):
@@ -573,6 +623,7 @@ def build_schedule(cfg, prev_hook=None):
     WSPREAD = cfg.get('weekend_spread', True) and WEEKEND <= set(DAYS)
 
     roster = load_roster(cfg['avail_file'])
+    extra_added = add_extra_drivers(roster, cfg.get('extra_drivers'), start)
     if not USESEED:
         for dr in roster:
             dr['seed'] = set()
@@ -615,6 +666,9 @@ def build_schedule(cfg, prev_hook=None):
         prev_hook(roster, DATEALL, PH)
 
     EXCLUDE, TARGET, MOST, BKX, FBACK, notes = _resolve_named_lists(cfg, roster, rnames)
+    if extra_added:
+        notes.append('ACTIVE DRIVERS not in the availability file, added with no days off '
+                     '(from the cloud roster): ' + ', '.join(extra_added))
     roster = [dr for dr in roster if norm(dr['name']) not in EXCLUDE]
 
     # ---- per-driver preferences (Drivers page, 2026-10) ----

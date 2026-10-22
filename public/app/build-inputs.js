@@ -22,6 +22,9 @@ export function assembleFromWizard(w) {
     nameAliases: w.nameAliases || {},
   };
   const out = assembleConfig(state);
+  // active drivers the availability export didn't have (step-files addActive, 2026-10-22)
+  const extra = w.availability && w.availability.source !== 'live' ? (w.availability.extraDrivers || []) : [];
+  if (extra.length && out.config) out.config.extra_drivers = extra.map((x) => ({ name: x.name, tid: x.tid, hire_date: x.hire_date }));
   out.capacity = capacityCheck(out.config, state.availabilityRosterNames);
   return out;
 }

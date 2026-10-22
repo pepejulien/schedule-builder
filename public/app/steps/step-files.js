@@ -12,13 +12,13 @@ import { useStore, setWizard, toast } from '../store.js';
 import { StepNav, goStep, STEPS } from '../app.js';
 import { Banner, Spinner, Icon, readFileBytes } from '../ui.js';
 import { warmup, editRequest } from '../solver-client.js';
-import { canLive, canTimeoff, liveWeek } from '../api.js';
+import { canLive, canTimeoff, liveWeek, canActiveRoster, activeListOnce } from '../api.js';
 import { loadEngine, prevISO, todayISO } from '../live/live-model.js';
 import { DAYS } from '../lib/waves.js';
 import { isSunday, weekLabel, weekNumberOf, nextSunday, toISODate } from '../lib/weeks.js';
 import { inspectWorkbook, pairUp } from '../lib/file-detect.js';
 import { demandFromPrevSchedule } from '../lib/demand-prefill.js';
-import { liveAvailability } from '../lib/live-availability.js';
+import { liveAvailability, missingActive, withExtraDrivers } from '../lib/live-availability.js';
 import { EXACT_MIN } from '../lib/config-assemble.js';
 
 function DayCell({ cell }) {
@@ -104,6 +104,7 @@ export function StepFiles() {
         }
       }
       patch.week = withLabel(wk);
+      if (a) addActive(patch.availability, wk.startISO);
       // a Live-board input made for another week is stale now
       if (!a && avail && avail.source === 'live' && avail.weekISO !== wk.startISO) patch.availability = null;
       if (!s && prior.weekISO && prior.weekISO !== wk.startISO) patch.priorWeek = { bytes: null, source: null };
@@ -112,6 +113,21 @@ export function StepFiles() {
       setBusy(false);
     }
   }
+
+  // The export path (Jose 2026-10-22): the active drivers the file doesn't have (new hires Amazon
+  // hadn't listed yet) join the build with no days off — the banner below lists them, one click
+  // leaves someone out. The cloud's list is read after the file is in, so a slow read never holds
+  // the drop up; a file swapped meanwhile is left alone.
+  async function addActive(av, weekISO) {
+    if (!canActiveRoster() || !av) return;
+    const active = await activeListOnce();
+    const extra = missingActive(av.rosterNames, active, weekISO);
+    if (!extra.length) return;
+    setWizard((w) => (w.availability && w.availability.bytes === av.bytes
+      ? { availability: withExtraDrivers(w.availability, extra, weekISO) } : {}));
+  }
+  const leaveOut = (name) => setWizard((w) => ({ availability: withExtraDrivers(w.availability,
+    (w.availability.extraDrivers || []).filter((x) => x.name !== name), week.startISO) }));
 
   // Next week's availability from Driver preferences + the days off asked for
   // on the Live board's future week (lib/live-availability.js).
@@ -180,10 +196,12 @@ export function StepFiles() {
     if (!avail || !prior.bytes) return;
     const a = inspectWorkbook(prior.bytes, prior.fileName);
     if (a.kind === 'unknown') { setErr(a.error); return; }
+    const av = availFrom(prior.fileName, prior.bytes, a.parsed);
     setWizard({
-      availability: availFrom(prior.fileName, prior.bytes, a.parsed),
+      availability: av,
       priorWeek: { bytes: avail.bytes, source: 'upload', fileName: avail.fileName },
     });
+    addActive(av, week.startISO);
   }
 
   // A new Sunday brings its week number along, and a Live-board input made for
@@ -281,6 +299,11 @@ export function StepFiles() {
           shouldn't drive (a dispatcher or manager) goes under the exclusions there.<//>` : ''}
         ${(avail.left || []).length ? html`<p class="muted small" style="margin:6px 2px 0">Not active any more, so left out:${' '}
           ${avail.left.join(', ')}.</p>` : ''}` : ''}
+      ${avail && avail.source !== 'live' && (avail.extraDrivers || []).length ? html`<${Banner} kind="info">
+        <b>Active, not in this file</b> — added to the build with no days off (they're on the dispatch report's list):${' '}
+        ${avail.extraDrivers.map((x, i) => html`${i ? ', ' : ''}${x.name}${x.hire_date ? html` <span class="muted">(hired ${x.hire_date})</span>` : ''}${' '}
+          <button class="link" onClick=${() => leaveOut(x.name)}>leave out</button>`)}.
+        A new hire needs a training pair in <b>Trainers & settings</b>.<//>` : ''}
       ${avail && avail.source !== 'live' && prior.bytes ? html`<p class="muted" style="margin:6px 2px 0">Wrong way round?${' '}<button class="link" onClick=${swap}>Swap the two files</button></p>` : ''}
 
       <h3>Week</h3>

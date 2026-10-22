@@ -258,7 +258,11 @@ export function actualHoursOnce(weekISO, ms = 6000) {
 // -> [name] | null (no answer / not readable). The offline cache can answer first with an old
 // copy, so this keeps the newest snapshot until none has come for `settle` ms.
 export const canActiveRoster = canActual;
-export function activeDriversOnce(ms = 6000, settle = 1500) {
+export const activeDriversOnce = (ms, settle) => activeListOnce(ms, settle).then((x) => (x ? x.drivers : null));
+// The same list with each driver's {tid, hireDate} (2026-10-22, dispatch/lists.driverInfo: role
+// driver only — dispatch / management aren't in it; {} before the cloud wrote it).
+// -> {drivers: [name], info: {name: {tid, hireDate}}} | null
+export function activeListOnce(ms = 6000, settle = 1500) {
   if (!canActiveRoster()) return Promise.resolve(null);
   return new Promise((resolve) => {
     let done = false, un = null, last = null, quiet = null;
@@ -266,7 +270,8 @@ export function activeDriversOnce(ms = 6000, settle = 1500) {
       if (done) return;
       done = true; clearTimeout(t); clearTimeout(quiet); setTimeout(() => un && un(), 0);
       const list = last && Array.isArray(last.drivers) ? last.drivers.filter((n) => typeof n === 'string' && n.trim()) : null;
-      resolve(list && list.length ? list : null);
+      const info = last && last.driverInfo && typeof last.driverInfo === 'object' ? last.driverInfo : {};
+      resolve(list && list.length ? { drivers: list, info } : null);
     };
     const t = setTimeout(finish, ms);
     un = window.JAJB.watch('dispatch/lists', (d) => {

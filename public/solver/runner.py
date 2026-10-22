@@ -61,7 +61,7 @@ import re
 
 from build_weekly_schedule import (
     load_config, build_schedule, write_xlsx, check_invariants, print_summary,
-    ScheduleConfigError, FREE_name, norm, ALL as ALL_DAYS, Result,
+    ScheduleConfigError, FREE_name, norm, ALL as ALL_DAYS, Result, driver_row, before_hire, on_roster,
     _open_shifts_sheet, _layout, _is_data_name, fmt_wave_time, days7, days7_worst,
 )
 
@@ -1118,10 +1118,14 @@ def _snapshot(res):
         ovr_policy=set(_STATE["ovr_policy"]),
         ovr_limits=set(_STATE.get("ovr_limits", set())),
         marks=copy.deepcopy(_STATE["marks"]),
+        n=len(res.roster),                       # add_driver: undo takes the new row off again
     )
 
 
 def _restore(res, snap):
+    if len(res.roster) > snap.get("n", len(res.roster)):
+        del res.roster[snap["n"]:]
+        res.idx = {norm(dr["name"]): i for i, dr in enumerate(res.roster)}
     for dr, a in zip(res.roster, snap["assign"]):
         dr["prim"][:] = a["prim"]
         dr["bk"][:] = a["bk"]
@@ -2154,6 +2158,48 @@ def clear_left(payload_json):
                 del _STATE["marks"][d]
         _STATE["edits"].append(f"{name} is back on the schedule (no longer marked as left) - "
                                "their old shifts were not put back")
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def add_driver(payload_json):
+    """payload: {name, tid?, hire_date?: ISO}. A driver who isn't on this week's schedule (a new
+    hire who wasn't in the uploaded availability file - Jose 2026-10-22: "the live schedule gets
+    the active drivers automatically") joins the week as an empty row: no shifts, no submitted
+    days off; days before their hire date are Unavailable ("Not hired yet"). Shifts are added as
+    for anyone else (and Route Tracker's sync fills the days they already worked). Someone the
+    build left out on purpose (the config's exclude list: dispatch / management) is refused."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        name = re.sub(r"\s+", " ", str(p.get("name") or "")).strip()
+        if not name:
+            return json.dumps(dict(ok=False, kind="edit", message="No name given."))
+        if on_roster(name, res.roster):
+            return json.dumps(dict(ok=False, kind="edit",
+                                   message=f"{name} is already on this week's schedule."))
+        if on_roster(name, [dict(name=x) for x in (cfg or {}).get("exclude") or []]):
+            return json.dumps(dict(ok=False, kind="edit",
+                message=f"{name} is left out of this week on purpose (dispatch / management)."))
+        _STATE["undo"].append(_snapshot(res))
+        dr = driver_row(name, str(p.get("tid") or "").strip())
+        dr["w_prev"] = set()
+        late = before_hire(res.DATEALL["Sun"], p.get("hire_date"))
+        for d in late:
+            dr["unav"].add(d)
+            dr["unav_why"][d] = "Not hired yet"
+        res.roster.append(dr)
+        res.idx = {norm(x["name"]): i for i, x in enumerate(res.roster)}
+        desc = f"{name} added to the week (on the active roster, not in this week's availability file)"
+        if late:
+            desc += f" - not hired yet on {', '.join(late)}"
+        _STATE["edits"].append(desc)
         chk = _verify(res)
         res.infeasible = _recount_short(res, chk)
         _save_out(res)

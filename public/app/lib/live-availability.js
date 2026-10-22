@@ -10,7 +10,7 @@
 // off added after this step still counts. The days off here are only for the preview.
 import * as XLSX from '../../vendor/xlsx.mjs';
 import { DAYS } from './waves.js';
-import { parseISODate, addDays } from './weeks.js';
+import { parseISODate, addDays, toISODate as toISO } from './weeks.js';
 import { weekUnavailable, WHY_LABEL } from './driver-prefs.js';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -80,4 +80,46 @@ export async function liveAvailability(weekStartISO) {
     added: all.filter((r) => r.isNew).map((r) => r.name),
     left: fromActive ? all.filter((r) => !r.active).map((r) => r.name) : [],
   };
+}
+
+// The availability EXPORT path (Jose 2026-10-22: "the build gets every active driver"): the active
+// drivers (role driver, dispatch/lists.driverInfo) the dropped file doesn't have — new hires Amazon
+// hadn't listed yet. Same person = same first|last name. Hired after the week ends = not yet.
+// -> [{name, tid, hire_date}] (pure; `active` = activeListOnce()'s answer)
+export function missingActive(rosterNames, active, weekStartISO) {
+  if (!active || !active.drivers) return [];
+  const fl = (s) => { const t = String(s || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean);
+    return t.length ? t[0] + '|' + t[t.length - 1] : ''; };
+  const have = new Set((rosterNames || []).map(fl));
+  const info = active.info || {};
+  const drivers = Object.keys(info).length ? active.drivers.filter((n) => info[n]) : active.drivers;
+  const end = weekStartISO ? toISO(addDays(parseISODate(weekStartISO), 6)) : '';
+  const out = [];
+  for (const name of drivers) {
+    const k = fl(name);
+    if (!k || have.has(k)) continue;
+    have.add(k);
+    const i = info[name] || {};
+    const hire = String(i.hireDate || '').slice(0, 10);
+    if (end && hire && hire > end) continue;
+    out.push({ name, tid: String(i.tid || ''), hire_date: hire });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// The availability with those drivers added as rows (no days off; days before the hire date shown
+// "Not hired yet" — the build does the same from extra_drivers). -> a new availability object
+export function withExtraDrivers(avail, extra, weekStartISO) {
+  const start = weekStartISO ? parseISODate(weekStartISO) : null;
+  const rows = (extra || []).map((x) => {
+    const days = {};
+    DAYS.forEach((d, i) => {
+      const before = start && x.hire_date && toISO(addDays(start, i)) < x.hire_date;
+      days[d] = before ? { kind: 'unavail', text: 'Not hired yet' } : { kind: '', text: '' };
+    });
+    return { name: x.name, days, added: true };
+  });
+  const drivers = [...(avail.drivers || []).filter((d) => !d.added), ...rows];
+  return { ...avail, extraDrivers: extra || [], drivers, rosterNames: drivers.map((d) => d.name),
+    counts: { ...avail.counts, drivers: drivers.length } };
 }

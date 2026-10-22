@@ -1,7 +1,7 @@
 // Next week's availability from the Live board + Driver preferences (2026-10-09):
 // public/app/lib/live-availability.js.   node tests/live_availability_test.mjs
 import { writeFileSync } from 'node:fs';
-import { makeAvailability } from '../public/app/lib/live-availability.js';
+import { makeAvailability, missingActive, withExtraDrivers } from '../public/app/lib/live-availability.js';
 import { markActive, personKey } from '../public/app/lib/driver-prefs.js';
 import { inspectWorkbook } from '../public/app/lib/file-detect.js';
 import { weekNumberOf, nextSunday, toISODate } from '../public/app/lib/weeks.js';
@@ -54,6 +54,25 @@ eq('shared key: only the exact one', [by['Sam Lee'].active, by['Sam J Lee'].acti
 eq('left: not active', by['Gone Away'].active, false);
 eq('sorted', m.map((r) => r.name), ['Aaron Bell', 'Bea Cole', 'Gone Away', 'Sam J Lee', 'Sam Lee', 'Sylvia Slate']);
 ok('input not changed', !('active' in cur[0]));
+
+// the export path: active drivers the file doesn't have (2026-10-22)
+{
+  const active = { drivers: ['Alicia Marie Fogle', 'Kyle Stanley Hickman', 'Ben Carter', 'Zack Desk', 'Gus Later'],
+    info: { 'Alicia Marie Fogle': { tid: 'T1', hireDate: '2026-10-20' }, 'Kyle Stanley Hickman': { tid: 'T2', hireDate: '2026-10-20' },
+      'Ben Carter': { tid: 'T3', hireDate: '2025-01-01' }, 'Gus Later': { tid: 'T4', hireDate: '2026-11-02' } } };
+  const m = missingActive(['Ben Q Carter', 'Ann Old'], active, '2026-10-18');
+  eq('missing: not in file, drivers only, hired by week end', m.map((x) => x.name), ['Alicia Marie Fogle', 'Kyle Stanley Hickman']);
+  eq('missing: tid + hire date', m[0], { name: 'Alicia Marie Fogle', tid: 'T1', hire_date: '2026-10-20' });
+  eq('no info yet: whole list', missingActive(['Ben Carter'], { drivers: ['Ben Carter', 'Zed New'], info: {} }, '2026-10-18').map((x) => x.name), ['Zed New']);
+  eq('no active list: nothing', missingActive(['x'], null, '2026-10-18'), []);
+  const av = { drivers: [{ name: 'Ben Q Carter', days: {} }], rosterNames: ['Ben Q Carter'], counts: { drivers: 1, unavail: 0, seed: 0, meeting: 0 } };
+  const w = withExtraDrivers(av, m, '2026-10-18');
+  eq('rows added', w.rosterNames, ['Ben Q Carter', 'Alicia Marie Fogle', 'Kyle Stanley Hickman']);
+  eq('count', w.counts.drivers, 3);
+  eq('not hired yet Sun+Mon, Tue open', [w.drivers[1].days.Sun.text, w.drivers[1].days.Mon.text, w.drivers[1].days.Tue.text], ['Not hired yet', 'Not hired yet', '']);
+  const w2 = withExtraDrivers(w, m.slice(1), '2026-10-18');
+  eq('leave out one', w2.rosterNames, ['Ben Q Carter', 'Kyle Stanley Hickman']);
+}
 
 if (process.argv[2]) writeFileSync(process.argv[2], Buffer.from(a.bytes));   // for the solver check
 console.log(`live_availability: ${pass} passed, ${fail} failed`);
