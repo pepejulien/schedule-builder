@@ -11,6 +11,7 @@ import { storeGet, loadTrainingHistory, saveTrainingWeek, canLive, liveWeek, liv
 import { saveWeek, actualList, prevISO, prevWorkedFrom } from '../live/live-model.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate as pd } from '../lib/weeks.js';
+import { candGroup, groupClass } from '../lib/cand-groups.js';
 import { GROUP_OPTIONS } from '../lib/config-assemble.js';
 import { AdvancedPanel } from './advanced-panel.js';
 import { buildReq, saveEngine, restoreEngine, runAsking, coverage, openSummary, CoverageCard, WeekGrid, DayMenu, PickDriver,
@@ -271,12 +272,13 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
   const GROUPS = [
     ['ok', 'Safe — no rule would break'],
     ['warn', 'Allowed, but will be flagged'],
-    ['confirm', '6 days in 7 / overtime — allowed after a pop-up'],
+    ['confirm', 'Overtime — allowed after a pop-up'],
+    ['confirm6', '6 days out of 7 — allowed after a pop-up'],
     ['unavail', 'Day off — needs a confirmed override'],
     ['blocked', 'Locked — compliance rule'],
   ];
   const byStatus = {};
-  for (const c of (st.list || [])) (byStatus[c.status] = byStatus[c.status] || []).push(c);
+  for (const c of (st.list || [])) (byStatus[candGroup(c)] = byStatus[candGroup(c)] || []).push(c);
 
   return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="edit-modal card">
@@ -298,7 +300,7 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
         const list = byStatus[status];
         if (!list || !list.length) return '';
         return html`<div class="cand-group">
-          <h4 class=${'cand-h ' + status}>${label} (${list.length})</h4>
+          <h4 class=${'cand-h ' + groupClass(status)}>${label} (${list.length})</h4>
           ${list.map((c) => {
             const meta = TIER_META[c.cls] || TIER_META.free;
             const nDays = c.road_days.length + c.backup_days.length;
@@ -307,7 +309,7 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
               c.backup_days.length ? 'Bk: ' + wkJoin(c.backup_days) : '',
             ].filter(Boolean).join(' · ') || 'no days yet';
             const clickable = status !== 'blocked';
-            return html`<div class=${'cand ' + status}>
+            return html`<div class=${'cand ' + c.status}>
               <button class="cand-pick" disabled=${busy || !clickable}
                 onClick=${() => clickable && onPick(c.name)}>${status === 'blocked' ? '🔒 ' : ''}${c.name}</button>
               <span class="chip ${meta.chip}">${meta.short}</span>

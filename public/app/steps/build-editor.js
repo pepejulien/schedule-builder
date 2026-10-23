@@ -13,6 +13,7 @@ import { editRequest } from '../solver-client.js';
 import { cellInfo, SHIFT_COLORS, WAVE_COLORS } from '../live/live-model.js';
 import { CountsEditor, waveMins, waveBg } from '../live/counts-editor.js';
 import { parseISODate } from '../lib/weeks.js';
+import { candGroup, groupClass } from '../lib/cand-groups.js';
 import { TIER_META, TIER_ORDER, ConfirmOverride, LimitConfirm, runConfirmed } from './step9-build.js';
 
 const DAY_IDX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
@@ -143,7 +144,8 @@ export function CoverageCard({ r, busy, onFind, onCounts }) {
 const GROUPS = [
   ['ok', 'Safe — no rule breaks'],
   ['warn', 'Allowed, but flagged — a company policy (day targets, Fair caps, backup rules)'],
-  ['confirm', '6-day or overtime — allowed after a pop-up'],
+  ['confirm', 'Overtime — allowed after a pop-up'],
+  ['confirm6', '6 days out of 7 — allowed after a pop-up'],
   ['unavail', 'Asked for the day off — you confirm by typing their name'],
   ['blocked', 'Locked — 12h a day, 60h in 7 days, 7 days in a row, or a clash'],
 ];
@@ -171,13 +173,13 @@ function Grouped({ list, busy, onPick, q, row }) {
   const shown = qf ? list.filter((c) => fold(c.name).includes(qf)) : list;
   if (!shown.length) return html`<p class="muted">${qf ? `Nobody matches “${q.trim()}”.` : 'Nobody to list.'}</p>`;
   return GROUPS.map(([status, label]) => {
-    const g = shown.filter((c) => c.status === status);
+    const g = shown.filter((c) => candGroup(c) === status);
     if (!g.length) return '';
     if (status === 'blocked' && !showBlocked && !qf) {
       return html`<p class="muted"><button class="link" onClick=${() => setShowBlocked(true)}>Show the ${g.length} who can't (and why)</button></p>`;
     }
     return html`<div class="cand-group">
-      <h4 class=${'cand-h ' + status}>${label} (${g.length})</h4>
+      <h4 class=${'cand-h ' + groupClass(status)}>${label} (${g.length})</h4>
       ${g.map((c) => (row ? row(c) : html`<${CandRow} c=${c} busy=${busy} onPick=${onPick} />`))}
     </div>`;
   });

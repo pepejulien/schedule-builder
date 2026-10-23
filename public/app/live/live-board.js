@@ -32,6 +32,7 @@ import {
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 import { FutureWeek } from './future-week.js';
+import { candGroup, groupClass } from '../lib/cand-groups.js';
 import { DayList, DayPills, firstDay } from './day-list.js';
 import { OffersStrip, OfferDayLine, OfferDot } from './offers.js';
 import { TradesStrip } from './trades.js';
@@ -622,7 +623,8 @@ function Finder({ view, finder, setFinder, ready, rev, busy, onPick, picked, onU
   const open = info ? (finder.role === 'road' ? info.routes - info.routes_filled : info.backup - info.backup_filled) : 0;
   const list = (st && st.list) || [];
   const groups = [['ok', 'Can work — no rule breaks'], ['warn', 'Can work — breaks a company policy (flagged)'],
-    ['confirm', '6 days in 7 / overtime — can work after a pop-up'],
+    ['confirm', 'Overtime — can work after a pop-up'],
+    ['confirm6', '6 days out of 7 — can work after a pop-up'],
     ['unavail', 'Asked for the day off — needs your confirmation'],
     ['blocked', 'Can\'t — compliance rule (12h a day, 60h in 7 days, 7 days in 7, clashes)']];
   const [showBlocked, setShowBlocked] = useState(false);
@@ -643,16 +645,16 @@ function Finder({ view, finder, setFinder, ready, rev, busy, onPick, picked, onU
     ${st && st.loading ? html`<p class="muted"><${Spinner}/> Checking every driver…</p>` : ''}
     ${st && st.error ? html`<${Banner} kind="err">${st.error}<//>` : ''}
     ${groups.map(([status, label]) => {
-      const g = list.filter((c) => c.status === status);
+      const g = list.filter((c) => candGroup(c) === status);
       if (!g.length) return '';
       if (status === 'blocked' && !showBlocked) {
         return html`<p class="muted"><button class="link" onClick=${() => setShowBlocked(true)}>Show the ${g.length} who can't (and why)</button></p>`;
       }
       return html`<div class="cand-group">
-        <h4 class=${'cand-h ' + status}>${label} (${g.length})</h4>
+        <h4 class=${'cand-h ' + groupClass(status)}>${label} (${g.length})</h4>
         ${g.map((c) => {
           const meta = TIER_META[c.cls] || TIER_META.free;
-          return html`<div class=${'cand ' + status}>
+          return html`<div class=${'cand ' + c.status}>
             <button class="cand-pick" disabled=${busy || status === 'blocked'}
               onClick=${() => onPick(c, open > 0)}>${status === 'blocked' ? '🔒 ' : '+ '}${c.name}</button>
             <span class="chip ${meta.chip}">${meta.short}</span>

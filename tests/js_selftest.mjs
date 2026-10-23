@@ -7,6 +7,7 @@ import { normalizePortal, portalToSchedule, scheduleToPortal } from '../public/a
 import { norm, resolveFuzzy, matchName } from '../public/app/lib/names.js';
 import { deriveGroup, hasTierOverlap, assembleConfig, trainerRotation, AUTO_TRAINER } from '../public/app/lib/config-assemble.js';
 import { weekLabel, isSunday } from '../public/app/lib/weeks.js';
+import { candGroup, groupClass } from '../public/app/lib/cand-groups.js';
 import { driverCsv } from '../public/app/lib/driver-csv.js';
 import { readiness } from '../public/app/readiness.js';
 import { joinChunks } from '../public/app/lib/board-fetch.js';
@@ -708,6 +709,18 @@ const hm10 = (x) => `${((Math.floor(x / 60) + 11) % 12) + 1}:${String(x % 60).pa
   eq('missingDays: without bk the 0h day would be asked', missingDays(summary, [other, { ...list[2], bk: undefined }], {}, T).map((x) => x.name), ['Zed Zero']);
   eq('backupDays keeps the 0', backupDays(list)('Zed Zero'), { '2026-10-06': 0 });
   eq('actualList keeps bk 0', actualList({ drivers: { z: list[2] } })[0].bk, { '2026-10-06': 0 });
+}
+
+// ---- 2026-10-23: overtime and 6 days out of 7 listed apart ----
+{
+  const ot = { status: 'confirm', limits: ['overtime: road hours go to 50h (over 40h)'] };
+  const six = { status: 'confirm', limits: ['6-day: would work 6 days in 7 (Sun 10/25-Sat 10/31; usual max 5)'] };
+  const both = { status: 'confirm', limits: ['6-day: a 6th worked day this week (usual max 5)', 'overtime: road hours go to 52h (over 40h)'] };
+  eq('candGroup overtime only', candGroup(ot), 'confirm');
+  eq('candGroup 6-day', candGroup(six), 'confirm6');
+  eq('candGroup 6-day + overtime', candGroup(both), 'confirm6');
+  eq('candGroup other status', candGroup({ status: 'warn', reasons: ['6-day: x'] }), 'warn');
+  eq('groupClass confirm6', groupClass('confirm6'), 'confirm');
 }
 
 console.log(`\n${pass}/${pass + fail} passed`);
