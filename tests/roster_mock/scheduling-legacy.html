@@ -22,6 +22,9 @@
   ?chosenonly=1 (the page ignores a plain "change" event: roster.js must pick through Chosen)
   ?flag=A-TINA (picking that Transporter ID shows a red ! : roster.js must empty the row again)
   ?filter=1 (Standard Parcel's Start Time filter set)  ?bar=Sun%2011-Oct (date bar disagrees)
+  ?set=engine (Jose 2026-10-23): the day of the REAL engine week seeded by seed-moves.js (Standard Parcel
+  only: 11:05 am 2 rows, 11:25 am 2 rows) — Casey Church is left over at 11:05 and moved to 11:25, and
+  the Live board must then show her at 11:05 AM (schedule) with the counts moved (window "jajbRosterMoves")
   window.__mock.log lists clicks on Save / Cancel / SUBMIT / X / Auto Roster / Bulk Import /
   the pop-up (roster.js must leave it empty); window.__mock.picked() lists unsaved picks.
 -->
@@ -110,20 +113,27 @@
   const AREA = "Davisville (WWV9) - Amazon.com";
 
   // Amazon's associate list (value = Transporter ID). No phone → "Name  Station"; inactive → "… (Inactive)".
-  const PEOPLE = [
+  const ENGINE = params.get("set") === "engine";
+  const PEOPLE = (ENGINE ? [
+    ["Alex Keller", "A0010", "+13045550201"], ["Bianca Cole", "A0005", "+13045550202"], ["Casey Church", "A0007", "+13045550203"],
+    ["Colin Drake", "A0006", "+13045550204"], ["Connor Stephenson", "A0012", "+13045550205"], ["Daniel Lynch", "A0001", "+13045550206"],
+    ["Grace Nolan", "A0009", "+13045550207"], ["Olga Pre", "A-OLGA", "+13045550112"],
+  ] : [
     ["Adam James Scott", "A-ADAM", "+13045550101"], ["Amy Early", "A-AMY", "+13045550102"], ["Barry Len Hughes", "A-BARRY", "+13045550103"],
     ["Bea Ready", "A-BEA", "+13045550104"], ["Cara Amos", "A-CARA", "+13045550105"], ["Carl Dee Fox", "A-CARL", ""],
     ["Dora Moss", "A-DORA", "+13045550107"], ["Eli Grant", "A-ELI", "+13045550108"], ["Hank Hours", "A-HANK", "+13045550109", true],
     ["José Núñez", "A-JOSE", "+13045550110"], ["Michael Rowe", "T-MIKE", "+13045550111"], ["Olga Pre", "A-OLGA", "+13045550112"],
     ["Pat Quinn", "A-PAT", "+13045550113"], ["Sam K Lee", "A-SAMK", "+13045550114"], ["Sam Lee", "A-SAM", "+13045550115"],
     ["Steven Dale Heilmann", "A-STEVE", "+13045550116"], ["Tina Trainee", "A-TINA", "+13045550117"],
-  ].map(([name, tid, phone, inactive]) => ({ name, tid, phone, inactive: !!inactive })).sort((a, b) => a.name.localeCompare(b.name));
+  ]).map(([name, tid, phone, inactive]) => ({ name, tid, phone, inactive: !!inactive })).sort((a, b) => a.name.localeCompare(b.name));
   const textOf = (p) => { const t = p.name + " " + p.phone + " " + AREA; return p.inactive ? t + " (Inactive)" : t; };
   const byTid = Object.fromEntries(PEOPLE.map((p) => [p.tid, p]));
 
   // the day's services; [time, saved Transporter ID or ""] per row
   const rows = (spec) => spec.flatMap(([time, n, filled]) => Array.from({ length: n }, (_, i) => ({ time, saved: (filled || {})[i] || "" })));
-  const SVC = [
+  const SVC = ENGINE ? [
+    { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours", rows: rows([["11:05 am", 2], ["11:25 am", 2]]) },
+  ] : [
     { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours",
       rows: rows([["10:25 am", 4, { 0: "A-OLGA" }], ["10:45 am", 9, { 2: "A-STEVE" }]]) },
     { heading: "WW Hub Transport - CDV 16FT - Default as station - 10 Hours", rows: rows([["10:25 am", 1]]) },
@@ -138,12 +148,15 @@
 
   window.__mock = { log, picked: () => allRows().filter((r) => r.value !== r.saved).map((r) => [r.svc.short, r.time, r.value, byTid[r.value] ? byTid[r.value].name : ""]) };
 
-  // ?frame=1: an iframe named "jajbRoster" catches roster.js's window.open(…, "jajbRoster", …)
+  // ?frame=1: an iframe named "jajbRoster" catches roster.js's window.open(…, "jajbRoster", …), and one
+  // named "jajbRosterMoves" the Live board moves window (Jose 2026-10-23)
   if (params.get("frame") === "1") {
-    const f = document.createElement("iframe");
-    f.name = "jajbRoster"; f.title = "app window (test)";
-    f.style.cssText = "position:fixed;left:8px;bottom:8px;width:440px;height:260px;border:2px dashed #7a1f1f;background:#fff;z-index:5";
-    document.body.appendChild(f);
+    [["jajbRoster", 8], ["jajbRosterMoves", 456]].forEach(([nm, left]) => {
+      const f = document.createElement("iframe");
+      f.name = nm; f.title = nm + " (test)";
+      f.style.cssText = `position:fixed;left:${left}px;bottom:8px;width:440px;height:260px;border:2px dashed #7a1f1f;background:#fff;z-index:5`;
+      document.body.appendChild(f);
+    });
   }
   document.getElementById("runbm").onclick = () => {
     const s = document.createElement("script");

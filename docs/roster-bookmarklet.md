@@ -29,6 +29,8 @@ computer without re-adding the bookmark.
 |---|---|
 | `public/roster.js` | Runs inside Amazon's page. Panel, hand-off, filling. Plain script, no imports. |
 | `public/app/roster-send.js` (+ hook in `main.js`) | App opened as `#roster=YYYY-MM-DD`: reads the Live board, sends the day. |
+| `public/app/roster-moves.js` (+ hook in `main.js`) | App opened as `#roster-moves=YYYY-MM-DD`: moves the drivers Amazon got at another start time on the Live board too (2026-10-23). |
+| `public/solver/runner.py` `apply_wave` `move_count` | The engine op for that: the driver's route and one route count move to the new wave together. |
 | Live board toolbar | The draggable `🧾 Roster to Amazon` bookmark link + one-line how-to. |
 | `tests/roster_mock/scheduling-legacy.html` | Local copy of the legacy page for testing (README there). |
 
@@ -78,11 +80,61 @@ computer without re-adding the bookmark.
 - Another start time (Jose 2026-10-23): Amazon's wave split often differs from the
   schedule's. A driver left over at their start time, or whose start time has no rows on
   Amazon, goes into a spare empty row at the nearest other start time (later one on a tie).
-  The panel says "Moved to 10:45 AM" / "Moved here from 10:25 AM". This happens on Amazon's
-  page only; the Live board doesn't change.
+  The panel says "Moved to 10:45 AM" / "Moved here from 10:25 AM". Once their pick is in,
+  the Live board is moved to match (next section).
 - Report in the panel: filled N of M; not in Amazon's list; more than one match;
   already on a row; left over (fewer empty rows than drivers); empty rows left; start
   times with no rows on Amazon; services left for dispatch.
 - Last line, always: "Nothing is saved yet. Check the screen, then press **Save** (under
   the Standard Parcel rows) yourself." Never Save, Cancel, SUBMIT, Auto Roster, Bulk
   Import or a red X.
+
+## The Live board follows a moved driver (Jose 2026-10-23)
+Example: Sat Oct 24, Tiamia Allen Schwalbe is `10:05 AM` on the Live board; Amazon has no
+spare 10:25 am row, so the bookmark puts her on Amazon's 10:45 am (= schedule 10:25 AM).
+After the fill the Live board shows her at 10:25 AM, so the two match.
+
+**Rule.** Only a driver whose pick actually went in on Amazon (status "placed") is moved.
+On the Live board their route moves to the new wave **with its count**: that day's wave
+counts get one less at the old time and one more at the new one, the day's total stays
+(the board's per-wave route counts are exact). One engine call per driver
+(`apply_wave {day, name, wave, move_count: true, note: "to match Amazon"}`), all of them in
+**one save** (expected rev, like any Live board change), one change-log line each:
+`Moved Tiamia Allen Schwalbe Sat 10:05 AM -> 10:25 AM to match Amazon (routes 10:05 AM 9->8, 10:25 AM 11->12)`.
+Nothing else changes. Not moved (with a plain why, and dispatch changes it by hand):
+- the driver isn't at the old time on the Live board any more ("the Live board changed — not
+  at 10:05 AM any more"; a Live board saved since Amazon's page read it is read again and each
+  driver checked again, and a save someone else beat is read again and redone, up to 3 tries);
+- a trainee / trainer: the engine never splits a training pair (training days change only
+  by a rebuild), so it's refused ("in a training pair with X — the trainee and trainer can't
+  be moved apart");
+- the new time isn't a wave on the Live board that day; not on the week; no engine saved.
+Like Amazon's own picks, this happens before dispatch presses Save on Amazon.
+
+**Hand-off contract (window.postMessage)**
+1. On **Fill**, when the plan has a moved driver, `roster.js` opens
+   `APP + "?r=<time>#roster-moves=" + date` in a window named `jajbRosterMoves`
+   (`width=440,height=560`) — inside the click, so pop-up blocking doesn't stop it.
+2. The app page (`roster-moves.js`) checks sign-in + Schedule Builder access, reads that week
+   and loads its rules engine while Amazon is filled, and posts
+   `{type: "jajb-roster-moves-ready"}` to `window.opener` every second (targetOrigin Amazon's
+   origin; the test origin too when `localStorage['jajb-roster-test-origin']` is set).
+3. Once the fill is over (or stopped, or the panel closed mid-fill), `roster.js` answers the
+   next ready (`e.origin === APP_ORIGIN`, `e.source` = the window it opened) once with
+   ```js
+   { type: "jajb-roster-moves", date: "2026-10-24", week: "2026-10-18", rev: 12 /* the roster hand-off's */,
+     moves: [ { name: "Tiamia Allen Schwalbe", tid: "A1B2…"|null,
+                from: "10:05 AM", to: "10:25 AM" /* schedule times */ } ] }
+   ```
+   `from` is the driver's schedule time from the roster hand-off; `to` is Amazon's start time
+   −20 min (`toSched` in roster.js, checked against `portalToSchedule` by the test). An empty
+   list is sent too, so the window closes itself.
+4. The app accepts it only from `window.opener` at an allowed origin, checks it (that day,
+   schedule times, at most 200), moves the drivers, and answers that origin only:
+   `{type: "jajb-roster-moves-done", date, results: [{name, ok, why?}], error?}`.
+   Full success: "Live board updated…" and it closes after ~4 s; any failure: it stays open.
+5. `roster.js` waits up to 90 s for the ready / the answer (the engine may still be loading)
+   and adds to the final panel, above the Save line (the Moved to / Moved here lines stay):
+   "**Live board updated:** Tiamia Allen Schwalbe → 10:25 AM", or per driver
+   "Live board NOT updated for X: <why> — change it there by hand (to 10:25 AM)."
+   An answer that comes after the 90 s still replaces the line.

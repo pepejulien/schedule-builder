@@ -41,6 +41,25 @@ pick → Amazon's "discard?" pop-up shows and roster.js stops without answering 
 disagrees with the address → stops). `dispatch.html?date=2026-10-10&serviceAreaId=x` (the
 old copy of the new Dispatch page) now only gets "turn on Legacy view" with a link.
 
+With this seed (no rules engine saved) Dora's Live board move answers "Live board NOT updated for
+Dora Moss: That Live board week has no rules engine saved — change it there by hand (to 10:25 AM)."
+
+### Moved driver → the Live board follows (Jose 2026-10-23)
+1. `python tests/live_mock/make_seed.py` once (writes `tests/fixtures/live-seed.json`, a real engine week).
+2. In the http://localhost:8777 tab, paste `seed-moves.js` into the console: the engine week 2026-10-04
+   (Sat Oct 10: 10:45 AM Alex Keller, Colin Drake, Casey Church; 11:05 AM Grace Nolan), its change log
+   emptied, + the test origin.
+3. Open http://localhost:8791/scheduling-legacy.html?frame=1&set=engine (Standard Parcel only: 11:05 am
+   2 rows, 11:25 am 2 rows), **Run the bookmark (test)**, then **Fill 4 rows**. `?frame=1` also adds an
+   iframe named `jajbRosterMoves` for the moves window.
+Expected: Casey Church moved to 11:25 AM on the page; the moves window says "Live board updated to match
+Amazon (1 driver)"; the panel adds "Live board updated: Casey Church → 11:05 AM" above the Save line. The
+mock Live board week is then rev 2: Casey Sat `11:05 AM`, Sat waves `10:45 AM 2, 11:05 AM 2` (was 3 / 1),
+total 4, change log "Moved Casey Church Sat 10:45 AM -> 11:05 AM to match Amazon (routes 10:45 AM 3->2,
+11:05 AM 1->2)". Write another save of that week between Run and Fill (rev 2): still moved, saved as rev 3.
+Put a copy where Casey is already at 11:05 AM there instead: "Live board NOT updated for Casey Church: the
+Live board changed — not at 10:45 AM any more", nothing saved. Remove the test-origin key when done.
+
 ## Week bookmark (schedweek.js) — same servers
 1. In the http://localhost:8777 tab, paste `seed-week.js` into the console (NEXT week + the test origin;
    the mock page shows the same week, so no day is "already over").

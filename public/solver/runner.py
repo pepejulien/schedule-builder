@@ -1843,9 +1843,12 @@ def wave_options(payload_json):
 
 
 def apply_wave(payload_json):
-    """payload: {day, name, wave, swap_name?}. Move the driver's shift on
-    `day` into `wave`. Roads require `swap_name` (a plain-route holder of the
-    target wave) so per-wave counts stay exact; backups just relabel."""
+    """payload: {day, name, wave, swap_name?, move_count?, note?}. Move the driver's
+    shift on `day` into `wave`. Roads require `swap_name` (a plain-route holder of
+    the target wave) so per-wave counts stay exact; backups just relabel.
+    move_count (the Roster bookmark, Jose 2026-10-23): no swap -- one route count
+    moves with the driver instead (one less at their wave, one more at `wave`, the
+    day's total stays), to match Amazon's own wave split; `note` goes in the log line."""
     try:
         p = json.loads(payload_json)
         res, cfg = _STATE.get("res"), _STATE.get("cfg")
@@ -1873,6 +1876,19 @@ def apply_wave(payload_json):
             _STATE["undo"].append(_snapshot(res))
             res.cell[day][i] = wave + " Backup"
             desc = f"Moved {dr['name']}'s {day} backup to the {wave} wave"
+        elif day in dr["prim"] and p.get("move_count"):
+            # Amazon put them at another start time (Jose 2026-10-23): their route count goes with them
+            a, b = res.waves[day].get(cur, 0) if cur else 0, res.waves[day][wave]
+            if a < 1:
+                return json.dumps(dict(ok=False, kind="edit",
+                    message=f"{day} has no {cur or 'wave'} route count to move with {dr['name']}."))
+            _STATE["undo"].append(_snapshot(res))
+            res.waves[day][cur] = a - 1
+            res.waves[day][wave] = b + 1
+            res.cell[day][i] = wave
+            note = str(p.get("note") or "").strip()[:80]
+            desc = (f"Moved {dr['name']} {day} {cur} -> {wave}" + (f" {note}" if note else "")
+                    + f" (routes {cur} {a}->{a - 1}, {wave} {b}->{b + 1})")
         elif day in dr["prim"]:
             j, sw = _find(res, p.get("swap_name") or "")
             vj = res.cell[day].get(j, "") if sw is not None else ""

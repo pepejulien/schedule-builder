@@ -65,6 +65,14 @@
   // "10:45 AM" -> minutes after midnight (9999 when it isn't a time)
   const waveMins = (k) => { const m = /(\d{1,2}):(\d{2}) ?([AP]M)/i.exec(String(k || "")); if (!m) return 9999;
     return ((+m[1] % 12) + (/p/i.test(m[3]) ? 12 : 0)) * 60 + +m[2]; };
+  // Amazon's start time -> the schedule's, 20 minutes earlier ("10:45 AM" -> "10:25 AM"), like the app's
+  // lib/waves.js portalToSchedule (tests/roster_moves_test.mjs checks they agree) (Jose 2026-10-23)
+  function toSched(k) {
+    const m = /(\d{1,2}):(\d{2}) ?([AP]M)/i.exec(String(k || ""));
+    if (!m) return null;
+    const t = (((+m[1] % 12) + (/p/i.test(m[3]) ? 12 : 0)) * 60 + +m[2] - 20 + 1440) % 1440, h = Math.floor(t / 60);
+    return `${h % 12 || 12}:${String(t % 60).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+  }
 
   /* ---------- the little panel, top-right on Amazon's page ---------- */
   const box = document.createElement("div");
@@ -451,7 +459,7 @@
     // Moved to another start time (Jose 2026-10-23): Amazon's wave split often differs from the schedule's
     // (11 drivers at 10:25, Amazon 9 rows; 14 at 10:45, Amazon 15). A driver left over — or whose start
     // time Amazon doesn't have — goes into a spare empty row at the nearest other start time (a later one
-    // on a tie) and the panel says so. Only on Amazon's page: the Live board stays as it is.
+    // on a tie) and the panel says so. Once their pick is in, the Live board follows (moves window below).
     const spare = (l) => l.empty - l.toFill.length;
     const loose = [];
     for (const l of lines) for (const r of l.ds) if (r.status === "leftover") loose.push({ r, from: l.w.label, mins: waveMins(l.w.key) });
@@ -578,6 +586,9 @@
       stopWith("The page changed (another day, or the Standard Parcel rows were closed). Nothing more was filled. Click the bookmark again.");
       return;
     }
+    // a driver going to another start time: the Live board window opens now, inside the click (no
+    // pop-up block), and loads while Amazon is filled (Jose 2026-10-23)
+    if (movedOf(plan).length) openMoves(my); else mv.my = 0;
     stopped = false;
     clearBtns();
     btn("Stop", () => { stopped = true; }, true);
@@ -604,6 +615,7 @@
         progress(done / total);
       }
     }
+    if (mv.my === my) sendMoves();                             // also when the panel was closed mid-fill
     if (my !== runId) return;
     finish(placed, total);
   }
@@ -619,10 +631,75 @@
     let h = `<p><b>${stopped ? "Stopped. " : ""}Filled ${placed} of ${plural(total, "row")}.</b></p>`;
     if (plan.lost) h += '<p class="bad">The Standard Parcel rows were closed (or the day changed) during the fill.</p>';
     h += plan.lines.map((l) => waveHtml(l, true)).join("") + extraHtml(plan);
+    if (mv.list && mv.list.length) h += '<div class="lvmoves"></div>';
     h += `<p style="margin-top:8px"><b>Nothing is saved yet. Check the screen, then press Save (under the ${esc(plan.target.short)} rows) yourself.</b></p>`;
     say(h);
+    renderMoves();
     btn("Start over", run, true);
     btn("Close", () => box.querySelector(".x").click(), true);
+  }
+
+  /* ---------- the Live board follows Amazon's start times (Jose 2026-10-23) ----------
+   * A driver put at another start time here is moved on the Live board too (wave and that day's
+   * per-wave route counts). The Fill click opens the app as APP#roster-moves=<date> (window
+   * "jajbRosterMoves"); it signs in and loads the week's rules engine while Amazon is filled, says
+   * "jajb-roster-moves-ready" every second, and once the fill is over gets ONLY the moves whose pick
+   * went in: {type: "jajb-roster-moves", date, week, rev, moves: [{name, tid, from, to}]} (schedule
+   * times). It answers {type: "jajb-roster-moves-done", date, results: [{name, ok, why?}], error?}.
+   * Kept apart from onMessage, so closing the panel mid-fill still sends what went in. */
+  const mv = { my: 0, win: null, list: null, sent: false, res: null, timer: null, date: null, week: null, rev: null };
+  const movedOf = (p) => p.lines.flatMap((l) => l.moved || []);
+  const WAIT_MOVES = 90000;                                    // the engine may still be loading
+  function openMoves(my) {
+    clearTimeout(mv.timer);
+    Object.assign(mv, { my, list: null, sent: false, res: null, date,
+      week: payload.week || null, rev: payload.rev != null ? payload.rev : null });
+    try { if (mv.win && !mv.win.closed) mv.win.close(); } catch (e) { /* gone */ }
+    mv.win = window.open(APP + "?r=" + Date.now() + "#roster-moves=" + date, "jajbRosterMoves", "width=440,height=560");
+    window.addEventListener("message", onMoves);
+  }
+  const noAnswer = (why) => { mv.res = { results: [], error: why }; renderMoves(); };
+  function sendMoves() {
+    mv.list = movedOf(plan).filter((r) => r.status === "placed")
+      .map((r) => ({ name: r.d.name, tid: r.d.tid || null, from: r.d.sched, to: toSched(r.movedTo) }))
+      .filter((x) => x.from && x.to && x.from !== x.to);
+    clearTimeout(mv.timer);
+    if (!mv.win) { if (mv.list.length) noAnswer("the Live board window didn't open (pop-ups blocked?)"); return; }
+    // nothing went in: still answered, so the window closes itself
+    mv.timer = setTimeout(() => { if (!mv.res) noAnswer("no answer from the Live board window"); }, WAIT_MOVES);
+    renderMoves();
+  }
+  function onMoves(e) {
+    if (!APP_ORIGIN || e.origin !== APP_ORIGIN || !mv.win || e.source !== mv.win || !e.data || typeof e.data !== "object") return;
+    if (e.data.type === "jajb-roster-moves-ready") {
+      if (!mv.list || mv.sent) return;                         // still filling: it says "ready" again in a second
+      mv.sent = true;
+      try { e.source.postMessage({ type: "jajb-roster-moves", date: mv.date, week: mv.week, rev: mv.rev, moves: mv.list }, APP_ORIGIN); } catch (err) { /* closed */ }
+      clearTimeout(mv.timer);
+      mv.timer = setTimeout(() => { if (!mv.res) noAnswer("no answer from the Live board window"); }, WAIT_MOVES);
+      return;
+    }
+    if (e.data.type === "jajb-roster-moves-done" && mv.sent && e.data.date === mv.date) {
+      clearTimeout(mv.timer);
+      mv.res = { results: Array.isArray(e.data.results) ? e.data.results : [], error: e.data.error ? String(e.data.error) : null };
+      window.removeEventListener("message", onMoves);
+      renderMoves();
+    }
+  }
+  // the panel's lines (the fill's own lines and the Save reminder stay as they are)
+  function renderMoves() {
+    const slot = box.querySelector(".lvmoves");
+    if (!slot || !mv.list || !mv.list.length) return;
+    const to = (m) => `${esc(m.name)} → ${esc(m.to)}`;
+    if (!mv.res) { slot.innerHTML = `<p class="muted">Updating the Live board to match: ${mv.list.map(to).join(", ")}…</p>`; return; }
+    const by = new Map(mv.res.results.filter((r) => r && typeof r === "object").map((r) => [r.name, r]));
+    const good = mv.list.filter((m) => by.has(m.name) && by.get(m.name).ok === true);
+    let h = good.length ? `<p><b>Live board updated:</b> ${good.map(to).join(", ")}</p>` : "";
+    for (const m of mv.list.filter((x) => !good.includes(x))) {
+      const why = String((by.get(m.name) || {}).why || mv.res.error || "no answer from the Live board window").replace(/\.\s*$/, "");
+      h += `<p class="bad">Live board NOT updated for ${esc(m.name)}: ${esc(why)} — change it there by hand (to ${esc(m.to)}).</p>`;
+    }
+    slot.innerHTML = h;
   }
 
   run().catch((err) => stopWith("Something went wrong: " + esc(err && err.message || err)));

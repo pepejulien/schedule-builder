@@ -81,7 +81,8 @@ export function rosterHashDate(hash = (typeof location !== 'undefined' ? locatio
   return m ? m[1] : null;
 }
 
-function allowedOrigins() {
+// (also the moves window, roster-moves.js — Jose 2026-10-23)
+export function allowedOrigins() {
   const o = [AMAZON_ORIGIN];
   try { const t = localStorage.getItem(TEST_ORIGIN_KEY); if (t) o.push(t); } catch { /* private window */ }
   return o;
