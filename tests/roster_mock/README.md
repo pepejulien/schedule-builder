@@ -26,9 +26,9 @@ unsaved picks.
 What the mock day holds: Standard Parcel (collapsed) — 10:25 am 4 rows (Olga Pre on one),
 10:45 am 9 rows (Steven Dale Heilmann on one); WW Hub Transport CDV (1 empty row); Nursery
 Route Level 1 (Pat Quinn); Nursery Route Level 3 (1 empty row); a hidden 0-route service.
-Expected: Standard Parcel opened, 7 rows planned, 7 filled (Amy, Bea, Carl → "Carl Dee Fox",
+Expected: Standard Parcel opened, 8 rows planned, 8 filled (Amy, Bea, Carl → "Carl Dee Fox",
 an option with no phone; Barry → "Barry Len Hughes", Tina, Mike → "Michael Rowe" by
-Transporter ID, Jose Nunez → "José Núñez"); Nora not in Amazon's list; Dora left over;
+Transporter ID, Jose Nunez → "José Núñez"); Nora not in Amazon's list; Dora (10:25 AM has only 3 empty rows) moved to 10:45 AM and listed as moved — 8 filled;
 Sam Lee ambiguous (Sam K Lee / Sam Lee); Hank Hours Inactive; Steven and Pat already on a
 row (Pat on Nursery Route Level 1); Zed's 11:25 AM has no rows; the other services listed as
 left for you; log empty.

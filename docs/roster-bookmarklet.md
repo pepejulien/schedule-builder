@@ -75,6 +75,11 @@ computer without re-adding the bookmark.
   placed, listed. Inactive associates are never picked.
 - Each pick is checked: the box must show the name; a red `!` from Amazon (e.g. an
   overlapping block) empties that row again and lists the driver.
+- Another start time (Jose 2026-10-23): Amazon's wave split often differs from the
+  schedule's. A driver left over at their start time, or whose start time has no rows on
+  Amazon, goes into a spare empty row at the nearest other start time (later one on a tie).
+  The panel says "Moved to 10:45 AM" / "Moved here from 10:25 AM". This happens on Amazon's
+  page only; the Live board doesn't change.
 - Report in the panel: filled N of M; not in Amazon's list; more than one match;
   already on a row; left over (fewer empty rows than drivers); empty rows left; start
   times with no rows on Amazon; services left for dispatch.

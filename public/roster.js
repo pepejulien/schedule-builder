@@ -62,6 +62,9 @@
     return `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`;
   }
   const waveKey = (s) => one(s).toUpperCase().replace(/^0/, "");   // "10:45 am" → "10:45 AM"
+  // "10:45 AM" -> minutes after midnight (9999 when it isn't a time)
+  const waveMins = (k) => { const m = /(\d{1,2}):(\d{2}) ?([AP]M)/i.exec(String(k || "")); if (!m) return 9999;
+    return ((+m[1] % 12) + (/p/i.test(m[3]) ? 12 : 0)) * 60 + +m[2]; };
 
   /* ---------- the little panel, top-right on Amazon's page ---------- */
   const box = document.createElement("div");
@@ -445,6 +448,24 @@
     }
     const noWave = sched.filter((s) => !byKey.has(s.key));
     for (const s of noWave) for (const r of s.drivers) if (r.status === "match" || r.status === "leftover") r.status = "nowave";
+    // Moved to another start time (Jose 2026-10-23): Amazon's wave split often differs from the schedule's
+    // (11 drivers at 10:25, Amazon 9 rows; 14 at 10:45, Amazon 15). A driver left over — or whose start
+    // time Amazon doesn't have — goes into a spare empty row at the nearest other start time (a later one
+    // on a tie) and the panel says so. Only on Amazon's page: the Live board stays as it is.
+    const spare = (l) => l.empty - l.toFill.length;
+    const loose = [];
+    for (const l of lines) for (const r of l.ds) if (r.status === "leftover") loose.push({ r, from: l.w.label, mins: waveMins(l.w.key) });
+    for (const s of noWave) for (const r of s.drivers) if (r.status === "nowave") loose.push({ r, from: s.label, mins: waveMins(s.key) });
+    for (const x of loose) {
+      const to = lines.filter((l) => spare(l) > 0 && l.w.label !== x.from)
+        .sort((a, b) => Math.abs(waveMins(a.w.key) - x.mins) - Math.abs(waveMins(b.w.key) - x.mins) || waveMins(b.w.key) - waveMins(a.w.key))[0];
+      if (!to) continue;
+      x.r.status = "match";
+      x.r.movedTo = to.w.label;
+      x.r.movedFrom = x.from;
+      to.toFill.push(x.r);
+      (to.moved || (to.moved = [])).push(x.r);
+    }
     const total = lines.reduce((n, l) => n + l.toFill.length, 0);
     const others = svcs.filter((s) => s.el !== target.el)
       .map((s) => ({ short: s.short, sp: s.sp, rows: s.rows.length, empty: s.rows.filter(isEmpty).length }));
@@ -457,9 +478,15 @@
 
   // the per-wave problem lines; `final` adds what happened during the fill
   function waveHtml(l, final) {
-    const ds = l.ds;
+    // a driver moved to another start time is reported there (Jose 2026-10-23)
+    const ds = [...l.ds.filter((r) => !r.movedTo), ...(l.moved || [])];
     const by = (st) => ds.filter((r) => r.status === st);
     const out = [];
+    const gone = l.ds.filter((r) => r.movedTo);
+    for (const to of [...new Set(gone.map((r) => r.movedTo))]) {
+      out.push(`<li class="warn">Moved to ${esc(to)} (not enough rows here): ${names(gone.filter((r) => r.movedTo === to).map((r) => r.d))}</li>`);
+    }
+    if ((l.moved || []).length) out.push(`<li class="warn">Moved here from ${esc([...new Set(l.moved.map((r) => r.movedFrom))].join(" / "))}: ${names(l.moved.map((r) => r.d))}</li>`);
     const nf = by("notfound"); if (nf.length) out.push(`<li class="bad">Not in Amazon's associate list: ${names(nf.map((r) => r.d))}</li>`);
     const am = by("ambiguous"); if (am.length) out.push(`<li class="bad">More than one match in Amazon's list — not placed: ${am.map((r) => `${nameOf(r.d)} (${esc(r.why)})`).join(", ")}</li>`);
     const gr = by("group"); if (gr.length) out.push(`<li class="bad">Amazon lists them as ${esc(gr[0].why)} — not placed: ${names(gr.map((r) => r.d))}</li>`);
@@ -487,7 +514,8 @@
   function extraHtml(p) {
     let h = "";
     for (const s of p.noWave) {
-      h += `<div class="wave"><span class="bad">No <b>${esc(s.label)}</b> rows in ${esc(p.target.short)} (schedule ${esc(s.sched)}) — not placed: ${names(s.drivers.map((r) => r.d))}</span></div>`;
+      const left = s.drivers.filter((r) => !r.movedTo);
+      if (left.length) h += `<div class="wave"><span class="bad">No <b>${esc(s.label)}</b> rows in ${esc(p.target.short)} (schedule ${esc(s.sched)}) — not placed: ${names(left.map((r) => r.d))}</span></div>`;
     }
     const sk = payload.skipped || [];
     if (sk.length) h += `<p class="muted">Not rostered: ${sk.map((s) => `${esc(s.name)} (${esc(String(s.why || "").toLowerCase())})`).join(", ")}</p>`;
