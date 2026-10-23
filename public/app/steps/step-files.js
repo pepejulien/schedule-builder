@@ -104,9 +104,12 @@ export function StepFiles() {
         }
       }
       patch.week = withLabel(wk);
+      // tag the files with the week they're for, so changing the week drops them
+      if (a) patch.availability.weekISO = wk.startISO;
+      if (s) patch.priorWeek.weekISO = wk.startISO;
       if (a) addActive(patch.availability, wk.startISO);
       // a Live-board input made for another week is stale now
-      if (!a && avail && avail.source === 'live' && avail.weekISO !== wk.startISO) patch.availability = null;
+      if (!a && avail && avail.weekISO && avail.weekISO !== wk.startISO) patch.availability = null;
       if (!s && prior.weekISO && prior.weekISO !== wk.startISO) patch.priorWeek = { bytes: null, source: null };
       setWizard(patch);
     } finally {
@@ -198,19 +201,19 @@ export function StepFiles() {
     if (a.kind === 'unknown') { setErr(a.error); return; }
     const av = availFrom(prior.fileName, prior.bytes, a.parsed);
     setWizard({
-      availability: av,
-      priorWeek: { bytes: avail.bytes, source: 'upload', fileName: avail.fileName },
+      availability: { ...av, weekISO: week.startISO },
+      priorWeek: { bytes: avail.bytes, source: 'upload', fileName: avail.fileName, weekISO: week.startISO },
     });
     addActive(av, week.startISO);
   }
 
-  // A new Sunday brings its week number along, and a Live-board input made for
-  // the old week is dropped (it would be the wrong week's days off).
+  // A new Sunday brings its week number along, and the inputs made for the old
+  // week are dropped (they'd be the wrong week's days off); the old build goes too (store.js).
   const setWeek = (patch) => setWizard((w) => {
     const wk = { ...w.week, ...patch };
     if (patch.startISO && isSunday(patch.startISO)) wk.num = String(weekNumberOf(patch.startISO));
     const out = { week: withLabel(wk) };
-    if (w.availability && w.availability.source === 'live' && w.availability.weekISO !== wk.startISO) out.availability = null;
+    if (w.availability && w.availability.weekISO && w.availability.weekISO !== wk.startISO) out.availability = null;
     if (w.priorWeek && w.priorWeek.weekISO && w.priorWeek.weekISO !== wk.startISO) out.priorWeek = { bytes: null, source: null };
     return out;
   });

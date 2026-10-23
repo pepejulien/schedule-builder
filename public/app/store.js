@@ -25,9 +25,17 @@ function freshWizard() {
     driverPrefsFailed: false,      // the prefs read failed -> build without them, warn
     timeoffFailed: false,          // the time-off read failed / timed out -> build without it, warn
     nameAliases: {},               // confirmed name matches (standing/aliases.json)
-    build: { status: 'idle', report: null, xlsx: null, error: null, savedName: null },
+    build: idleBuild(),
   };
 }
+
+const idleBuild = () => ({ status: 'idle', report: null, xlsx: null, error: null, savedName: null });
+
+// The Sunday a finished build is for (its report's first day). A build made for
+// another week must not show under this week's header (2026-10-23: a Week-42 build
+// stayed on the Build step after the week was changed to 44).
+const builtFor = (b) => (b && b.report && (b.report.days || []).length ? b.report.days[0].date : null);
+const staleBuild = (b, startISO) => !!builtFor(b) && builtFor(b) !== startISO;
 
 let state = {
   auth: 'unknown',                 // 'unknown' | 'in' | 'out'
@@ -59,6 +67,8 @@ function scheduleDraftSave() {
 export function setWizard(patch) {
   const w = state.wizard;
   const nextW = { ...w, ...(typeof patch === 'function' ? patch(w) : patch) };
+  // a new week starts with no build
+  if (nextW.week?.startISO !== w.week?.startISO && nextW.build?.status !== 'idle') nextW.build = idleBuild();
   setState({ wizard: nextW });
   scheduleDraftSave();
 }
@@ -81,9 +91,8 @@ export function hydrateWizard(wizard) {
   // A 'building' status saved mid-build has no live engine after a page reload,
   // so nothing would ever finish it — reset to 'idle' so the user sees the
   // Build button instead of a frozen spinner.
-  if (merged.build && merged.build.status === 'building') {
-    merged.build = { status: 'idle', report: null, xlsx: null, error: null, savedName: null };
-  }
+  if (merged.build && merged.build.status === 'building') merged.build = idleBuild();
+  if (staleBuild(merged.build, merged.week?.startISO)) merged.build = idleBuild();
   setState({ wizard: merged });
 }
 
