@@ -4,7 +4,8 @@
 //
 // schedule_offers/{id} as jajb.js watchScheduleOffers hands it over: {id, v, kind: vet|vto, week, date,
 // day, role (vet: road|backup), wave ('10:45 AM' | '' = any), slots, status: open|filled|closed, taken,
-// audience: {tiers, maxWeekHours}, mode: fcfs|window, windowHours, decideAt (ms), priority, note, by,
+// audience: {tiers, maxWeekHours (older offers: under N h before the shift), maxAfterHours? (VET "no overtime": week hours
+// + this shift <= N), maxDays? (VET: N days or fewer this week before this shift)}, mode: fcfs|window, windowHours, decideAt (ms), priority, note, by,
 // at (ms), closedBy?, closedAt?, editedBy?, editedAt? (ms)}. status closed = cancelled ("Cancel offer",
 // Jose 2026-10-20). takes/{tid}: {tid, name, at (ms), role, counter, status: approved|waiting|pending|applied|
 // refused|declined|removed, why?, decidedBy?, reason? (removed: deleted|moved|back)}.
@@ -21,7 +22,10 @@ const isoOf = (t) => `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, 
 export function defaultForm() {
   return {
     kind: 'vet', date: '', role: 'road', wave: '', slots: '1',
-    sendTo: 'all', tiers: [], under: false, underHours: '40',
+    sendTo: 'all', tiers: [],
+    // VET only (Jose 2026-10-23): "no overtime" counts this shift; days = this week's days before it
+    noOt: false, noOtHours: '40', daysOn: false, maxDays: '3',
+    oldUnder: null,                // an older offer's "under N hours this week", kept as it was on Edit
     mode: 'fcfs', windowHours: '24', prTiers: ['Top performer'], prHours: '40',
     note: '',
   };
@@ -70,18 +74,24 @@ export function buildOfferFields(f) {
   if (slots == null) return { error: 'Spots must be a whole number from 1 to 50.' };
   const fields = { kind: f.kind, date: f.date, wave: f.kind === 'vet' ? String(f.wave || '') : '', slots };
   if (f.kind === 'vet') fields.role = f.role === 'backup' ? 'backup' : 'road';
+  const audience = { tiers: [], maxWeekHours: f.oldUnder == null ? null : Number(f.oldUnder) };
   if (f.sendTo === 'groups') {
-    const tiers = tiersIn(f.tiers);
-    let max = null;
-    if (f.under) {
-      max = whole(f.underHours, 1, 168);
-      if (max == null) return { error: 'Hours this week must be a whole number from 1 to 168.' };
-    }
-    if (!tiers.length && max == null) return { error: 'Pick at least one group, or send to everyone.' };
-    fields.audience = { tiers, maxWeekHours: max };
-  } else {
-    fields.audience = { tiers: [], maxWeekHours: null };
+    audience.tiers = tiersIn(f.tiers);
+    if (!audience.tiers.length) return { error: 'Pick at least one group, or send to everyone.' };
   }
+  if (f.kind === 'vet') {
+    if (f.noOt) {
+      const h = whole(f.noOtHours, 1, 168);
+      if (h == null) return { error: 'The overtime hours must be a whole number from 1 to 168.' };
+      audience.maxAfterHours = h;
+    }
+    if (f.daysOn) {
+      const n = whole(f.maxDays, 0, 6);
+      if (n == null) return { error: 'The days must be a whole number from 0 to 6.' };
+      audience.maxDays = n;
+    }
+  }
+  fields.audience = audience;
   if (f.mode === 'window') {
     const wh = whole(f.windowHours, 1, 168);
     if (wh == null) return { error: 'The wait must be a whole number of hours from 1 to 168.' };
@@ -214,12 +224,13 @@ const hrs = (h, d) => (h == null || h === '' ? d : String(h));
 export function editForm(o) {
   const a = (o && o.audience) || {};
   const tiers = TIERS.filter((t) => (a.tiers || []).includes(t));
-  const under = a.maxWeekHours != null && a.maxWeekHours !== '';
   const p = (o && o.priority) || {};
   return {
     kind: o.kind === 'vto' ? 'vto' : 'vet', date: String(o.date || ''), role: o.role === 'backup' ? 'backup' : 'road',
     wave: String(o.wave || ''), slots: String(Number(o.slots) || 1),
-    sendTo: tiers.length || under ? 'groups' : 'all', tiers, under, underHours: hrs(a.maxWeekHours, '40'),
+    sendTo: tiers.length ? 'groups' : 'all', tiers,
+    noOt: a.maxAfterHours != null, noOtHours: hrs(a.maxAfterHours, '40'), daysOn: a.maxDays != null, maxDays: hrs(a.maxDays, '3'),
+    oldUnder: a.maxWeekHours != null && a.maxWeekHours !== '' ? Number(a.maxWeekHours) : null,
     mode: o.mode === 'window' ? 'window' : 'fcfs', windowHours: hrs(o.windowHours, '24'),
     prTiers: o.priority ? TIERS.filter((t) => (p.tiers || []).includes(t)) : defaultForm().prTiers, prHours: hrs(p.maxWeekHours, '40'),
     note: String(o.note || ''),
@@ -251,6 +262,37 @@ export function previewLabel(st) {
   const num = (x) => (x == null ? '—' : String(x));
   return `${num(e)} driver${e === 1 ? '' : 's'} can see this · ${num(a)} ${a === 1 ? 'uses' : 'use'} the app · `
     + `${num(p)} ${p === 1 ? 'gets' : 'get'} a phone alert`;
+}
+
+// --- "Post this offer?" (Jose 2026-10-23): what it is, who it's for, and every driver who will see it.
+
+const ORD = ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th'];
+// The days box's hint: '3' -> "this would be their 4th day at most" ('' when the box isn't a number yet)
+export function daysHint(v) {
+  const n = whole(v, 0, 6);
+  return n == null ? '' : `this would be their ${ORD[n]} day at most`;
+}
+// "VET — extra shift · Sat Oct 24 · route, any wave · 2 spots"
+export function offerSummary(fields) {
+  const spots = Number(fields.slots) || 0;
+  return `${fields.kind === 'vto' ? 'VTO — day off' : 'VET — extra shift'} · ${dayLabel(fields.date)}`
+    + `${fields.kind === 'vet' ? ' · ' + offerWhat(fields) : ''} · ${spots} spot${spots === 1 ? '' : 's'}`;
+}
+// Who it's sent to, in words: ["Everyone"] or ["Top performer, Solid", "No overtime: 40 hours or less this week with
+// this shift", "3 days or fewer this week (this would be their 4th day at most)"]
+export function audienceLines(fields) {
+  const a = fields.audience || {};
+  const out = [(a.tiers || []).length ? a.tiers.join(', ') : 'Everyone'];
+  if (a.maxAfterHours != null) out.push(`No overtime: ${a.maxAfterHours} hours or less this week with this shift`);
+  if (a.maxDays != null) out.push(`${a.maxDays} day${a.maxDays === 1 ? '' : 's'} or fewer this week (${daysHint(String(a.maxDays))})`);
+  if (a.maxWeekHours != null) out.push(`Under ${a.maxWeekHours} hours this week before this shift (older filter)`);
+  return out;
+}
+// One driver in the pop-up's list (drv_offer_preview drivers[]): "3 days · 30 h · phone alert" / "app, no alert" / "no app"
+const hNum = (h) => (Math.round((Number(h) || 0) * 10) / 10).toString();
+export function driverLine(d) {
+  const reach = d.push ? 'phone alert' : d.app ? 'app, no alert' : 'no app';
+  return `${Number(d.days) || 0} day${Number(d.days) === 1 ? '' : 's'} · ${hNum(d.hours)} h · ${reach}`;
 }
 
 // "VET · 10:45 AM route" / "VET · backup, any wave" / "VTO · day off"

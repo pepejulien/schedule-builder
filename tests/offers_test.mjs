@@ -4,7 +4,7 @@ import {
   TIERS, defaultForm, dayLabel, timeLabel, offerDays, offerWaves, buildOfferFields, offerWhat, offerLabel,
   takeStatus, whyText, dayOffers, upcomingGroups, headCounts, daySummary, daySummaryLabel, hasOpenOffer, stripHead, offerCounts, countsLabel, stripStatus,
   isCancelled, splitCancelled, cancelledToggle, canDelete, deleteBlocked, cancelConfirm, deleteConfirm, postedLine, editForm,
-  buildEditFields, previewFields, previewLabel,
+  buildEditFields, previewFields, previewLabel, daysHint, offerSummary, audienceLines, driverLine,
 } from '../public/app/live/offers-model.js';
 
 let pass = 0, fail = 0;
@@ -46,13 +46,19 @@ eq('VET backup any wave, 3 spots', buildOfferFields(form({ role: 'backup', slots
   { kind: 'vet', date: '2026-10-17', wave: '', slots: 3, role: 'backup', audience: { tiers: [], maxWeekHours: null }, mode: 'fcfs' });
 eq('VTO: no role, no wave', buildOfferFields(form({ kind: 'vto', role: 'backup', wave: '10:45 AM' })).fields,
   { kind: 'vto', date: '2026-10-17', wave: '', slots: 1, audience: { tiers: [], maxWeekHours: null }, mode: 'fcfs' });
-eq('groups: tiers in the fixed order, hours', buildOfferFields(form({ sendTo: 'groups', tiers: ['Fair', 'Top performer', 'Bogus'],
-  under: true, underHours: '35' })).fields.audience, { tiers: ['Top performer', 'Fair'], maxWeekHours: 35 });
-eq('groups: hours only', buildOfferFields(form({ sendTo: 'groups', under: true })).fields.audience, { tiers: [], maxWeekHours: 40 });
-eq('groups: tiers only (hours box ignored when unticked)', buildOfferFields(form({ sendTo: 'groups', tiers: ['Solid'], underHours: 'x' })).fields.audience,
-  { tiers: ['Solid'], maxWeekHours: null });
+eq('groups: tiers in the fixed order', buildOfferFields(form({ sendTo: 'groups', tiers: ['Fair', 'Top performer', 'Bogus'] })).fields.audience,
+  { tiers: ['Top performer', 'Fair'], maxWeekHours: null });
 eq('groups: nothing picked', buildOfferFields(form({ sendTo: 'groups' })), { error: 'Pick at least one group, or send to everyone.' });
-eq('Everyone ignores ticked groups', buildOfferFields(form({ tiers: ['Fair'], under: true })).fields.audience, { tiers: [], maxWeekHours: null });
+eq('Everyone ignores ticked groups', buildOfferFields(form({ tiers: ['Fair'] })).fields.audience, { tiers: [], maxWeekHours: null });
+// hours and days (Jose 2026-10-23): "no overtime" counts this shift; days = this week before it; VET only
+eq('no overtime', buildOfferFields(form({ noOt: true, noOtHours: '40' })).fields.audience, { tiers: [], maxWeekHours: null, maxAfterHours: 40 });
+eq('days or fewer', buildOfferFields(form({ daysOn: true, maxDays: '3' })).fields.audience, { tiers: [], maxWeekHours: null, maxDays: 3 });
+eq('days 0 is fine', buildOfferFields(form({ daysOn: true, maxDays: '0' })).fields.audience.maxDays, 0);
+eq('both + groups', buildOfferFields(form({ sendTo: 'groups', tiers: ['Solid'], noOt: true, noOtHours: '38', daysOn: true, maxDays: '4' })).fields.audience,
+  { tiers: ['Solid'], maxWeekHours: null, maxAfterHours: 38, maxDays: 4 });
+eq('unticked boxes ignored', buildOfferFields(form({ noOtHours: 'x', maxDays: 'x' })).fields.audience, { tiers: [], maxWeekHours: null });
+eq('VTO: no hours / days filters', buildOfferFields(form({ kind: 'vto', noOt: true, daysOn: true })).fields.audience, { tiers: [], maxWeekHours: null });
+eq('an older offer keeps its under-N-hours', buildOfferFields(form({ oldUnder: 35 })).fields.audience, { tiers: [], maxWeekHours: 35 });
 const win = buildOfferFields(form({ mode: 'window', windowHours: '12', prTiers: ['Solid', 'Top performer'], prHours: '38', note: '  for Sat  ' })).fields;
 eq('window mode', [win.mode, win.windowHours, win.priority, win.note],
   ['window', 12, { tiers: ['Top performer', 'Solid'], maxWeekHours: 38 }, 'for Sat']);
@@ -66,11 +72,12 @@ eq('note capped at 300', buildOfferFields(form({ note: 'x'.repeat(400) })).field
 for (const [k, v] of [['no day', { date: '' }], ['0 spots', { slots: '0' }], ['51 spots', { slots: '51' }], ['1.5 spots', { slots: '1.5' }],
   ['blank spots', { slots: '' }], ['bad kind', { kind: 'x' }], ['wait 0', { mode: 'window', windowHours: '0' }],
   ['wait 169', { mode: 'window', windowHours: '169' }], ['priority hours blank', { mode: 'window', prHours: '' }],
-  ['under hours 0', { sendTo: 'groups', under: true, underHours: '0' }]]) {
+  ['no overtime 0', { noOt: true, noOtHours: '0' }], ['no overtime blank', { noOt: true, noOtHours: '' }],
+  ['days 7', { daysOn: true, maxDays: '7' }], ['days 2.5', { daysOn: true, maxDays: '2.5' }]]) {
   ok('error: ' + k, !!buildOfferFields(form(v)).error, JSON.stringify(buildOfferFields(form(v))));
 }
 eq('spots 50 ok', buildOfferFields(form({ slots: '50' })).fields.slots, 50);
-for (const p of [{}, { kind: 'vto' }, { mode: 'window', sendTo: 'groups', tiers: ['Fair'], under: true, note: 'n' }]) {
+for (const p of [{}, { kind: 'vto' }, { mode: 'window', sendTo: 'groups', tiers: ['Fair'], noOt: true, daysOn: true, note: 'n' }]) {
   const keys = Object.keys(buildOfferFields(form(p)).fields);
   ok('keys in the rules whitelist ' + JSON.stringify(p), keys.every((k) => ALLOWED.has(k)), keys.join(','));
 }
@@ -184,15 +191,18 @@ const wo = { kind: 'vet', date: '2026-10-17', role: 'backup', wave: '10:45 AM', 
   audience: { tiers: ['Solid', 'Top performer'], maxWeekHours: 30 }, mode: 'window', windowHours: 6,
   priority: { tiers: ['Top performer'], maxWeekHours: 40 }, note: 'call first' };
 const ef = editForm(wo);
-eq('editForm', ef, { kind: 'vet', date: '2026-10-17', role: 'backup', wave: '10:45 AM', slots: '3', sendTo: 'groups',
-  tiers: ['Top performer', 'Solid'], under: true, underHours: '30', mode: 'window', windowHours: '6', prTiers: ['Top performer'],
-  prHours: '40', note: 'call first' });
+eq('editForm (an older offer: under 30 h kept as it was)', ef, { kind: 'vet', date: '2026-10-17', role: 'backup', wave: '10:45 AM', slots: '3',
+  sendTo: 'groups', tiers: ['Top performer', 'Solid'], noOt: false, noOtHours: '40', daysOn: false, maxDays: '3', oldUnder: 30,
+  mode: 'window', windowHours: '6', prTiers: ['Top performer'], prHours: '40', note: 'call first' });
+const nf = editForm({ ...wo, audience: { tiers: [], maxWeekHours: null, maxAfterHours: 38, maxDays: 0 } });
+eq('editForm: no overtime + days come back', [nf.sendTo, nf.noOt, nf.noOtHours, nf.daysOn, nf.maxDays, nf.oldUnder], ['all', true, '38', true, '0', null]);
+eq('editForm -> the same audience', buildEditFields(nf, wo).fields.audience, { tiers: [], maxWeekHours: null, maxAfterHours: 38, maxDays: 0 });
 eq('editForm everyone, fcfs VTO', editForm({ kind: 'vto', date: '2026-10-17', slots: 2, audience: { tiers: [], maxWeekHours: null }, mode: 'fcfs' }),
   { ...defaultForm(), kind: 'vto', date: '2026-10-17', slots: '2' });
 eq('buildEditFields', buildEditFields({ ...ef, slots: '5', note: ' more ' }, wo),
   { fields: { slots: 5, audience: { tiers: ['Top performer', 'Solid'], maxWeekHours: 30 }, note: 'more' } });
 eq('buildEditFields spots == taken, everyone, no note', buildEditFields({ ...ef, slots: '2', sendTo: 'all', note: '' }, wo),
-  { fields: { slots: 2, audience: { tiers: [], maxWeekHours: null }, note: '' } });
+  { fields: { slots: 2, audience: { tiers: [], maxWeekHours: 30 }, note: '' } });
 eq('buildEditFields below taken', buildEditFields({ ...ef, slots: '1' }, wo), { error: "Spots can't be below the 2 already taken." });
 eq('buildEditFields bad spots', buildEditFields({ ...ef, slots: '51' }, wo).error, 'Spots must be a whole number from 1 to 50.');
 
@@ -209,6 +219,18 @@ eq('previewLabel ones and zeros', previewLabel({ state: 'ok', res: { eligible: 1
   '1 driver can see this · 1 uses the app · 0 get a phone alert');
 eq('previewLabel loading', previewLabel({ state: 'loading' }), '— drivers can see this · — use the app · — get a phone alert');
 eq('previewLabel error', previewLabel({ state: 'err' }), "Couldn't count");
+
+// --- "Post this offer?" pop-up (2026-10-23)
+eq('daysHint', [daysHint('3'), daysHint('0'), daysHint('6'), daysHint(''), daysHint('9')],
+  ['this would be their 4th day at most', 'this would be their 1st day at most', 'this would be their 7th day at most', '', '']);
+eq('offerSummary VET', offerSummary(buildOfferFields(form({ slots: '2' })).fields), 'VET — extra shift · Sat Oct 17 · route, any wave · 2 spots');
+eq('offerSummary VTO', offerSummary(buildOfferFields(form({ kind: 'vto' })).fields), 'VTO — day off · Sat Oct 17 · 1 spot');
+eq('audienceLines everyone', audienceLines(buildOfferFields(form({})).fields), ['Everyone']);
+eq('audienceLines all of it', audienceLines({ audience: { tiers: ['Top performer', 'Solid'], maxWeekHours: 30, maxAfterHours: 40, maxDays: 1 } }),
+  ['Top performer, Solid', 'No overtime: 40 hours or less this week with this shift', '1 day or fewer this week (this would be their 2nd day at most)',
+    'Under 30 hours this week before this shift (older filter)']);
+eq('driverLine', [driverLine({ days: 3, hours: 30, app: true, push: true }), driverLine({ days: 1, hours: 9.25, app: true, push: false }),
+  driverLine({ days: 0, hours: 0, app: false, push: false })], ['3 days · 30 h · phone alert', '1 day · 9.3 h · app, no alert', '0 days · 0 h · no app']);
 
 // --- day headers
 eq('headCounts', headCounts({ routes_filled: 31, routes: 32, backup_filled: 6, backup: 8 }), { drivers: '31/32 drivers', backups: '6/8 backups' });

@@ -42,6 +42,15 @@
     return () => { L.live = false; listeners.delete(L); };
   }
   const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+  // an offer's audience as jajb.js offerAudience keeps it: tiers + maxWeekHours, + maxAfterHours / maxDays when set
+  const aud = (a) => {
+    a = a || {};
+    const n = (v) => (v == null || v === '' ? null : Math.max(0, Math.min(168, Number(v) || 0)));
+    const out = { tiers: (Array.isArray(a.tiers) ? a.tiers : []).map(String).filter(Boolean).slice(0, 10), maxWeekHours: n(a.maxWeekHours) };
+    if (n(a.maxAfterHours) != null) out.maxAfterHours = n(a.maxAfterHours);
+    if (a.maxDays != null && a.maxDays !== '') out.maxDays = Math.max(0, Math.min(6, Math.floor(Number(a.maxDays) || 0)));
+    return out;
+  };
   let beforeNextSave = null, failNext = null;
 
   function weeks() { return get('weeks') || {}; }
@@ -285,6 +294,7 @@
     }, cb),
     watchOfferTakes: (id, cb) => listen('offertakes/' + id, () => Object.values(get('offertakes/' + id) || {})
       .sort((a, b) => a.at - b.at), cb),
+    // (jajb.js offerAudience) tiers + maxWeekHours, + maxAfterHours / maxDays only when set
     saveScheduleOffer: async (f) => {
       await delay(LAT);
       f = f || {};
@@ -298,7 +308,7 @@
       const a = f.audience || {}, mode = f.mode === 'window' ? 'window' : 'fcfs', at = Date.now();
       const id = 'of' + at.toString(36) + Math.random().toString(36).slice(2, 6);
       const o = { id, v: 1, kind: f.kind, week: iso(sun), date: f.date, day: DAYS[t.getDay()], wave: String(f.wave || ''),
-        slots, status: 'open', taken: 0, audience: { tiers: tiers(a.tiers), maxWeekHours: hrs(a.maxWeekHours, null) },
+        slots, status: 'open', taken: 0, audience: aud(a),
         mode, note: String(f.note || '').trim().slice(0, 300), by: name, at, decideAt: 0, closedAt: 0 };
       if (f.kind === 'vet') o.role = f.role === 'backup' ? 'backup' : 'road';
       if (mode === 'window') {
@@ -317,7 +327,7 @@
       Object.assign(all[id], { status: 'closed', closedBy: name, closedAt: Date.now() });
       put('offers', all); fire();
     },
-    // edit / delete / recipient preview (2026-10-20) — same checks as jajb.js + firestore.rules
+    // edit / delete / recipient preview (2026-10-20); audience as jajb.js offerAudience (VET filters 2026-10-23) — same checks as jajb.js + firestore.rules
     editScheduleOffer: async (id, f) => {
       await delay(LAT);
       f = f || {};
@@ -330,7 +340,7 @@
       if (slots < (o.taken || 0)) throw fail('offer/below-taken', `Spots can't be below the ${o.taken} already taken.`);
       const tiers = (x) => (Array.isArray(x) ? x : []).map(String).filter(Boolean).slice(0, 10);
       const a = f.audience || {};
-      Object.assign(o, { slots, audience: { tiers: tiers(a.tiers), maxWeekHours: a.maxWeekHours == null ? null : Number(a.maxWeekHours) },
+      Object.assign(o, { slots, audience: aud(a),
         note: String(f.note || '').trim().slice(0, 300), status: slots > (o.taken || 0) ? 'open' : 'filled', editedBy: name, editedAt: Date.now() });
       put('offers', all); fire();
     },
@@ -345,8 +355,11 @@
       await delay(LAT + 300);
       if (/[?&]preview=err/.test(location.search)) throw new Error('internal');
       const a = (f && f.audience) || {};
-      const eligible = Math.max(0, 22 - 4 * (a.tiers || []).length - (a.maxWeekHours != null ? 5 : 0) - (f.kind === 'vto' ? 6 : 0));
-      return { eligible, withApp: Math.min(eligible, 4), withPush: Math.min(eligible, 1), reasons: {} };
+      const eligible = Math.max(0, 22 - 4 * (a.tiers || []).length - (a.maxWeekHours != null ? 5 : 0) - (f.kind === 'vto' ? 6 : 0)
+        - (a.maxAfterHours != null ? 6 : 0) - (a.maxDays != null ? 3 : 0));
+      const drivers = Array.from({ length: eligible }, (_, i) => ({ tid: 'T' + i, name: `Test Driver ${String(i + 1).padStart(2, '0')}`,
+        days: i % 4, hours: (i % 4) * 10, app: i < 4, push: i < 1 }));
+      return { eligible, withApp: Math.min(eligible, 4), withPush: Math.min(eligible, 1), reasons: {}, drivers };
     },
     decideCounter: async (id, tid, yes) => {
       await delay(LAT);
