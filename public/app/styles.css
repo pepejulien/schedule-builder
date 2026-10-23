@@ -651,6 +651,18 @@ table.lv-grid { font-size: 12.5px; }
 .rp-soft { margin-top: 8px; }
 .rp-soft summary { cursor: pointer; font-weight: 600; }
 .rp-row { margin-top: 5px; font-size: 13.5px; }
+/* the Live board's Hours check card (Jose 2026-10-23): label left, result right; stacked on a phone */
+.hc-card h3 { margin-top: 0; }
+.hc-row { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.hc-row:first-of-type { border-top: 0; }
+.hc-label { font-weight: 700; }
+.hc-val { overflow-wrap: anywhere; }
+.hc-ok { color: var(--ok); font-weight: 600; }
+.hc-bad { color: var(--err); }
+.hc-warn { color: #c0603a; }
+@media (max-width: 599px) {
+  .hc-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
 /* not in Route Tracker - what happened? (2026-10-07) */
 .ms-card { border-left: 5px solid var(--warn); }
 .ms-head { margin-bottom: 6px; }
@@ -772,10 +784,6 @@ table.lv-grid { font-size: 12.5px; }
 }
 @media (max-width: 700px) {
   .topbar { position: static; }   /* a phone: the title bar scrolls away instead of covering ~1/7 of the screen */
-  .lv-stats { grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 12px; }
-  .lv-stats .stat { padding: 10px 8px; border-radius: 14px; text-align: center; }
-  .lv-stats .big { font-size: 20px; }
-  .lv-stats .muted { font-size: 11px; line-height: 1.25; }
   #lv-gridcard { padding: 14px 12px; }
   .card h2.lv-weeknav { font-size: 16px; }
   select.lv-wksel { flex: 1; width: 0; field-sizing: fixed; text-overflow: ellipsis; }

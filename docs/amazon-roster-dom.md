@@ -1,4 +1,4 @@
-# Amazon Dispatch "Edit assignments" — DOM notes for the roster filler
+# Amazon Dispatch "Edit assignments" — DOM notes for the roster filler (new view; Legacy view at the end)
 
 Checked 2026-10-09 in Jose's Chrome on
 `logistics.amazon.com/dispatch?date=2026-10-10&serviceAreaId=38cd…` (WWV9), new
@@ -31,8 +31,9 @@ the site chrome); the dispatch table is in the normal DOM.
     && [...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Save changes');
   ```
 - **Legacy view**: a switch `input[role="switch"]` labelled "Legacy view" in the
-  header. Everything here is for Legacy view **off** (`checked === false`); with it on
-  the DOM is different. The filler should refuse and say "turn off Legacy view".
+  header. Everything in sections 1–7 is for Legacy view **off** (`checked === false`).
+  With it on, `/dispatch` redirects to the old Scheduling page — see **Legacy view**
+  at the end; that is the page `roster.js` fills since 2026-10-23.
 - **Date**: URL `?date=YYYY-MM-DD` (`new URLSearchParams(location.search).get('date')`).
   (Not checked: whether the prev/next arrows rewrite the URL. Comparing it with the
   picker text below and refusing on a mismatch is cheap.) Fallback:
@@ -360,3 +361,160 @@ Notes for the filler built on this:
   it, then picked "Steven Dale Heilmann" there. Clicked **Cancel** (no dialog).
 - After: reloaded the page — still 31 routes, every DA `—`, view mode. Nothing saved.
   `Save changes` and `Auto-roster Vehicle` were never clicked.
+
+---
+
+# Legacy view — the old Scheduling day page (what roster.js fills since 2026-10-23)
+
+Checked 2026-10-23 in Jose's Chrome, **read only**, on
+`logistics.amazon.com/scheduling?serviceAreaId=38cd…&date=2026-10-24&navMenuVariant=external`
+(Sat Oct 24: Standard Parcel 24 confirmed / 0 rostered, WW Hub Transport CDV 1 / 0) and
+the same page for Fri Oct 23 (everything rostered). Nothing was picked, cleared or saved
+(see the safety record at the end).
+
+## L1. How you get there, which page it is
+
+- With Jose's **Legacy view** switch on, `logistics.amazon.com/dispatch?date=…` **redirects**
+  to `/scheduling?serviceAreaId=…&date=YYYY-MM-DD&navMenuVariant=external`. It is a normal
+  top-level page (no iframe). The preference is sticky per user; the page has an "A new
+  Dispatch experience is available — SWITCH TO DISPATCH" banner that goes back.
+- Path is exactly `/scheduling` — not `/scheduling/calendar-view/week` (that is the week
+  view the 📅 Week bookmark fills, docs/week-bookmarklet.md).
+- Old stack: **Knockout** (`data-bind` everywhere) + **jQuery 1.6.4** (in `noConflict`
+  mode: `window.jQuery` / `window.ko` exist as keys but are `undefined`; modules load
+  through Amazon's `P.when(…)`) + the **Chosen** select plugin (1.x, uses
+  `chosen:updated`). Class names are hand-written (`selectAssociate`, `rowHeader`, …),
+  not hashes — they are the stable hooks. Ids are rare.
+- **Date**: URL `?date=YYYY-MM-DD`. The date bar `ul#datebar li.selected span.dateText`
+  shows `Sat 24-Oct` (no year). Clicking another day submits the Region/Date form (reload).
+
+## L2. Structure
+
+```
+div#confirmedServiceRequestSection.section        "CONFIRMED SERVICES"
+  div.confirmationButton  a#autoRosterBtn "Auto Roster", a#defaultScheduleBtn "Default Schedule"   ← never touch
+  div.withRosterView                               [foreach: serviceTypeDurationStartLocations]
+    div.row  (.open when expanded; display:none when 0 confirmed and 0 rostered)   ← one per SERVICE
+      div.rowHeaderMain
+        div.visualCues  span.greenCheckinTable "✓" | span.blueDotinTable "•"
+        div.expandable                             ← the "+" (empty div, CSS icon); click toggles
+        div.rowHeaderContainer
+          div.rowHeader > span  "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours"
+          div.rowHeaderData > span "24"  " Confirmed"
+          div.rowHeaderData > span "0"   " Rostered"
+      div.rowData   [visible: displayChildren]     ← display:none while collapsed, rows still in the DOM
+        div.rowSubHeader "Confirmed Routes" … one div.schedule per start time
+           ("10:25 am" [Bulk Import Associates] 9 … "Modify DSP Capacity to decline routes")  ← never touch
+        div.roster
+          div.rosterAlertGroup   ("Action required" items, hidden when none)
+          div.rowSubHeader "Associates"
+          div.DAFilter   Filter: Start Time <select> (All | epoch-ms values) · Associate Name <select> (Chosen)
+          div.associatesSection.rosterSection
+            (header) Start Time | Associate | Routes
+            div.associates
+              div.associate                         ← one per ROW (one per confirmed route)
+                div [visible: filterRosterByAssociateName() && filterRosterByStartTime()]
+                  div.column.data.first   "10:25 am"            (start time, lower-case am/pm)
+                  div.column.data.second
+                    select.selectAssociate[name=selectAssociate]  (display:none — the real value)
+                    div.chosen-container.chosen-container-single (style width:90%)
+                      a.chosen-single > span "Select Associate To Roster" | "<option text>"
+                      div.chosen-drop > div.chosen-search > input[type=text] ; ul.chosen-results
+                    span.numErrorMsg "X"   [click: deselectDA]            ← red X, clears the row
+                    span.numErrorMsg "!"   [visible: rosterError, attr data-tooltip]  ← error mark
+                  div.column.data.third
+                    input.displayRoute[disabled]  "No Route Generated" | "Route CX9"
+                    div.routedNotRostered … (icons)
+          div.rosterUpdateButtons
+            a.typeFour.button.ajaxButton "Cancel"   [click: handleCancelButtonClick]
+            a.typeFive.button.ajaxButton "Save"     [click: handleSaveButtonClick]   ← THE save
+```
+
+- Services seen: `Standard Parcel - Extra Large Van - US - Default as station - 10 Hours`,
+  `WW Hub Transport - CDV 16FT - … - 10 Hours`, `WW Hub Transport - Extra Large Van - US -
+  … - 8 Hours` (hidden, 0/0), `Nursery Route Level 1/2/3 - Default as station - 10 Hours`.
+- Rows are grouped by start time in page order (Oct 24: 9 × `10:25 am`, then 15 ×
+  `10:45 am`). The start times are Amazon block times = schedule time + 20 min, i.e.
+  the payload's `portal` (compare upper-cased: `10:25 am` → `10:25 AM`).
+- **All rows of all services are in the DOM even while collapsed** (24 selects in the
+  collapsed Standard Parcel). Expanding only flips `display`.
+- **Accordion**: `div.expandable` click runs `showConfirmationToSaveBeforeToggle`. If any
+  service has unsaved work it shows a confirmation pop-up (its "yes" runs that service's
+  Cancel = discards the picks, then toggles). Otherwise it collapses every service and
+  toggles this one. So only one service is open at a time, and picks in one service must
+  be saved before opening another.
+
+## L3. The Associate box
+
+- The real control is the hidden native `<select class="selectAssociate">`, Knockout
+  `options: daOptions, optionsText: 'dropDownDisplay', optionsValue: 'personId',
+  value: daSelection, optionsCaption: 'Select Associate To Roster', chosen: {width:'90%'}`.
+- **Options** (Oct 24: 66 + the caption, the same list in every row of every service, A→Z,
+  no optgroups, nothing disabled; already-rostered people are NOT removed or grouped):
+  - `value` = **personId = the Transporter ID** (`A4RS06DEVIJVJ`-style, 13–14 chars;
+    27 of 30 TIDs from our fixtures were found among the values). So the payload's `tid`
+    matches an option exactly.
+  - text = `dropDownDisplay` = `name + " " + phoneNumber + " " + preferedServiceAreaName`,
+    plus `" (Inactive)"` when the associate is inactive (none seen). E.g.
+    `Adam James Scott +1304555xxxx Davisville (WWV9) - Amazon.com`. With no phone on file
+    it is `Ashley Nicole Lusk  Davisville (WWV9) - Amazon.com` (two spaces; 3 of 66).
+    `option.text` collapses spaces, `textContent` keeps them. No double spaces inside
+    names were seen here (unlike the new view).
+  - Caption option: value `""`, text `Select Associate To Roster`.
+- **Has an associate**: `select.value !== ""`; the Chosen box then shows the full option
+  text (`a.chosen-single span`). Empty: value `""`, box shows `Select Associate To Roster`.
+  Both X and ! spans exist on every row; X is always shown, ! only on an error.
+- **Chosen widget** (only the look): `mousedown` on `a.chosen-single` opens it
+  (`chosen-with-drop`), building `ul.chosen-results > li.active-result[data-option-array-index=N]`
+  (N = option index; the list is empty until first opened). `keyup` Escape on the search
+  input closes it without picking (`keydown` Escape does not). A pick is `mouseup` on the
+  `li`, which sets the option and fires jQuery `change` with `{selected: value}`.
+- **Knockout's `chosen` binding** subscribes to `value`/`options` and triggers
+  `chosen:updated`, so a change of `daSelection` redraws the box. The `value` binding
+  listens to `change` on the select (jQuery-bound, i.e. a normal listener), so
+  `select.value = tid; select.dispatchEvent(new Event('change', {bubbles:true}))` should
+  set `daSelection` and redraw the box. **Not tried on the real page** (no picks allowed
+  during the check); roster.js verifies the box shows the name and otherwise falls back
+  to the Chosen mousedown/mouseup pick.
+
+## L4. Does a pick save? — **No. It needs that service's Save button.**
+
+- `daSelection.subscribe` (page script) only does local work: refresh the filter list
+  (`fillAssociateOptions`), clear action errors, run the **local overlap check**
+  (`overlapDaSelectionCheck`: the same personId on another row of any service whose block
+  overlaps → `overlapError` → the red `!` on the row, tooltip from `rosterErrorMessage`),
+  and `handlePopupToTerminateSession` (only when *replacing* a DA who has an active
+  session — never the case for an empty row). No network call.
+- Saving is `handleSaveButtonClick` on the service's **Save** (`div.rosterUpdateButtons
+  a.typeFive`, label "SAVE"): it builds create/cancel/route maps and calls Amazon. Errors
+  from that come back per row as `saveRosterError` (same `!`).
+- **Cancel** (`a.typeFour` "CANCEL") throws the unsaved picks away.
+- The top **SUBMIT** (`a#searchSubmitBtn` in `form#schedulingDSPCSearchbar`) is the
+  Region/Date search, not a save. Also never touch: Auto Roster, Default Schedule,
+  Bulk Import Associates, Modify DSP Capacity, the red X on filled rows.
+
+## L5. Rules the filler follows here
+
+- Fill only `Standard Parcel…` services; list the others (Nursery Route, WW Hub
+  Transport, …) as left for the dispatcher. If more than one Standard Parcel service has
+  empty rows, fill one (the open one, else the first) and say: Save, open the next, click
+  the bookmark again (accordion + unsaved-work pop-up).
+- Expand the service first (`div.expandable` click) while nothing is unsaved; if it does
+  not open (the unsaved-work pop-up), stop and let the dispatcher answer it.
+- "Taken" = every non-empty `select.selectAssociate` on the page, all services. Match
+  payload `tid` to option `value` first, then the local name match on the name part of
+  the option text. Inactive options are never picked.
+- After each pick, a visible `!` on that row means Amazon flagged it → set it back to
+  empty and report.
+- Never press Save / Cancel / SUBMIT. Last line: check the screen, then press **Save**.
+
+## Safety record (legacy check, 2026-10-23)
+
+- Read the DOM and the page scripts (fetched the page's own script files to read the
+  view-model code). Expanded Standard Parcel on Oct 24 with its "+" (display only),
+  opened one Associate box's Chosen list and closed it with Escape: value stayed `""`,
+  0 rows with a value anywhere before and after. On reload Standard Parcel was
+  collapsed again.
+- Never picked, never clicked X, Save, Cancel, SUBMIT, Auto Roster, Bulk Import. Did not
+  touch the Legacy view switch (opening `/dispatch` just redirected because it was
+  already on).

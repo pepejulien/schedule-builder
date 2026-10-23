@@ -1,0 +1,338 @@
+<!doctype html>
+<!--
+  TEST ONLY — a stand-in for Amazon's old Scheduling day page (what Dispatch shows with
+  "Legacy view" on), built from docs/amazon-roster-dom.md "Legacy view", so public/roster.js
+  can be run end to end on this PC. (Jose 2026-10-23)
+
+  Serve it on its own port (a different origin from the app), e.g.
+      python -m http.server 8791 --directory tests/roster_mock
+  and the app with the mock JAJB:
+      python tests/live_mock/serve.py            (http://localhost:8777)
+  Seed the Live board with tests/roster_mock/seed.js (week 2026-10-04; this page defaults to
+  Sat 2026-10-10), open http://localhost:8791/scheduling-legacy.html?frame=1 and press
+  "Run the bookmark (test)". See tests/roster_mock/README.md.
+
+  Like Amazon: Knockout-style rows (a hidden <select class="selectAssociate"> per row, value =
+  Transporter ID) behind a Chosen box; one service open at a time; opening another service
+  with unsaved picks shows a "discard?" pop-up; picks are kept only by the service's Save.
+
+  Options: ?date=YYYY-MM-DD  ?frame=1 (iframe named jajbRoster, for browsers without pop-ups)
+  ?app=http://localhost:8777/  ?open=sp (Standard Parcel already open)
+  ?dirty=1 (Nursery Route Level 3 open with an unsaved pick: roster.js must stop at the pop-up)
+  ?chosenonly=1 (the page ignores a plain "change" event: roster.js must pick through Chosen)
+  ?flag=A-TINA (picking that Transporter ID shows a red ! : roster.js must empty the row again)
+  ?filter=1 (Standard Parcel's Start Time filter set)  ?bar=Sun%2011-Oct (date bar disagrees)
+  window.__mock.log lists clicks on Save / Cancel / SUBMIT / X / Auto Roster / Bulk Import /
+  the pop-up (roster.js must leave it empty); window.__mock.picked() lists unsaved picks.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scheduling legacy (mock)</title>
+<script>window.__jajbRosterTest = true;</script>
+<style>
+  body{font:12px/1.4 Arial,sans-serif;margin:0;background:#fff;color:#111}
+  .mockbar{background:#7a1f1f;color:#fff;padding:6px 12px;font-weight:600;font-size:14px}
+  .mockbar button{margin-left:10px}
+  #schedulingDSPCSearchbar{display:flex;gap:14px;align-items:center;padding:8px 14px;border-bottom:1px solid #ddd}
+  #searchSubmitBtn{border:1px solid #e47911;color:#e47911;padding:3px 18px;text-decoration:none;font-weight:700}
+  .newdispatch{margin:10px 24px;padding:8px 12px;background:#f3f3f3;border:1px solid #ddd;display:flex;justify-content:space-between}
+  #datebar{list-style:none;display:flex;gap:40px;justify-content:center;padding:0;margin:8px 0}
+  #datebar ul{list-style:none;display:flex;gap:40px;padding:0;margin:0}
+  #datebar li{cursor:pointer;color:#3a8fd8}
+  #datebar li.selected .dateText{font-size:16px;font-weight:700}
+  .station{color:#e47911;font-weight:700;font-size:14px;margin:4px 24px}
+  #confirmedServiceRequestSection{margin:10px 24px}
+  .sectionHeading{margin:4px 0}
+  .confirmationButton a{margin-right:8px}
+  .withRosterView > .row{border:1px solid #333;margin:4px 0}
+  .rowHeaderMain{display:flex;align-items:center;background:#d6d6d6;padding:5px 6px;gap:8px}
+  .visualCues span{color:#3a8fd8}
+  .expandable{width:14px;cursor:pointer;font-weight:700}
+  .expandable::before{content:"+"}
+  .row.open .expandable::before{content:"−"}
+  .rowHeaderContainer{display:flex;flex:1;justify-content:space-between}
+  .rowHeaderData{display:inline-block;margin-left:8px}
+  .rowData{padding:6px}
+  .rowSubHeader{font-size:13px;margin:6px 0 2px}
+  .schedule{display:flex;gap:30px;border-bottom:1px solid #eee;padding:2px 12px}
+  .DAFilter{background:#e3e3e3;padding:3px 6px}
+  .associatesSection .head,.associate > div{display:grid;grid-template-columns:150px 600px 1fr;align-items:center;padding:3px 12px}
+  .chosen-container{position:relative;display:inline-block;vertical-align:middle}
+  .chosen-single{display:block;border:1px solid #aaa;border-radius:3px;padding:2px 6px;background:#f6f6f6;color:#222;text-decoration:none;cursor:pointer}
+  .chosen-drop{display:none;position:absolute;left:0;right:0;top:100%;background:#fff;border:1px solid #aaa;z-index:20;box-shadow:0 4px 8px rgba(0,0,0,.2)}
+  .chosen-with-drop .chosen-drop{display:block}
+  .chosen-search input{width:96%;margin:3px}
+  .chosen-results{list-style:none;margin:0;padding:0;max-height:200px;overflow:auto}
+  .chosen-results li{padding:3px 6px;cursor:pointer}
+  .chosen-results li:hover{background:#3875d7;color:#fff}
+  .numErrorMsg{color:#d00;font-weight:700;margin-left:4px;cursor:pointer}
+  .displayRoute{width:500px}
+  .rosterUpdateButtons{text-align:right;padding:6px}
+  .rosterUpdateButtons a{display:inline-block;border:1px solid #e47911;color:#e47911;padding:4px 24px;margin-left:4px;text-decoration:none;font-weight:700}
+  .rosterUpdateButtons a.typeFour{border-color:#aaa;color:#888}
+  #mockConfirm{position:fixed;left:50%;top:30%;transform:translateX(-50%);background:#fff;border:2px solid #333;padding:16px;z-index:50;display:none}
+  .saved{background:#b00020;color:#fff;padding:8px 16px;font-weight:700}
+</style>
+</head>
+<body>
+<div class="mockbar">MOCK of Amazon Scheduling, legacy view (test page) <button id="runbm">Run the bookmark (test)</button> <span id="mocklog"></span></div>
+<form id="schedulingDSPCSearchbar" onsubmit="return false">
+  <span>REGION ▾</span><span>DATE ▾</span>
+  <a id="searchSubmitBtn" class="typeFive button ajaxButton" href="javascript:void(0);" data-bind="enable: isReady(), css: { loading: loading }, click: submit">SUBMIT</a>
+</form>
+<div class="newdispatch"><span><b>A new Dispatch experience is available</b><br>Manage rostering and route assignment faster in the new view</span><a href="javascript:void(0);" id="switchToDispatch">SWITCH TO DISPATCH</a></div>
+<ul id="datebar" data-bind="visible: isDisplayed()"><li>&lt;&lt;</li><li><ul id="dates" data-bind="foreach: dates"></ul></li><li>&gt;&gt;</li></ul>
+<div class="station">Davisville (WWV9) - Amazon.com</div>
+<div id="confirmedServiceRequestSection" class="section" data-bind="with: newEditConfirmedReservationModel">
+  <h5 class="confirmedServiceRequest sectionHeading">CONFIRMED SERVICES</h5>
+  <div class="confirmationButton sectionHeading">
+    <a id="autoRosterBtn" class="button ajaxButton artBtn typeFive" href="javascript:void(0);">Auto Roster</a>
+    <a id="defaultScheduleBtn" class="button ajaxButton typeFive dsBtn" href="javascript:void(0);">Default Schedule</a>
+  </div>
+  <div class="withRosterView" data-bind="foreach: serviceTypeDurationStartLocations"></div>
+</div>
+<div id="mockConfirm"><p id="mockConfirmText"></p><button id="mockYes">Yes, discard</button> <button id="mockNo">No</button></div>
+
+<script>
+(function () {
+  "use strict";
+  const params = new URLSearchParams(location.search);
+  const APP = params.get("app") || "http://localhost:8777/";
+  const DATE = /^\d{4}-\d{2}-\d{2}$/.test(params.get("date") || "") ? params.get("date") : "2026-10-10";
+  const CHOSEN_ONLY = params.get("chosenonly") === "1";
+  const FLAG = params.get("flag") || "";
+  const log = [];
+  const note = (s) => { log.push(s); document.getElementById("mocklog").textContent = "page clicks: " + log.join(", "); };
+  const later = (fn) => setTimeout(fn, 25);                 // Knockout-ish async redraw
+  const CAPTION = "Select Associate To Roster";
+  const AREA = "Davisville (WWV9) - Amazon.com";
+
+  // Amazon's associate list (value = Transporter ID). No phone → "Name  Station"; inactive → "… (Inactive)".
+  const PEOPLE = [
+    ["Adam James Scott", "A-ADAM", "+13045550101"], ["Amy Early", "A-AMY", "+13045550102"], ["Barry Len Hughes", "A-BARRY", "+13045550103"],
+    ["Bea Ready", "A-BEA", "+13045550104"], ["Cara Amos", "A-CARA", "+13045550105"], ["Carl Dee Fox", "A-CARL", ""],
+    ["Dora Moss", "A-DORA", "+13045550107"], ["Eli Grant", "A-ELI", "+13045550108"], ["Hank Hours", "A-HANK", "+13045550109", true],
+    ["José Núñez", "A-JOSE", "+13045550110"], ["Michael Rowe", "T-MIKE", "+13045550111"], ["Olga Pre", "A-OLGA", "+13045550112"],
+    ["Pat Quinn", "A-PAT", "+13045550113"], ["Sam K Lee", "A-SAMK", "+13045550114"], ["Sam Lee", "A-SAM", "+13045550115"],
+    ["Steven Dale Heilmann", "A-STEVE", "+13045550116"], ["Tina Trainee", "A-TINA", "+13045550117"],
+  ].map(([name, tid, phone, inactive]) => ({ name, tid, phone, inactive: !!inactive })).sort((a, b) => a.name.localeCompare(b.name));
+  const textOf = (p) => { const t = p.name + " " + p.phone + " " + AREA; return p.inactive ? t + " (Inactive)" : t; };
+  const byTid = Object.fromEntries(PEOPLE.map((p) => [p.tid, p]));
+
+  // the day's services; [time, saved Transporter ID or ""] per row
+  const rows = (spec) => spec.flatMap(([time, n, filled]) => Array.from({ length: n }, (_, i) => ({ time, saved: (filled || {})[i] || "" })));
+  const SVC = [
+    { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours",
+      rows: rows([["10:25 am", 4, { 0: "A-OLGA" }], ["10:45 am", 9, { 2: "A-STEVE" }]]) },
+    { heading: "WW Hub Transport - CDV 16FT - Default as station - 10 Hours", rows: rows([["10:25 am", 1]]) },
+    { heading: "WW Hub Transport - Extra Large Van - US - Default as station - 8 Hours", rows: [] },
+    { heading: "Nursery Route Level 1 - Default as station - 10 Hours", rows: rows([["10:45 am", 1, { 0: "A-PAT" }]]) },
+    { heading: "Nursery Route Level 3 - Default as station - 10 Hours", rows: rows([["10:25 am", 1]]) },
+  ];
+  for (const s of SVC) { s.short = s.heading.replace(/ - Default as station.*$/, ""); s.open = false; for (const r of s.rows) { r.svc = s; r.value = r.saved; r.err = null; } }
+  const allRows = () => SVC.flatMap((s) => s.rows);
+  if (params.get("open") === "sp") SVC[0].open = true;
+  if (params.get("dirty") === "1") { SVC[4].open = true; SVC[4].rows[0].value = "A-ELI"; }
+
+  window.__mock = { log, picked: () => allRows().filter((r) => r.value !== r.saved).map((r) => [r.svc.short, r.time, r.value, byTid[r.value] ? byTid[r.value].name : ""]) };
+
+  // ?frame=1: an iframe named "jajbRoster" catches roster.js's window.open(…, "jajbRoster", …)
+  if (params.get("frame") === "1") {
+    const f = document.createElement("iframe");
+    f.name = "jajbRoster"; f.title = "app window (test)";
+    f.style.cssText = "position:fixed;left:8px;bottom:8px;width:440px;height:260px;border:2px dashed #7a1f1f;background:#fff;z-index:5";
+    document.body.appendChild(f);
+  }
+  document.getElementById("runbm").onclick = () => {
+    const s = document.createElement("script");
+    s.src = APP + "roster.js?" + Date.now();
+    document.body.appendChild(s);
+  };
+  document.getElementById("searchSubmitBtn").onclick = () => note("SUBMIT");
+  document.getElementById("switchToDispatch").onclick = () => note("SWITCH TO DISPATCH");
+  document.getElementById("autoRosterBtn").onclick = () => note("AUTO ROSTER");
+  document.getElementById("defaultScheduleBtn").onclick = () => note("DEFAULT SCHEDULE");
+
+  /* ---------- date bar: "Sat 10-Oct" ---------- */
+  (function dateBar() {
+    const [y, m, d] = DATE.split("-").map(Number);
+    const ul = document.getElementById("dates");
+    for (let k = -3; k <= 3; k++) {
+      const dt = new Date(y, m - 1, d + k);
+      const li = document.createElement("li");
+      li.setAttribute("data-bind", "css: {selected: $data.dateToUse == $root.chosenDate()}, click: $root.goToDate");
+      if (k === 0) li.className = "selected";
+      const label = dt.toLocaleDateString("en-US", { weekday: "short" }) + " " + dt.getDate() + "-" + dt.toLocaleDateString("en-US", { month: "short" });
+      li.innerHTML = `<span class="dateText blueDot" data-bind="text: $data.dateToDisplay, css: $data.cssToAppend"></span>`;
+      li.firstChild.textContent = k === 0 && params.get("bar") ? params.get("bar") : label;
+      li.onclick = () => note("DATE " + label);
+      ul.appendChild(li);
+    }
+  })();
+
+  /* ---------- services ---------- */
+  const root = document.querySelector(".withRosterView");
+  const times = (s) => [...new Set(s.rows.map((r) => r.time))];
+  function buildService(s) {
+    const el = s.el = document.createElement("div");
+    el.className = "row";
+    el.setAttribute("data-bind", "visible: (totalConfirmed() > 0 || totalRostered() > 0), css: {open: displayChildren}");
+    if (!s.rows.length) el.style.display = "none";
+    el.innerHTML = `
+      <div class="rowHeaderMain">
+        <div class="visualCues"><span class="greenCheckinTable">✓</span><span class="blueDotinTable">•</span></div>
+        <div class="expandable" data-bind="click: function(data, event){ $parent.showConfirmationToSaveBeforeToggle(data, event) }"></div>
+        <div class="rowHeaderContainer">
+          <div class="rowHeader"><span data-bind="text: heading"></span><span class="informationIcon"></span></div>
+          <div><div class="rowHeaderData"><span class="nConf" data-bind="text: totalConfirmed"></span> Confirmed</div>
+          <div class="rowHeaderData"><span class="nRos" data-bind="text: totalRostered"></span> Rostered</div></div>
+        </div>
+      </div>
+      <div class="rowData" data-bind="visible: displayChildren">
+        <div class="rowSubHeader">Confirmed Routes</div>
+        <div class="schedules"></div>
+        <div class="roster">
+          <div class="rosterAlertGroup"><div class="rosterAlertGroupItem" style="display:none">Action required</div></div>
+          <div class="rowSubHeader">Associates</div>
+          <div class="DAFilter">Filter: Start Time <select class="ft"><option value="">All</option></select>
+            Associate Name <select class="fa"><option value="">--Select--</option></select></div>
+          <div class="clearBoth"></div>
+          <div class="associatesSection rosterSection">
+            <div class="head"><span>Start Time</span><span>Associate</span><span>Routes</span></div>
+            <div class="associates"></div>
+          </div>
+          <div class="clearBoth"></div>
+          <div class="rosterUpdateButtons">
+            <a class="typeFour button ajaxButton" href="javascript:void(0);" data-bind="click: handleCancelButtonClick">Cancel</a>
+            <a class="typeFive button ajaxButton" href="javascript:void(0);" data-bind="click: handleSaveButtonClick">Save</a>
+          </div>
+        </div>
+      </div>`;
+    el.querySelector(".rowHeader span").textContent = s.heading;
+    const sch = el.querySelector(".schedules");
+    for (const t of times(s)) {
+      const d = document.createElement("div"); d.className = "schedule";
+      d.innerHTML = `<div class="data first"><span class="floatLeft">${t}</span> <button class="bulkImportDaButton">Bulk Import Associates</button></div><div class="data"><span>${s.rows.filter((r) => r.time === t).length}</span></div><div class="data"><a href="javascript:void(0);">Modify DSP Capacity to decline routes</a></div>`;
+      d.querySelector("button").onclick = () => note("BULK IMPORT");
+      d.querySelector("a").onclick = () => note("MODIFY DSP CAPACITY");
+      sch.appendChild(d);
+      el.querySelector(".ft").insertAdjacentHTML("beforeend", `<option value="${t}">${t}</option>`);
+    }
+    if (params.get("filter") === "1" && s === SVC[0]) el.querySelector(".ft").value = "10:45 am";
+    el.querySelector(".ft").onchange = () => drawRows(s);
+    const list = el.querySelector(".associates");
+    for (const r of s.rows) list.appendChild(buildRow(r));
+    el.querySelector(".expandable").onclick = () => toggle(s);
+    const [cancel, save] = el.querySelectorAll(".rosterUpdateButtons a");
+    cancel.onclick = () => { note("CANCEL " + s.short); for (const r of s.rows) { r.value = r.saved; r.sel.value = r.value; } recompute(); };
+    save.onclick = () => {
+      note("SAVE " + s.short);
+      const b = document.createElement("div"); b.className = "saved"; b.textContent = "SAVED (mock) — roster.js must never do this"; document.body.prepend(b);
+      for (const r of s.rows) r.saved = r.value; recompute();
+    };
+    root.appendChild(el);
+  }
+
+  function buildRow(r) {
+    const a = document.createElement("div");
+    a.className = "associate";
+    a.innerHTML = `<div data-bind="visible: filterRosterByAssociateName() &amp;&amp; filterRosterByStartTime()">
+      <div class="column data first" data-bind="text: formattedStartTime"></div>
+      <div class="column data second">
+        <select class="selectAssociate" name="selectAssociate" style="display:none" data-bind=" options: daOptions, optionsText: 'dropDownDisplay', optionsValue: 'personId', value: daSelection, optionsCaption: 'Select Associate To Roster', chosen: {width: '90%'}"></select>
+        <div class="chosen-container chosen-container-single" style="width: 90%;">
+          <a class="chosen-single" tabindex="-1"><span></span><div><b></b></div></a>
+          <div class="chosen-drop"><div class="chosen-search"><input type="text" autocomplete="off"></div><ul class="chosen-results"></ul></div>
+        </div>
+        <span class="numErrorMsg" data-bind="enable: enableDeselect, click: deselectDA">X</span>
+        <span class="numErrorMsg" data-bind="visible: rosterError, attr: { 'data-tooltip': rosterErrorMessage }" data-tooltip="" style="display:none">!</span>
+      </div>
+      <div class="column data third"><input class="displayRoute" disabled value="No Route Generated"></div>
+    </div>`;
+    r.el = a; r.inner = a.firstElementChild;
+    a.querySelector(".column.data.first").textContent = r.time;
+    const sel = r.sel = a.querySelector("select");
+    sel.appendChild(new Option(CAPTION, ""));
+    for (const p of PEOPLE) { const o = document.createElement("option"); o.value = p.tid; o.textContent = textOf(p); sel.appendChild(o); }
+    sel.value = r.value;
+    r.cont = a.querySelector(".chosen-container"); r.span = a.querySelector(".chosen-single span");
+    r.ul = a.querySelector(".chosen-results"); r.bang = a.querySelectorAll(".numErrorMsg")[1];
+    // Knockout's value binding: a "change" on the select sets the row (?chosenonly=1: only Chosen's own change counts)
+    sel.addEventListener("change", (e) => {
+      if (CHOSEN_ONLY && !e.__chosen) return;
+      later(() => { r.value = sel.value; recompute(); });
+    });
+    // Chosen: mousedown opens, mouseup on a result picks, Escape (keyup) closes
+    a.querySelector(".chosen-single").addEventListener("mousedown", (e) => { e.preventDefault(); if (r.cont.classList.contains("chosen-with-drop")) closeChosen(r); else openChosen(r); });
+    r.ul.addEventListener("mouseup", (e) => {
+      const li = e.target.closest("li.active-result"); if (!li) return;
+      sel.selectedIndex = +li.getAttribute("data-option-array-index");
+      closeChosen(r);
+      const ev = new Event("change", { bubbles: true }); ev.__chosen = true; sel.dispatchEvent(ev);
+    });
+    a.querySelector(".chosen-search input").addEventListener("keyup", (e) => { if (e.key === "Escape") closeChosen(r); });
+    a.querySelectorAll(".numErrorMsg")[0].onclick = () => { note("X " + r.svc.short + " " + r.time); r.value = ""; sel.value = ""; recompute(); };
+    return a;
+  }
+  let openRow = null;
+  function openChosen(r) {
+    if (openRow) closeChosen(openRow);
+    openRow = r;
+    r.cont.classList.add("chosen-with-drop", "chosen-container-active");
+    r.ul.innerHTML = "";
+    [...r.sel.options].forEach((o, i) => {
+      const li = document.createElement("li");
+      li.className = "active-result" + (i === r.sel.selectedIndex ? " result-selected" : "");
+      li.setAttribute("data-option-array-index", i); li.textContent = o.text;
+      r.ul.appendChild(li);
+    });
+  }
+  function closeChosen(r) { r.cont.classList.remove("chosen-with-drop"); if (openRow === r) openRow = null; }
+
+  // one service open at a time; unsaved picks anywhere → "discard?" pop-up instead
+  function toggle(s) {
+    const dirty = SVC.find((x) => x.rows.some((r) => r.value !== r.saved));
+    if (dirty) {
+      document.getElementById("mockConfirmText").textContent = `You have unsaved changes in ${dirty.short}. Discard them?`;
+      const m = document.getElementById("mockConfirm"); m.style.display = "block";
+      document.getElementById("mockYes").onclick = () => { note("POPUP YES"); m.style.display = "none"; for (const r of dirty.rows) { r.value = r.saved; r.sel.value = r.value; } const was = s.open; SVC.forEach((x) => { x.open = false; }); s.open = !was; recompute(); };
+      document.getElementById("mockNo").onclick = () => { note("POPUP NO"); m.style.display = "none"; };
+      return;
+    }
+    const was = s.open; SVC.forEach((x) => { x.open = false; }); s.open = !was;
+    later(recompute);
+  }
+
+  function drawRows(s) {
+    const ft = s.el.querySelector(".ft").value;
+    for (const r of s.rows) {
+      r.inner.style.display = !ft || r.time === ft ? "" : "none";
+      r.span.textContent = r.value && byTid[r.value] ? textOf(byTid[r.value]) : CAPTION;
+      r.bang.style.display = r.err ? "inline" : "none";
+      r.bang.setAttribute("data-tooltip", r.err || "");
+    }
+  }
+  function recompute() {
+    const count = {};
+    for (const r of allRows()) if (r.value) count[r.value] = (count[r.value] || 0) + 1;
+    for (const r of allRows()) {
+      r.err = r.value && count[r.value] > 1 ? "This associate is rostered on an overlapping block (mock)"
+        : r.value && FLAG && r.value === FLAG && r.value !== r.saved ? "Mock error for this associate" : null;
+    }
+    for (const s of SVC) {
+      if (!s.el) continue;
+      s.el.classList.toggle("open", s.open);
+      s.el.querySelector(".rowData").style.display = s.open ? "" : "none";
+      s.el.querySelector(".nConf").textContent = s.rows.length;
+      s.el.querySelector(".nRos").textContent = s.rows.filter((r) => r.saved).length;
+      drawRows(s);
+    }
+  }
+  // services arrive a moment after the page (Amazon loads them with an AJAX call)
+  setTimeout(() => { SVC.forEach(buildService); recompute(); }, 300);
+})();
+</script>
+</body>
+</html>

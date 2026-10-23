@@ -10,9 +10,25 @@
   An EMPTY cell shows an "Assign" icon only on hover (React 16 onMouseEnter: a "mouseover" with a
   relatedTarget is ignored, like React 16 does for synthetic ones); clicking the ICON opens the shift menu (role=dialog, "Apply single shift", one button per
   shift with <p title="Driver • 10:05 AM • 9h 50m">); picking a shift fills the cell at once.
-  ?app=http://localhost:8777/  where schedweek.js is loaded from.   ?frame=1  iframe "jajbWeek" for
-  browsers without pop-ups.   window.__mock.log lists clicks on Publish / Auto-roster / Apply weekly
-  pattern (schedweek.js must leave it empty).
+  The week is NEXT week (same Sunday as seed-week.js), or the week of ?date=YYYY-MM-DD.
+
+  Like the real page (Jose 2026-10-23):
+  - popovers mount when opened (popover-N, shown a moment later) and unmount when closed; a closing
+    popover stays on screen ?closems=350 ms with aria-expanded="false";
+  - a picked shift shows at once as a "pending" shift, then Amazon saves it (?savems=900) and re-draws
+    the cell (new elements) - an open menu on that shift goes away, and a "Set as backup" ticked on the
+    pending shift is lost (the save doesn't carry it);
+  - a filled shift's own menu: SHIFT, its title, Repeat every week, Auto-roster preference
+    (Standard / Set as backup), Add a comment, a Close button (aria-label "Close"); clicking the
+    shift again also closes it;
+  - Escape or an outside click on an open ADD menu puts "Unavailable" in that cell (2026-10-09);
+    window.__mock.log gets "UNAVAILABLE TRAP".
+  Options: ?app=http://localhost:8777/  where schedweek.js is loaded from.   ?frame=1  iframe "jajbWeek"
+  for browsers without pop-ups.   ?empty=1  no shifts already in Amazon.   ?linger=1  what-if: after a
+  pick, the new shift's own menu is left open.   ?stuck=1  a shift's own menu won't close (Close and
+  clicking the shift do nothing) - the run must stop and say so.   ?closems= / ?savems=  the delays above.
+  window.__mock.log lists clicks on Publish / Auto-roster / Apply weekly pattern and the trap
+  (schedweek.js must leave it empty); window.__mock.cells() lists every filled cell.
 -->
 <script>window.__jajbWeekTest = true;</script>
 <style>
@@ -27,37 +43,60 @@
   .inner{display:flex}
   .cell{flex:1;min-height:38px;border-left:1px solid #eee;position:relative;cursor:pointer}
   .cell p{margin:4px;border:1px solid #ccc;padding:4px}
+  .cell p.pending{opacity:.55;border-style:dashed}
+  .cell p.bk{border-color:#df7332;background:#fff4ec}
   .dh{flex:1;padding:6px;font-weight:bold}
-  [role=dialog]{position:fixed;background:#fff;border:1px solid #888;padding:8px;width:300px;z-index:10}
+  .ar{flex:1;padding:2px 6px}
+  [role=dialog]{position:fixed;background:#fff;border:1px solid #888;padding:8px;width:300px;z-index:10;transition:opacity .3s}
+  [role=dialog][aria-expanded=false]{opacity:.4}
   [role=dialog] button{display:block;width:100%;text-align:left;margin:2px 0}
 </style>
 </head>
 <body>
 <div class="top">
   <b>Scheduling (TEST COPY)</b>
-  <span id="weeklabel">Week 42: Oct 11 - Oct 17, 2026</span>
-  <button id="publish">Publish until 10/17 (0)</button>
+  <span id="weeklabel"></span>
+  <button id="publish">Publish until (0)</button>
   <button id="runbm" style="background:#df7332;color:#fff">Run the bookmark (test)</button>
 </div>
 <div class="grid">
   <div class="side"><b>Shifts</b><div id="shifts"></div></div>
   <div class="main">
     <div class="hdr"><div class="namecol"><input placeholder="Search asso..."></div><div class="days"><div class="inner" id="dayhdr"></div></div></div>
+    <div class="hdr"><div class="namecol">Work blocks rostered</div><div class="days"><div class="inner" id="autoroster"></div></div></div>
     <div id="rows"></div>
   </div>
 </div>
-<div role="dialog" id="popover-1" aria-expanded="false" style="display:none"></div>
 <script>
 (() => {
   const params = new URLSearchParams(location.search);
   const APP = params.get("app") || "http://localhost:8777/";
+  const num = (k, d) => { const v = params.get(k); return v != null && v !== "" && !isNaN(+v) ? +v : d; };
+  const OPT = { close: num("closems", 350), save: num("savems", 900), linger: params.get("linger") === "1", empty: params.get("empty") === "1",
+    stuck: params.get("stuck") === "1" };
   const log = [];
-  window.__mock = { log, applied: [] };
+  window.__mock = { log, applied: [], opt: OPT };
   const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  ["Sun, Oct 11", "Mon, Oct 12", "Tue, Oct 13", "Wed, Oct 14", "Thu, Oct 15", "Fri, Oct 16", "Sat, Oct 17"].forEach((t) => {
-    const d = document.createElement("div"); d.className = "dh"; const p = document.createElement("p"); p.textContent = t; d.appendChild(p);
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  // the week: ?date=, else next week's Sunday (seed-week.js uses the same rule)
+  const qd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(params.get("date") || "");
+  const sun = qd ? new Date(+qd[1], +qd[2] - 1, +qd[3], 12) : new Date();
+  sun.setHours(12, 0, 0, 0);
+  sun.setDate(sun.getDate() - sun.getDay() + (qd ? 0 : 7));
+  const dayAt = (i) => { const d = new Date(sun); d.setDate(sun.getDate() + i); return d; };
+  const md = (d) => `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+  const jan1 = new Date(sun.getFullYear(), 0, 1, 12);
+  const weekNo = Math.floor((Math.round((sun - jan1) / 864e5) + jan1.getDay()) / 7) + 1;
+  document.getElementById("weeklabel").textContent = `Week ${weekNo}: ${md(sun)} - ${md(dayAt(6))}, ${dayAt(6).getFullYear()}`;
+  document.getElementById("publish").textContent = `Publish until ${dayAt(6).getMonth() + 1}/${dayAt(6).getDate()} (0)`;
+  for (let i = 0; i < 7; i++) {
+    const d = document.createElement("div"); d.className = "dh"; const a = document.createElement("a"); a.textContent = `${DAYS[i]}, ${md(dayAt(i))}`; d.appendChild(a);
     document.getElementById("dayhdr").appendChild(d);
-  });
+    const r = document.createElement("div"); r.className = "ar"; const b = document.createElement("a"); b.href = "#"; b.textContent = "Auto-roster";
+    b.onclick = (e) => { e.preventDefault(); log.push("Auto-roster " + DAYS[i]); }; r.appendChild(b);
+    document.getElementById("autoroster").appendChild(r);
+  }
   const SHIFTS = ["Unavailable", "Closer", "Dispatcher • 9:15 AM • 12h", "Driver • 10:05 AM • 9h 50m", "Driver • 10:25 AM • 9h 50m",
     "Driver • 10:45 AM • 9h 50m", "Driver • 11:05 AM • 9h 50m", "Driver • 11:25 AM • 9h 50m", "Helper 10:05 AM", "Helper 10:25 AM",
     "Helper • 10:45 AM • 10h 50m", "Meeting"];
@@ -79,34 +118,133 @@
     ["Sam K Lee", "samk@x.com", {}],
     ["Greyson Lee Turner", "g@x.com", { 0: "4 PM", 2: "9:15 AM" }],
     ["Lou Backup", "lou@x.com", { 2: "10:05 AM" }],
+    ["Bo Backup", "bo@x.com", {}],
   ];
-  const fillCell = (cell, text) => {
+
+  // cell state, drawn like React: every change draws NEW elements in the cell
+  let seq = 0;
+  const state = new Map();                                 // cell -> {text, id, pending, backup}
+  function render(cell) {
+    const s = state.get(cell);
     cell.innerHTML = "";
     let e = cell;
     for (let i = 0; i < 4; i++) { const d = document.createElement("div"); e.appendChild(d); e = d; }
-    if (text) {
-      const p = document.createElement("p"); p.title = text; p.textContent = text; e.appendChild(p);
-      // like Amazon: a filled shift opens ITS menu (Auto-roster preference: Standard / Set as backup)
-      if (/\d/.test(text)) p.addEventListener("click", (ev) => { ev.stopPropagation(); shiftMenu(cell, p); });
-    }
-  };
-  const flags = new Map();                                 // cell -> backup ticked
-  function shiftMenu(cell, p) {
-    const d = document.getElementById("popover-1");
-    if (d.style.display !== "none" && d.dataset.for === "shift") { d.style.display = "none"; d.setAttribute("aria-expanded", "false"); return; }
-    d.innerHTML = ""; d.dataset.for = "shift";
-    const h = document.createElement("p"); h.textContent = "SHIFT";
-    const t = document.createElement("p"); t.textContent = "Driver • " + p.textContent + " • 9h 50m";
-    const pref = document.createElement("p"); pref.textContent = "Auto-roster preference";
-    const lab = document.createElement("label"); const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!flags.get(cell);
-    const sp = document.createElement("span"); sp.textContent = "Set as backup"; lab.append(cb, sp);
-    cb.addEventListener("change", () => { flags.set(cell, cb.checked); window.__mock.applied.push("backup:" + cb.checked + "|" + cell.dataset.who); });
-    const close = document.createElement("button"); close.type = "button"; close.textContent = "Close";
-    close.onclick = () => { d.style.display = "none"; d.setAttribute("aria-expanded", "false"); };
-    d.append(h, t, pref, lab, close);
-    d.style.display = ""; d.setAttribute("aria-expanded", "true");
+    if (!s) return;
+    const p = document.createElement("p"); p.title = s.text; p.textContent = s.text;
+    if (s.pending) p.className = "pending"; else if (s.backup) p.className = "bk";
+    e.appendChild(p);
+    // like Amazon: a filled shift opens ITS menu
+    if (/\d/.test(s.text)) p.addEventListener("click", (ev) => { ev.stopPropagation(); shiftMenu(cell); });
   }
-  window.__mock.flags = flags;
+  window.__mock.cells = () => [...state].map(([c, s]) => `${c.dataset.who}|${s.text}${s.backup ? "|BACKUP" : ""}${s.pending ? "|pending" : ""}`);
+
+  // one popover at a time, mounted when opened (popover-N), unmounted when closed
+  let pop = null, popN = 0;
+  const dlgPos = (d, cell) => { const r = cell.getBoundingClientRect(); d.style.left = Math.min(r.left, innerWidth - 320) + "px"; d.style.top = Math.min(r.bottom + 4, innerHeight - 260) + "px"; };
+  function mount(kind, cell) {
+    if (pop) unmount(pop.el);
+    const d = document.createElement("div");
+    d.setAttribute("role", "dialog"); d.id = "popover-" + (++popN); d.setAttribute("aria-expanded", "false");
+    d.style.visibility = "hidden";                         // drawn a moment after it is mounted
+    document.body.appendChild(d);
+    pop = { el: d, kind, cell };
+    dlgPos(d, cell);
+    setTimeout(() => { if (d.isConnected && d.getAttribute("data-closing") !== "1") { d.style.visibility = ""; d.setAttribute("aria-expanded", "true"); } }, 30);
+    return d;
+  }
+  function unmount(d, now) {                               // closing: still on screen a moment, then gone
+    if (!d || !d.isConnected || d.getAttribute("data-closing") === "1") return;
+    if (pop && pop.el === d) pop = null;
+    d.setAttribute("data-closing", "1"); d.setAttribute("aria-expanded", "false");
+    if (now) d.remove(); else setTimeout(() => d.remove(), OPT.close);
+  }
+  // Escape / an outside click on an open ADD menu: "Unavailable" in that cell (seen 2026-10-09)
+  function trap(why) {
+    if (!pop || pop.kind !== "add") return;
+    const cell = pop.cell;
+    log.push("UNAVAILABLE TRAP (" + why + ") " + cell.dataset.who);
+    unmount(pop.el, true);
+    state.set(cell, { text: "Unavailable", id: "s-" + (++seq), pending: false, backup: false }); render(cell);
+  }
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") trap("Escape"); }, true);
+  document.addEventListener("click", (e) => {
+    if (!pop || pop.el.contains(e.target) || e.target.closest("#jajb-week")) return;
+    if (pop.cell.contains(e.target)) { if (pop.kind === "add") unmount(pop.el); return; }   // its own cell: closes it safely
+    if (pop.kind === "add") trap("outside click"); else unmount(pop.el);
+  }, true);
+
+  // a filled shift's own menu
+  function shiftMenu(cell) {
+    if (pop && pop.kind === "shift" && pop.cell === cell) { if (!OPT.stuck) unmount(pop.el); return; }   // clicking it again closes it
+    const s = state.get(cell);
+    const d = mount("shift", cell);
+    const el = (tag, text) => { const x = document.createElement(tag); if (text) x.textContent = text; return x; };
+    const title = (SHIFTS.find((t) => shownAs(t) === s.text && /^Driver/.test(t)) || SHIFTS.find((t) => shownAs(t) === s.text) || s.text);
+    const close = el("button", "×"); close.type = "button"; close.setAttribute("aria-label", "Close");
+    close.onclick = () => { if (!OPT.stuck) unmount(d); };
+    const rad = el("label"); const r = el("input"); r.type = "radio"; r.checked = !s.backup; rad.append(r, el("span", "Standard"));
+    const lab = el("label"); const cb = el("input"); cb.type = "checkbox"; cb.checked = !!s.backup; lab.append(cb, el("span", "Set as backup"));
+    cb.addEventListener("change", () => {
+      const now = state.get(cell);
+      if (!now || now !== s) return;
+      if (s.pending) { s.lostTick = cb.checked; window.__mock.applied.push("backup-on-pending:" + cb.checked + "|" + cell.dataset.who); return; }
+      setTimeout(() => {
+        s.backup = cb.checked; r.checked = !cb.checked;
+        window.__mock.applied.push("backup:" + cb.checked + "|" + cell.dataset.who);
+        const pp = cell.querySelector("p"); if (pp) pp.classList.toggle("bk", s.backup);
+      }, 150);
+    });
+    d.append(close, el("p", "SHIFT"), el("p", title), el("p", "Repeat every week"), el("p", "Auto-roster preference"), rad, lab, el("p", "Add a comment"));
+  }
+
+  // the add menu (empty cell)
+  function addMenu(cell, name, i) {
+    if (state.get(cell)) return;                           // filled cells open their own menu
+    const d = mount("add", cell);
+    const w = document.createElement("button"); w.textContent = "Apply weekly pattern";
+    w.onclick = () => log.push("Apply weekly pattern");
+    const h = document.createElement("p"); h.textContent = "Apply single shift";
+    d.append(w, h);
+    for (const t of SHIFTS) {
+      const b = document.createElement("button"); b.type = "button";
+      const p = document.createElement("p"); p.title = t; p.textContent = t; b.appendChild(p);
+      b.onclick = (e) => {
+        e.stopPropagation();
+        if (!OPT.linger) unmount(d);
+        setTimeout(() => {
+          // shown at once (pending), saved and re-drawn a moment later
+          const s = { text: shownAs(t), id: "tmp-" + (++seq), pending: true, backup: false };
+          state.set(cell, s); render(cell);
+          window.__mock.applied.push(`${name}|${DAYS[i]}|${t}`);
+          if (OPT.linger) { unmount(d, true); shiftMenu(cell); }     // what-if: its own menu left open
+          setTimeout(() => {
+            if (state.get(cell) !== s) return;
+            s.pending = false; s.id = "s-" + seq;
+            if (s.lostTick) window.__mock.applied.push("backup-LOST|" + cell.dataset.who);
+            if (pop && pop.kind === "shift" && pop.cell === cell && !OPT.linger) unmount(pop.el, true);   // re-drawn: its menu goes
+            render(cell);
+          }, OPT.save);
+        }, 60);
+      };
+      d.appendChild(b);
+    }
+  }
+
+  // like Amazon: cell > div > div(hover box) > div; hovering the empty box adds div{onClick} > span > span[aria-label=Assign]
+  function hookCell(cell, name, i) {
+    cell.addEventListener("mouseover", (e) => {
+      if (e.relatedTarget) return;                         // React 16 ignores a mouseover that has one
+      if (state.get(cell) || cell.querySelector('[aria-label="Assign"]')) return;
+      const host = cell.firstElementChild.firstElementChild.firstElementChild;
+      const box = document.createElement("div"); box.style.cssText = "text-align:center;font-weight:bold";
+      const sp = document.createElement("span"); const ic = document.createElement("span");
+      ic.setAttribute("role", "img"); ic.setAttribute("aria-label", "Assign"); ic.textContent = "+";
+      sp.appendChild(ic); box.appendChild(sp);
+      box.addEventListener("click", (ev) => { ev.stopPropagation(); box.remove(); addMenu(cell, name, i); });
+      host.appendChild(box);
+    });
+  }
+
   const rows = document.getElementById("rows");
   for (const [name, email, pre] of PEOPLE) {
     const row = document.createElement("div"); row.className = "row";
@@ -117,48 +255,12 @@
     const inner = document.createElement("div"); inner.className = "inner";
     for (let i = 0; i < 7; i++) {
       const cell = document.createElement("div"); cell.className = "cell"; cell.dataset.who = name + "|" + DAYS[i];
-      fillCell(cell, pre[i] || "");
+      if (pre[i] && !OPT.empty) state.set(cell, { text: pre[i], id: "s-" + (++seq), pending: false, backup: false });
+      render(cell);
       hookCell(cell, name, i);
       inner.appendChild(cell);
     }
     days.appendChild(inner); row.append(nc, days); rows.appendChild(row);
-  }
-
-  // like Amazon: cell > div > div(hover box) > div; hovering the empty box adds div{onClick} > span > span[aria-label=Assign]
-  function hookCell(cell, name, i) {
-    cell.addEventListener("mouseover", (e) => {
-      if (e.relatedTarget) return;                         // React 16 ignores a mouseover that has one
-      if (cell.innerText.trim() || cell.querySelector('[aria-label="Assign"]')) return;
-      const host = cell.firstElementChild.firstElementChild.firstElementChild;
-      const box = document.createElement("div"); box.style.cssText = "text-align:center;font-weight:bold";
-      const sp = document.createElement("span"); const ic = document.createElement("span");
-      ic.setAttribute("role", "img"); ic.setAttribute("aria-label", "Assign"); ic.textContent = "+";
-      sp.appendChild(ic); box.appendChild(sp);
-      box.addEventListener("click", (ev) => { ev.stopPropagation(); box.remove(); openMenu(cell, name, i); });
-      host.appendChild(box);
-    });
-  }
-  const dlg = document.getElementById("popover-1");
-  function openMenu(cell, name, i) {
-    if (cell.innerText.trim()) return;                    // filled cells open another menu - not needed here
-    dlg.innerHTML = ""; dlg.dataset.for = "add";
-    const w = document.createElement("button"); w.textContent = "Apply weekly pattern";
-    w.onclick = () => log.push("Apply weekly pattern");
-    const h = document.createElement("p"); h.textContent = "Apply single shift";
-    dlg.append(w, h);
-    for (const t of SHIFTS) {
-      const b = document.createElement("button"); b.type = "button";
-      const p = document.createElement("p"); p.title = t; p.textContent = t; b.appendChild(p);
-      b.onclick = (e) => {
-        e.stopPropagation();
-        dlg.style.display = "none"; dlg.setAttribute("aria-expanded", "false");
-        setTimeout(() => { fillCell(cell, shownAs(t)); window.__mock.applied.push(`${name}|${DAYS[i]}|${t}`); }, 40);
-      };
-      dlg.appendChild(b);
-    }
-    const r = cell.getBoundingClientRect();
-    dlg.style.left = r.left + "px"; dlg.style.top = (r.bottom + 4) + "px";
-    setTimeout(() => { dlg.style.display = ""; dlg.setAttribute("aria-expanded", "true"); }, 30);
   }
 
   document.getElementById("publish").onclick = () => log.push("Publish");

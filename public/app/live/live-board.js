@@ -19,11 +19,11 @@ import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualH
 import { MissingCheck } from './missing.js';
 import { routeDays, backupDays, rtMismatches, rtBackupShown } from './limits.js';
 import { RtCheck } from './rt-check.js';
+import { HoursCheck } from './hours-check.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate, weekLabel } from '../lib/weeks.js';
 import {
   WaveEditor, SlotEditor, ConfirmOverride, LimitConfirm, runConfirmed, TIER_META, TIER_ORDER,
-  translateInfeasible, translateOverride, RuleProblems,
 } from '../steps/step9-build.js';
 import {
   loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
@@ -42,7 +42,7 @@ import { headCounts } from './offers-model.js';
 // index.html, absolute, cache-busted), so fixing roster.js fixes every computer's bookmark.
 const ROSTER_BOOKMARK = () => `javascript:(function(){var s=document.createElement('script');s.src='${
   new URL('roster.js', location.href.split('#')[0]).href}?'+Date.now();document.body.appendChild(s);})();`;
-const ROSTER_HOWTO = 'Drag this button onto your bookmarks bar. Then on Amazon: Dispatch → pick the day → Edit route assignment → click the bookmark. It fills the DA boxes; you check and press Save changes.';
+const ROSTER_HOWTO = 'Drag this button onto your bookmarks bar. Then on Amazon: Dispatch with Legacy view on (the Scheduling page) → pick the day → click the bookmark. It fills the empty Standard Parcel associate rows; you check and press Save.';
 // Week bookmark (2026-10-09, docs/week-bookmarklet.md): same idea, schedweek.js on Amazon's Scheduling week view.
 const WEEK_BOOKMARK = () => `javascript:(function(){var s=document.createElement('script');s.src='${
   new URL('schedweek.js', location.href.split('#')[0]).href}?'+Date.now();document.body.appendChild(s);})();`;
@@ -181,15 +181,6 @@ function Block({ v, route, bk, left }) {
   if (c.kind === 'empty') return '';
   return html`<div class=${'lv-blk b-' + c.kind} style=${c.bg ? `background:${c.bg}` : ''}>
     <span>${c.top}</span>${c.sub ? html`<small>${c.sub}</small>` : ''}</div>`;
-}
-
-// "P1 INFEASIBLE Tue: filled 5/6" -> plain words for a week already running
-function openText(line) {
-  let m = line.match(/P1 INFEASIBLE (\w+): filled (\d+)\/(\d+)/);
-  if (m) { const n = m[3] - m[2]; return `${m[1]}: ${n} route${n === 1 ? '' : 's'} open (${m[2]} of ${m[3]} filled).`; }
-  m = line.match(/P2 SHORT (\w+): (\d+)\/(\d+)/);
-  if (m) { const n = m[3] - m[2]; return `${m[1]}: ${n} backup${n === 1 ? '' : 's'} open (${m[2]} of ${m[3]} filled).`; }
-  return translateInfeasible(line);
 }
 
 const shortDate = (iso) => { const d = parseISODate(iso); return `${d.getMonth() + 1}/${d.getDate()}`; };
@@ -1270,7 +1261,6 @@ function Board() {
   const view = rep ? summaryFromReport(rep, data.meta) : data.summary;
   const ready = eng.status === 'ready' && eng.rev === data.rev;
   const today = todayISO();
-  const tday = view.days.find((x) => x.date === today);
   const lim = view.limits || {};
   // who had a route each day, today and before (Route Tracker) (Jose 2026-10-08)
   const actList = actualList(actDocs.prev, actDocs.cur);
@@ -1284,8 +1274,6 @@ function Board() {
   // the hours checks see every Route Tracker driver (2026-10-10): not on the schedule = a stand-in
   // row; a route today with no clock-out yet = still ahead. Display only: the engine never sees these.
   const viewRT = withRouteTracker(view, actList, today);
-  const openRoutes = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.routes - x.routes_filled), 0);
-  const openBk = view.days.filter((x) => x.open).reduce((a, x) => a + Math.max(0, x.backup - x.backup_filled), 0);
   const byName = Object.fromEntries(view.drivers.map((x) => [x.name, x]));
   const markOf = (name, day) => (view.marks || []).find((x) => x.name === name && x.day === day);
   // search + sort: by tier (Top/Solid first, as the builder groups them) or A-Z
@@ -1311,10 +1299,6 @@ function Board() {
     // Route Tracker drivers not on the schedule (2026-10-10): hours checks only, nothing to click
     ...(noSched.length ? [{ key: 'nosched', meta: { label: 'Not on the schedule — on a route in Route Tracker', chip: 'gray' }, rows: noSched }] : []),
   ].filter((g) => g.rows.length);
-  const todayCount = tday ? view.drivers.reduce((a, x) => {
-    const k = cellInfo((x.cells || {})[tday.day]).kind;
-    return a + (k === 'road' || k === 'trainee' ? 1 : 0);
-  }, 0) : null;
 
   const max7Lim = lim.max_7day_hours || 60;
   const hoursCls = (h) => (h > max7Lim ? 'lv-bad' : lim.weekly_hours_cap && h > lim.weekly_hours_cap ? 'lv-warn' : '');
@@ -1382,27 +1366,11 @@ function Board() {
     ? html` · <span class=${max7Cls(last7(x.day_hours, endISO))}>Last 7d: ${last7(x.day_hours, endISO)}h</span>` : ''}</div>`;
 
   return html`<div>
-    <div class="stats lv-stats">
-      <div class="stat"><div class="big">${todayCount == null ? '—' : todayCount}</div>
-        <div class="muted">${tday ? `on routes today (${tday.day})` : 'not this week'}</div></div>
-      <div class="stat"><div class=${'big' + (openRoutes ? ' lv-bad' : '')}>${openRoutes}</div><div class="muted">open routes this week</div></div>
-      <div class="stat"><div class=${'big' + (openBk ? ' lv-warnc' : '')}>${openBk}</div><div class="muted">open backups</div></div>
-      <div class="stat"><div class="big">${log.length}</div><div class="muted">changes logged</div></div>
-    </div>
-
     ${eng.status === 'error' ? html`<${Banner} kind="err">The rules engine didn't load: ${eng.error}
       <div><button class="small" onClick=${() => openWeek(sel)}>Try again</button></div><//>` : ''}
-    ${(view.infeasible || []).length ? html`<${Banner} kind="warn"><b>Open slots:</b>
-      <ul>${view.infeasible.map((l) => {
-        let m = l.match(/P1 INFEASIBLE (\w+)/);
-        const slot = m ? { day: m[1], role: 'road' } : (m = l.match(/P2 SHORT (\w+)/)) ? { day: m[1], role: 'backup' } : null;
-        return html`<li>${openText(l)}${slot ? html` <button class="small" onClick=${() => goFind(slot.day, slot.role)}>Find someone…</button>` : ''}</li>`;
-      })}</ul><//>` : ''}
     <${MissingCheck} week=${sel} missing=${missingDays(data.summary, actList, confirms, today)} />
     <${RtCheck} rows=${rtMismatches(view, actList, today)} onOpen=${(c) => { setPop(null); setCell(c); }} />
-    <${RuleProblems} lines=${view.errors || []} />
-    ${(view.overridden || []).length ? html`<details class="banner warn"><summary><b>${view.overridden.length} approved override${view.overridden.length === 1 ? '' : 's'}</b></summary>
-      <ul>${view.overridden.map((l) => html`<li>${translateOverride(l)}</li>`)}</ul></details>` : ''}
+    <${HoursCheck} view=${view} viewRT=${viewRT} />
 
     <div class="card" id="lv-gridcard">
       <div class="row" style="justify-content:space-between">

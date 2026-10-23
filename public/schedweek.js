@@ -9,13 +9,22 @@
  * shift's own menu (Auto-roster preference); a backup already in Amazon as a plain Driver shift
  * just gets the tick (Jose 2026-10-09).
  *
+ * Two passes (Jose 2026-10-23 — ticking each backup right after picking it stalled an empty week):
+ *   1. put in every shift, backups as their plain Driver shift;
+ *   2. then tick "Set as backup" on the backups, one at a time, each shift's menu fully closed
+ *      before the next.
+ * Every wait has a time limit; an item that times out is listed and the run goes on — it only stops
+ * when a menu stays open on Amazon's page, and then says which driver and day.
+ *
  * On this page a picked shift is applied at once (unpublished) — there is no Save. The bookmark:
  *   - NEVER presses Publish, Auto-roster, Apply weekly pattern or anything else on Amazon's page;
- *   - never touches a cell that already has something (a shift, Unavailable, time off …);
+ *   - never touches a cell that already has something (a shift, Unavailable, time off …), except
+ *     ticking "Set as backup" on a backup's own Driver shift;
  *   - only opens a cell's menu when the shift it needs is in Amazon's shift list (read from the
- *     page's Shifts panel first), and never closes a menu any other way than by picking that shift
- *     (2026-10-09: an Escape / outside click once left "Unavailable" in a cell) — if a menu is ever
- *     open when it shouldn't be, it stops and says so;
+ *     page's Shifts panel first), and never closes a shift-pick menu any other way than by picking
+ *     that shift (2026-10-09: an Escape / outside click once left "Unavailable" in a cell) — if one
+ *     is ever open when it shouldn't be, it stops and says so. A shift's OWN menu (Set as backup) is
+ *     closed with its Close button, else by clicking the shift again;
  *   - checks each cell after picking, and skips days already over.
  * Dispatch reviews the week and presses Publish themselves.
  *
@@ -32,10 +41,14 @@
 
   /* ---------- small helpers ---------- */
   const tick = () => new Promise((r) => { const c = new MessageChannel(); c.port1.onmessage = () => r(); c.port2.postMessage(0); });
+  // a hidden tab's timers can be held back up to a minute, a MessageChannel isn't — checked at every
+  // step, so a tab hidden in the middle of a wait doesn't stall the run (Jose 2026-10-23)
   async function sleep(ms) {
-    if (!document.hidden) return new Promise((r) => setTimeout(r, ms));
     const end = performance.now() + ms;
-    while (performance.now() < end) await tick();
+    while (performance.now() < end) {
+      if (document.hidden) await tick();
+      else await new Promise((r) => setTimeout(r, Math.max(0, Math.min(50, end - performance.now()))));
+    }
   }
   async function waitFor(fn, ms = 1500, step = 50) {
     const end = performance.now() + ms;
@@ -107,14 +120,15 @@
   document.body.appendChild(box);
   const $msg = box.querySelector(".msg"), $bar = box.querySelector(".bar"), $fill = box.querySelector(".bar i"),
         $btns = box.querySelector(".btns");
-  let runId = 0, stopped = false;
+  let runId = 0, stopped = false, filling = false;
   box.querySelector(".x").onclick = () => {
     stopped = true; runId++;
     window.removeEventListener("message", onMessage);
     clearTimeout(ask.timer);
     box.remove(); delete window.__jajbWeek;
   };
-  window.__jajbWeek = { show: () => { box.style.display = ""; if (!box.isConnected) document.body.appendChild(box); } };
+  // clicking the bookmark again starts over (reads the page and the week again), unless it is filling
+  window.__jajbWeek = { show: () => { box.style.display = ""; if (!box.isConnected) document.body.appendChild(box); if (!filling) restart(); } };
   const say = (html, cls) => { $msg.innerHTML = html; $msg.className = "msg" + (cls ? " " + cls : ""); };
   function btn(label, fn, ghost) {
     const b = document.createElement("button");
@@ -205,12 +219,12 @@
     const m = mins(text);
     return m != null && type && m === type.mins;
   }
+  // Amazon's popovers on screen now (role=dialog; one still closing counts until it is gone)
+  const dialogs = () => [...document.querySelectorAll('[role="dialog"]')].filter((d) => visible(d) && !d.closest("#jajb-week"));
   // the shift menu that's open now (the one with "Apply single shift"), or null
-  const openMenu = () => [...document.querySelectorAll('[role="dialog"]')]
-    .find((d) => visible(d) && /Apply single shift/.test(d.textContent || "")) || null;
+  const openMenu = () => dialogs().find((d) => /Apply single shift/.test(d.textContent || "")) || null;
   // a filled shift's own menu ("SHIFT · Driver • 10:25 AM … Auto-roster preference: Standard / Set as backup")
-  const shiftMenu = () => [...document.querySelectorAll('[role="dialog"]')]
-    .find((d) => visible(d) && /Set as backup/.test(d.textContent || "")) || null;
+  const shiftMenu = () => dialogs().find((d) => /Set as backup/.test(d.textContent || "")) || null;
   const anyMenu = () => openMenu() || shiftMenu();
 
   /* ---------- the run ---------- */
@@ -232,7 +246,7 @@
     }
     const hd = headerDays();
     if (hd.join() !== DAYS.join()) { stopWith("Couldn't read the 7 day columns (Sun to Sat). Make sure the page is in the Week view."); return false; }
-    if (openMenu()) { stopWith("A shift menu is open on the page. Close it first (click its cell again), then click the bookmark again."); return false; }
+    if (anyMenu()) { stopWith("A shift menu is open on the page. Close it first (its Close button, or click its cell again), then click the bookmark again."); return false; }
     return true;
   }
 
@@ -242,6 +256,10 @@
     progress(null); clearBtns();
     if (!checks()) return;
     ask(my, true);
+  }
+  // run(), with any error shown in the panel (never a silent stop)
+  function restart() {
+    run().catch((err) => { stopWith("Something went wrong: " + esc(err && err.message || err)); btn("Start over", restart, true); });
   }
 
   // get the week from the Live board (small window, postMessage)
@@ -361,7 +379,7 @@
     say("Reading Amazon's page…");
     const p = buildPlan();
     if (my !== runId) return;
-    if (p.err) { stopWith(esc(p.err)); btn("Start over", run, true); return; }
+    if (p.err) { stopWith(esc(p.err)); btn("Start over", restart, true); return; }
     plan = p;
     const todo = p.items.filter((it) => it.status === "todo" || it.status === "bkcheck");
     const nBk = p.items.filter((it) => it.status === "bkcheck").length;
@@ -376,7 +394,7 @@
     say(h);
     if (firstWho) btn(`Test: ${firstWho.d.name.split(" ")[0]} only (${firstN})`, () => fill(my, firstWho), true);
     if (todo.length) btn(`Fill ${plural(todo.length, "shift")}`, () => fill(my, null));
-    btn("Start over", run, true);
+    btn("Start over", restart, true);
   }
 
   // open one empty cell's menu (read on Amazon 2026-10-09): the cell's inner box has React 16
@@ -406,100 +424,224 @@
     return null;
   }
   const isChecked = (b) => !!b && (b.input.checked === true || b.input.getAttribute("aria-checked") === "true");
-  // close a shift's menu with its own Close button (Amazon's menus have one), else by clicking the shift again
-  async function closeShiftMenu(menu, p) {
-    const close = [...menu.querySelectorAll("button")].find((b) => /^close$/i.test(one(b.getAttribute("aria-label") || b.textContent)));
-    if (close) close.click(); else if (p) p.click();
-    if (await waitFor(() => !shiftMenu(), 1500)) return true;
-    if (close && p) { p.click(); return !!(await waitFor(() => !shiftMenu(), 1500)); }
+
+  // an item's day cell, read fresh each time (Amazon re-draws cells)
+  function cellOf(it) {
+    const r = readRows().find((x) => x.name === it.p.row.name);
+    return (r && r.cells[it.i]) || null;
+  }
+  // the <p> of the item's shift in its cell (the time), or null when the cell doesn't show that shift
+  function shiftP(it) {
+    const c = cellOf(it);
+    if (!c || !shows(cellText(c), it.sh, it.type)) return null;
+    return [...c.querySelectorAll("p")].find((p) => shows(one(p.textContent), it.sh, it.type)) || c.querySelector("p");
+  }
+  // the shift's <p> once Amazon has finished drawing it: the same element for 600 ms. A just-picked
+  // shift is drawn again when Amazon has saved it; a tick before that can be lost (Jose 2026-10-23)
+  function steadyShift(it) {
+    let last = null, since = 0;
+    return waitFor(() => {
+      const p = shiftP(it);
+      if (!p || p !== last) { last = p; since = performance.now(); return null; }
+      return performance.now() - since >= 600 ? p : null;
+    }, 5000, 100);
+  }
+  // is this shift menu the item's shift? (a time in it = the shift's time; no time in it = can't tell, yes)
+  function menuFor(menu, it) {
+    const ts = (one(menu.textContent).match(/\d{1,2}(?::\d{2})?\s*[AP]\.?M\b/gi) || []).map(mins);
+    return !ts.length || ts.includes(it.type.mins);
+  }
+  const closeBtn = (menu) => [...menu.querySelectorAll('button, [role="button"]')]
+    .find((b) => /^close$/i.test(one(b.getAttribute("aria-label") || b.textContent)));
+  // close a shift's OWN menu (never a shift-pick menu) with its Close button, else by clicking the
+  // shift again. True once it is off the page. A menu on its way out (aria-expanded="false") gets
+  // time and is never clicked again — a second click would open it again (Jose 2026-10-23).
+  async function closeShiftMenu(menu, it) {
+    if (!menu) return true;
+    const gone = () => !menu.isConnected || !visible(menu);
+    const close = closeBtn(menu);
+    const p0 = it ? shiftP(it) : null;
+    if (close) close.click(); else if (p0) p0.click(); else return false;
+    if (await waitFor(gone, 2500)) return true;
+    if (menu.getAttribute("aria-expanded") === "false") return !!(await waitFor(gone, 2500));
+    const p = close && it ? shiftP(it) : null;
+    if (p) { p.click(); return !!(await waitFor(gone, 2500)); }
     return false;
   }
-  // tick "Set as backup" on a filled Driver cell (Jose 2026-10-09)
-  async function markBackup(c) {
-    if (anyMenu()) return { ok: false, why: "a menu was already open", halt: true };
-    const p = c.querySelector("p");
-    if (!p) return { ok: false, why: "couldn't find the shift in the cell" };
-    p.click();                                                 // bubbles to the shift box's onClick
-    const menu = await waitFor(shiftMenu, 2500);
-    if (!menu) return { ok: false, why: "the shift's menu didn't open" };
-    let box = backupBox(menu);
-    if (!box) { const closed = await closeShiftMenu(menu, p); return { ok: false, why: "no “Set as backup” box in its menu", halt: !closed }; }
-    let changed = false;
-    if (!isChecked(box)) {
-      box.input.click();
-      changed = true;
-      await waitFor(() => isChecked(backupBox(shiftMenu() || menu)), 2000);
+  // before touching a cell: no menu open on Amazon's page. One still closing gets a moment; a shift's
+  // OWN menu left open (Amazon may leave the new shift's menu open after a pick) is closed with its
+  // Close button. A shift-pick menu is only ever waited for — never closed by the bookmark. False =
+  // a menu stays open.
+  async function menusClear() {
+    for (let round = 0; round < 3; round++) {
+      if (await waitFor(() => !anyMenu(), round ? 1500 : 800)) return true;
+      if (openMenu()) continue;
+      const sm = shiftMenu();
+      if (sm && !(await closeShiftMenu(sm, null))) return false;
     }
-    box = backupBox(shiftMenu() || menu) || box;
-    const okNow = isChecked(box);
-    const closed = await closeShiftMenu(shiftMenu() || menu, p);
-    if (!closed) return { ok: okNow, changed, halt: true, why: "its menu stayed open — close it by hand" };
-    return okNow ? { ok: true, changed } : { ok: false, why: "Amazon didn't keep the tick" };
+    return !anyMenu();
   }
 
+  // pass 1: one shift into its empty cell — a backup goes in as its plain Driver shift
   async function placeOne(it) {
-    const cell = readRows().find((r) => r.name === it.p.row.name);
-    const c = cell && cell.cells[it.i];
+    const c = cellOf(it);
     if (!c) return { ok: false, why: "their row is gone from the page" };
     const now = cellText(c);
-    const backup = it.sh.what === "Backup";
-    if (now) {
-      if (!shows(now, it.sh, it.type)) return { ok: false, why: `the cell now has “${now}”` };
-      if (!backup) return { ok: true, already: true };
-      const b = await markBackup(c);
-      return { ok: true, already: true, bk: b };
-    }
-    if (anyMenu()) return { ok: false, why: "a shift menu was already open", halt: true };
+    if (now) return shows(now, it.sh, it.type) ? { ok: true, already: true } : { ok: false, why: `the cell now has “${now}”` };
+    if (!(await menusClear())) return { ok: false, halt: true, why: "a menu was already open on Amazon's page" };
     const menu = await openCell(c);
-    if (!menu) return { ok: false, why: "the cell's menu didn't open (nothing was changed)" };
+    if (!menu) {
+      if (await waitFor(openMenu, 600)) return { ok: false, halt: true, why: "the cell's menu opened late and is still OPEN on this cell" };
+      return { ok: false, why: "the cell's menu didn't open (nothing was changed)" };
+    }
     const pick = [...menu.querySelectorAll("button")].find((b) => one((b.querySelector("p[title]") || {}).title || "") === it.type.title);
-    if (!pick) return { ok: false, why: `the menu has no “${it.type.title}” — the menu is still OPEN on this cell`, halt: true };
+    if (!pick) return { ok: false, halt: true, why: `the menu has no “${it.type.title}” — the menu is still OPEN on this cell` };
     pick.click();
-    const got = await waitFor(() => cellText(c) || null, 3000);
-    await waitFor(() => !openMenu(), 2000);
-    if (!got) return { ok: false, why: "Amazon didn't show the shift in the cell — please check it" };
-    if (!shows(got, it.sh, it.type)) return { ok: false, why: `the cell shows “${got}” — please check it` };
-    if (openMenu()) return { ok: true, halt: true, why: "a shift menu stayed open after picking" };
-    if (backup) { await sleep(300); return { ok: true, bk: await markBackup(c) }; }
+    it.placedAt = performance.now();
+    const got = await waitFor(() => { const t = cellText(cellOf(it)); return t && shows(t, it.sh, it.type) ? t : null; }, 4000);
+    if (!(await waitFor(() => !openMenu(), 3000))) return { ok: !!got, halt: true, why: "the shift menu stayed open after picking" };
+    if (!got) {
+      const t = cellText(cellOf(it));
+      return { ok: false, why: t ? `the cell shows “${t}” — please check it` : "Amazon didn't show the shift in the cell — please check it" };
+    }
+    if (!(await menusClear())) return { ok: true, halt: true, why: "a menu stayed open after picking" };
     return { ok: true };
   }
 
-  async function fill(my, only) {
-    if (my !== runId || !plan) return;
-    if (pageSunday() && pageSunday() !== sunday) { stopWith("The page moved to another week. Nothing more was filled. Click the bookmark again."); return; }
+  // pass 2: tick "Set as backup" in a backup's own Driver shift menu, then close it (Jose 2026-10-23)
+  async function markBackup(it) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (!(await menusClear())) return { ok: false, halt: true, why: "a menu was already open on Amazon's page" };
+      const p = await steadyShift(it);
+      if (!p) {
+        const t = cellText(cellOf(it));
+        return { ok: false, why: t ? `the cell shows “${t}”, not the backup's shift` : "the shift isn't in the cell" };
+      }
+      const before = new Set(dialogs());
+      p.click();                                               // bubbles to the shift box's onClick
+      const menu = await waitFor(shiftMenu, 3000);
+      if (!menu) {
+        const other = dialogs().find((d) => !before.has(d));
+        if (other && /Apply single shift/.test(other.textContent || "")) return { ok: false, halt: true, why: "a shift-pick menu opened instead of the shift's own menu" };
+        if (other) {
+          if (!(await closeShiftMenu(other, it))) return { ok: false, halt: true, why: "a menu opened on the shift and didn't close" };
+          return { ok: false, why: "the shift's menu has no “Set as backup”" };
+        }
+        if (attempt === 0) { await sleep(800); continue; }   // drawn again under the click: once more
+        return { ok: false, why: "the shift's menu didn't open" };
+      }
+      if (!menuFor(menu, it)) {
+        const closed = await closeShiftMenu(menu, it);
+        return { ok: false, halt: !closed, why: closed ? "the menu that opened was for another shift" : "a menu for another shift opened and didn't close" };
+      }
+      const bx = backupBox(menu);
+      if (!bx) {
+        const closed = await closeShiftMenu(menu, it);
+        return { ok: false, halt: !closed, why: closed ? "no “Set as backup” box in its menu" : "its menu stayed open" };
+      }
+      let changed = false;
+      if (!isChecked(bx)) {
+        bx.input.click();
+        changed = true;
+        await waitFor(() => { const m = shiftMenu(); return !m || isChecked(backupBox(m)); }, 3000);
+        await sleep(400);                                      // give Amazon a moment to save it
+      }
+      const cur = shiftMenu();
+      if (!cur) {                                              // the menu went by itself (shift drawn again): check again
+        if (attempt === 0) { await sleep(800); continue; }
+        return { ok: false, why: "its menu kept closing by itself — check “Set as backup” by hand" };
+      }
+      const okNow = isChecked(backupBox(cur));
+      if (!(await closeShiftMenu(cur, it))) return { ok: okNow, changed, halt: true, why: "its menu stayed open" };
+      return okNow ? { ok: true, changed } : { ok: false, why: "Amazon didn't keep the tick" };
+    }
+    return { ok: false, why: "its menu didn't open" };
+  }
+
+  // one item, errors caught: a menu left open stops the run, otherwise the item just fails
+  async function guarded(fn) {
+    try { return await fn(); }
+    catch (err) {
+      let open = true;
+      try { open = !!anyMenu(); } catch (e) { /* keep: stop */ }
+      return { ok: false, halt: open, why: "error: " + (err && err.message || err) };
+    }
+  }
+
+  function fill(my, only) {
+    fillRun(my, only).catch((err) => {
+      filling = false;
+      if (my !== runId) return;
+      stopWith(`<b>Something went wrong: ${esc(err && err.message || err)}</b>. Check the week on Amazon's page, then press Start over.`);
+      btn("Start over", restart, true);
+    });
+  }
+  async function fillRun(my, only) {
+    if (my !== runId || !plan || filling) return;
+    if (pageSunday() && pageSunday() !== sunday) { stopWith("The page moved to another week. Nothing more was filled. Click the bookmark again."); btn("Start over", restart, true); return; }
+    filling = true;
     stopped = false;
     clearBtns();
     btn("Stop", () => { stopped = true; }, true);
-    const todo = plan.items.filter((it) => (it.status === "todo" || it.status === "bkcheck") && (!only || it.p === only));
-    let done = 0, placed = 0, nBk = 0, halt = "";
+    const mine = (it) => !only || it.p === only;
+    const isBk = (it) => it.sh.what === "Backup";
+    const put = plan.items.filter((it) => it.status === "todo" && mine(it));
+    const nTick = put.filter(isBk).length + plan.items.filter((it) => it.status === "bkcheck" && mine(it)).length;
+    const total = Math.max(1, put.length + nTick);
+    let done = 0, placed = 0, nBk = 0, halt = "", crash = "";
+    const live = () => !stopped && my === runId;
+    const show = (head, it) => say(`<p><b>${head}</b></p>${it ? `<p>${who(it)} — ${esc(shiftLabel(it.sh))}</p>` : ""}<p class="muted">Applied in Amazon as it goes (unpublished). It never presses Publish.</p>`);
     progress(0);
-    for (const it of todo) {
-      if (stopped || my !== runId) break;
-      say(`<p>Filling ${done + 1} of ${todo.length}: ${who(it)} — ${esc(shiftLabel(it.sh))}</p><p class="muted">Applied in Amazon as it goes (unpublished). It never presses Publish.</p>`);
-      let res;
-      try { res = await placeOne(it); } catch (err) { res = { ok: false, why: "error: " + (err && err.message || err), halt: true }; }
-      if (res.ok) { it.status = res.already ? "already" : "placed"; if (!res.already) placed++; }
-      else { it.status = "failed"; it.why = res.why; }
-      if (res.bk) {                                           // the backup tick, after the shift
-        if (res.bk.ok) { if (res.bk.changed || it.status === "placed") nBk++; if (res.already) it.status = "bkset"; }
-        else { it.status = "bkfail"; it.why = res.bk.why; }
-        if (res.bk.halt) res = { ...res, halt: true, why: res.bk.why };
+    try {
+      // pass 1: every shift into its empty cell (backups as their plain Driver shift)
+      for (let k = 0; k < put.length && live(); k++) {
+        const it = put[k];
+        show(`Putting in shifts ${k + 1}/${put.length}…`, it);
+        const res = await guarded(() => placeOne(it));
+        if (res.ok) { it.status = res.already ? "already" : "placed"; if (!res.already) placed++; }
+        else { it.status = "failed"; it.why = res.why; }
+        progress(++done / total);
+        if (res.halt) { halt = `${who(it)}: ${res.why}`; break; }
+        await sleep(200);
       }
-      done++;
-      progress(done / todo.length);
-      if (res.halt) { halt = `${who(it)}: ${res.why}`; break; }
-      await sleep(200);
+      // pass 2: "Set as backup" on the backups put in just now + those already in as a plain Driver shift
+      const bks = plan.items.filter((it) => mine(it) && isBk(it) && (it.status === "placed" || it.status === "bkcheck"));
+      if (bks.length && !halt && live()) {
+        show("Waiting for Amazon to save the new shifts…");
+        if (!(await menusClear())) halt = "before ticking “Set as backup”: a menu was open on Amazon's page";
+        else await sleep(1000);
+      }
+      for (let k = 0; k < bks.length && !halt && live(); k++) {
+        const it = bks[k];
+        show(`Ticking “Set as backup” ${k + 1}/${bks.length}…`, it);
+        if (it.placedAt) await sleep(it.placedAt + 4000 - performance.now());   // 4 s after its pick: saved by Amazon first
+        const res = await guarded(() => markBackup(it));
+        it.bkDone = true;
+        if (res.ok) { if (res.changed || it.status === "placed") nBk++; if (it.status === "bkcheck") it.status = "bkset"; }
+        else { it.status = "bkfail"; it.why = res.why; }
+        progress(++done / total);
+        if (res.halt) { halt = `${who(it)}: ${res.why}`; break; }
+        await sleep(300);
+      }
+    } catch (err) {
+      crash = String(err && err.message || err);
     }
+    filling = false;
     if (my !== runId) return;
+    // backups the run didn't get to: the shift is in, the tick isn't
+    for (const it of plan.items) {
+      if (mine(it) && isBk(it) && !it.bkDone && (it.status === "placed" || it.status === "bkcheck")) { it.status = "bkfail"; it.why = "stopped before “Set as backup” was ticked"; }
+    }
     progress(null); clearBtns();
-    let h = `<p><b>${halt ? "Stopped — " : stopped ? "Stopped. " : ""}Filled ${placed} of ${plural(todo.length, "shift")}${only ? ` (test: ${esc(only.d.name)})` : ""}${nBk ? `, ${plural(nBk, "backup")} ticked` : ""}.</b></p>`;
-    if (halt) h += `<p class="bad"><b>${esc(halt)}</b>. Look at that cell before going on.</p>`;
+    let h = `<p><b>${halt || crash ? "Stopped — " : stopped ? "Stopped. " : ""}Filled ${placed} of ${plural(put.length, "shift")}${only ? ` (test: ${esc(only.d.name)})` : ""}${nBk ? `, ${plural(nBk, "backup")} ticked` : ""}.</b></p>`;
+    if (halt) h += `<p class="bad"><b>Stopped at ${esc(halt)}.</b> Close the open menu on Amazon's page, then click the bookmark again.</p>`;
+    if (crash) h += `<p class="bad"><b>Something went wrong: ${esc(crash)}</b>. Check the week on Amazon's page, then click the bookmark again.</p>`;
     h += reportHtml(true);
     h += "<p style=\"margin-top:8px\"><b>Check the week, then press Publish yourself.</b></p>";
     say(h);
-    btn("Start over", run, true);
+    btn("Start over", restart, true);
     btn("Close", () => box.querySelector(".x").click(), true);
   }
 
-  run().catch((err) => stopWith("Something went wrong: " + esc(err && err.message || err)));
+  restart();
 })();

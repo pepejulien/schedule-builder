@@ -1,7 +1,8 @@
 # Roster bookmark — local mock (TEST ONLY)
 
-Runs `public/roster.js` end to end on this PC against a copy of Amazon's Dispatch
-"Edit assignments" screen (`dispatch.html`, built from `docs/amazon-roster-dom.md`).
+Runs `public/roster.js` end to end on this PC against a copy of Amazon's legacy
+Dispatch page — the old Scheduling day page (`scheduling-legacy.html`, built from
+`docs/amazon-roster-dom.md` "Legacy view"; Jose 2026-10-23).
 
 1. Start both servers (two origins, like Amazon and the app):
    - `python tests/live_mock/serve.py` → app + mock JAJB on http://localhost:8777
@@ -11,28 +12,50 @@ Runs `public/roster.js` end to end on this PC against a copy of Amazon's Dispatc
    Live board week 2026-10-04 that matches the mock page and sets
    `localStorage['jajb-roster-test-origin'] = 'http://localhost:8791'` (the app then also
    answers that origin). Remove the key when done.
-3. Open http://localhost:8791/dispatch.html?date=2026-10-10 , click **Edit assignments**,
-   then **Run the bookmark (test)** (same injection as the real bookmark, from
-   `?app=` — default http://localhost:8777/).
+3. Open http://localhost:8791/scheduling-legacy.html?frame=1 (day 2026-10-10) and press
+   **Run the bookmark (test)** (same injection as the real bookmark, from `?app=` —
+   default http://localhost:8777/), then **Fill 7 rows**.
 
-`dispatch.html` sets `window.__jajbRosterTest = true`; roster.js then skips only its
-"is this logistics.amazon.com/dispatch" check. Options: `?frame=1` (an iframe named
-`jajbRoster` catches roster.js's own `window.open(…, "jajbRoster")` — for the built-in
-preview browser, which has no pop-ups), `?legacy=1`, `?search=x`, `?date=…`.
-`window.__mock.log` records any click on Save changes / Auto-roster Vehicle / Cancel
-(roster.js must leave it empty).
+The page sets `window.__jajbRosterTest = true`; roster.js then skips only its "is this
+logistics.amazon.com" check. `?frame=1`: an iframe named `jajbRoster` catches roster.js's
+own `window.open(…, "jajbRoster")` (the built-in preview browser has no pop-ups).
+`window.__mock.log` records clicks on Save / Cancel / SUBMIT / red X / Auto Roster / Bulk
+Import / the pop-up (roster.js must leave it empty); `window.__mock.picked()` lists the
+unsaved picks.
 
-What the mock day holds: 10:25 AM (5 routes; Olga Pre and Pat Quinn already on two),
-10:45 AM (8; Steven Dale Heilmann already on one), 11:05 AM (2, nobody scheduled).
-Expected fill: 8 boxes planned, 7 filled — Hank Hours trips a fake "Over the weekly hours
-limit" warning and that box is cleared; Nora Notlisted not in Amazon's list; Dora Moss
-left over; Sam Lee ambiguous (Sam Lee / Sam K Lee); Mike Rowe matched to "Michael  Rowe" by
-Transporter ID (fake React `daPool`); Jose Nunez matched to "José Núñez"; Zed Late's
-11:25 AM wave doesn't exist on the page.
+What the mock day holds: Standard Parcel (collapsed) — 10:25 am 4 rows (Olga Pre on one),
+10:45 am 9 rows (Steven Dale Heilmann on one); WW Hub Transport CDV (1 empty row); Nursery
+Route Level 1 (Pat Quinn); Nursery Route Level 3 (1 empty row); a hidden 0-route service.
+Expected: Standard Parcel opened, 7 rows planned, 7 filled (Amy, Bea, Carl → "Carl Dee Fox",
+an option with no phone; Barry → "Barry Len Hughes", Tina, Mike → "Michael Rowe" by
+Transporter ID, Jose Nunez → "José Núñez"); Nora not in Amazon's list; Dora left over;
+Sam Lee ambiguous (Sam K Lee / Sam Lee); Hank Hours Inactive; Steven and Pat already on a
+row (Pat on Nursery Route Level 1); Zed's 11:25 AM has no rows; the other services listed as
+left for you; log empty.
+
+Other checks: `?flag=A-TINA` (Amazon shows a red ! after Tina's pick → that row is emptied
+again, 6 of 7), `?chosenonly=1` (the page ignores a plain change event → roster.js picks
+through the Chosen box; same result), `?dirty=1` (Nursery Route Level 3 open with an unsaved
+pick → Amazon's "discard?" pop-up shows and roster.js stops without answering it),
+`?filter=1&open=sp` (warns to set the Filter back to All), `?bar=Sun%2011-Oct` (date bar
+disagrees with the address → stops). `dispatch.html?date=2026-10-10&serviceAreaId=x` (the
+old copy of the new Dispatch page) now only gets "turn on Legacy view" with a link.
 
 ## Week bookmark (schedweek.js) — same servers
-1. In the http://localhost:8777 tab, paste `seed-week.js` into the console (week 2026-10-11 + the test origin).
-2. Open http://localhost:8791/scheduling.html?frame=1 and click **Run the bookmark (test)**.
-Expected: 9 to fill (Test: Cara only = 2), Nora not on the page, Zed has no 2:00 PM shift, Una's
-Monday "Unavailable" left alone, Kim's Sunday already there; `window.__mock.applied` lists what was
-picked and `window.__mock.log` (Publish / Apply weekly pattern clicks) stays empty.
+1. In the http://localhost:8777 tab, paste `seed-week.js` into the console (NEXT week + the test origin;
+   the mock page shows the same week, so no day is "already over").
+2. Open http://localhost:8791/scheduling.html?frame=1 and click **Run the bookmark (test)**. The tab
+   must have a real size (the built-in preview: set a viewport, e.g. 1400x900) or no menu counts as open.
+Expected: 13 to fill (12 to put in + Lou's Tue backup already in; Test: Cara only = 2), Nora not on the
+page, Zed has no 2:00 PM shift, Una's Monday "Unavailable" left alone, Kim's Sunday already there.
+Pass 1 "Putting in shifts 1/12…", then pass 2 "Ticking “Set as backup” 1/4…" (Cara Mon, Lou Tue, Bo Wed,
+Bo Sat). At the end `window.__mock.cells()` shows `|BACKUP` on those 4 cells, no popover is left on
+the page, and `window.__mock.log` (Publish / Auto-roster / Apply weekly pattern / "UNAVAILABLE TRAP")
+stays empty. `window.__mock.applied` lists every pick and tick ("backup-LOST" = a tick on a shift
+Amazon hadn't saved yet).
+Like the real page (Jose 2026-10-23): popovers stay on screen a moment while closing, a picked shift
+is saved and re-drawn after `?savems=900`, an Escape / outside click on an open shift-pick menu puts
+"Unavailable" in the cell. Other checks: `?empty=1` (an empty week from scratch: 15 to put in, same 4
+ticks), `?linger=1` (Amazon leaves the new shift's own menu open after a pick — the run closes it and
+goes on), `?savems=4500` (slow saves), `?stuck=1` (a shift's menu won't close — the run stops at
+Cara Amos — Mon and says to close the menu, then click the bookmark again).
