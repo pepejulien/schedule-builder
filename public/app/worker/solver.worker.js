@@ -158,13 +158,13 @@ async function edit(msg) {
   // return plain data.
   const OPS = {
     candidates: 'candidates', add_options: 'add_options', swap_candidates: 'swap_candidates',
-    wave_options: 'wave_options',
-    apply: 'apply_edit', apply_add: 'apply_add', apply_wave: 'apply_wave', undo: 'undo_last',
+    wave_options: 'wave_options', trade_options: 'trade_options',
+    apply: 'apply_edit', apply_trade: 'apply_trade', add_driver: 'add_driver', apply_add: 'apply_add', apply_wave: 'apply_wave', undo: 'undo_last',
     apply_mark: 'apply_mark', clear_mark: 'clear_mark', set_role: 'set_role',
     set_duty: 'set_duty', clear_duty: 'clear_duty', set_counts: 'set_counts', set_left: 'set_left', clear_left: 'clear_left', sync_actual: 'sync_actual',
     load_state: 'load_state', export_state: 'export_state', export_xlsx: 'export_xlsx',
   };
-  const MUTATING = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'set_role', 'set_duty', 'clear_duty', 'set_counts', 'set_left', 'clear_left', 'sync_actual', 'load_state']);
+  const MUTATING = new Set(['apply', 'apply_add', 'apply_wave', 'apply_trade', 'add_driver', 'undo', 'apply_mark', 'clear_mark', 'set_role', 'set_duty', 'clear_duty', 'set_counts', 'set_left', 'clear_left', 'sync_actual', 'load_state']);
   // Ops whose answer comes with the slot's workbook bytes.
   const WITH_XLSX = slot === 'build' ? MUTATING : new Set(['export_xlsx']);
   try {

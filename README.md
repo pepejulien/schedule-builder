@@ -52,6 +52,17 @@
 > have them yet. `app/live/trades.js` (+ the pure `trades-model.js`); test: `node tests/trades_test.mjs`; the mock
 > has them too (`JAJB.__mock.putTrade` / `putTradeProp`).
 
+> **Fixing the week by hand before publishing (2026-10-23):** Step 5 (Build) after a build shows
+> **Routes and backups by day** (filled / needed per wave, Fill · + Backup · + Extra driver · Counts)
+> and **Edit the week**, a Live-board-style grid: click any day for give-it-away, **trade** (two
+> drivers swap shifts — `runner.trade_options` / `apply_trade`), change wave, route ↔ backup, take it
+> off, or add a route / backup on a free day; click a name for that driver's week; **add a driver who
+> isn't on this week** (`add_driver`). Hand edits in the builder may now give a **6-day / overtime after
+> the pop-up** (as on the Live board); the solver itself still never does, and 12h a day / 60h in 7
+> days / 7 in a row stay locked. The engine's state is saved with the draft after every edit, so a page
+> reload keeps the edits (undo history doesn't survive it). Publishing warns about anything still
+> open. `app/steps/build-editor.js`; test: `python tests/build_edits_test.py`.
+
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's
 inputs, click **Build**, download the finished `Week-NN-Schedule.xlsx`.

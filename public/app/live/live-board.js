@@ -35,6 +35,7 @@ import { FutureWeek } from './future-week.js';
 import { DayList, DayPills, firstDay } from './day-list.js';
 import { OffersStrip, OfferDayLine, OfferDot } from './offers.js';
 import { TradesStrip } from './trades.js';
+import { CountsEditor } from './counts-editor.js';
 import { headCounts } from './offers-model.js';
 
 // Roster bookmark (2026-10-09, docs/roster-bookmarklet.md): the link only injects roster.js (next to
@@ -528,46 +529,6 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
         <div class="dm-grid one"><${Act} icon="⏏" title="Quit or fired" sub=${`Every shift from ${day} on comes off — the slots open up`}
           tone="dm-danger" busy=${busy} onClick=${() => act('left', { name: d.name, day })} /></div>` : ''}
       ${busy ? html`<p class="muted" style="margin-top:10px"><${Spinner}/> Saving…</p>` : ''}
-    </div>
-  </div>`;
-}
-
-// Click on a day's "31/33 · bk 7/7" (Jose 2026-10-09): set how many routes each wave has and
-// how many backups — adding someone to a full wave raises the count, and this puts Amazon's real
-// number back. A wave can't go below the routes already in it (the engine says so too).
-function CountsEditor({ info, fills, busy, onSave, onClose }) {
-  const waves = Object.keys(info.waves || {}).sort((a, b) => waveMins(a) - waveMins(b));
-  const [vals, setVals] = useState(() => Object.fromEntries(waves.map((w) => [w, String(info.waves[w])])));
-  const [bk, setBk] = useState(String(info.backup ?? 0));
-  const num = (v) => (/^\d+$/.test(String(v).trim()) ? parseInt(v, 10) : null);
-  const bad = waves.filter((w) => num(vals[w]) == null || num(vals[w]) < (fills[w] || 0));
-  const bkBad = num(bk) == null;
-  const total = waves.reduce((t, w) => t + (num(vals[w]) || 0), 0);
-  const same = waves.every((w) => num(vals[w]) === info.waves[w]) && num(bk) === info.backup;
-  const save = () => onSave({ day: info.day, backup: num(bk),
-    waves: Object.fromEntries(waves.map((w) => [w, num(vals[w])])) });
-  return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    <div class="edit-modal card" style="width:420px">
-      <h3>${info.day} ${shortDate(info.date)} — routes and backups</h3>
-      <p class="hint">Set the counts to what Amazon actually has. Adding someone to a full wave gives it one more
-        route, so lower it here when that wasn't a real extra route.</p>
-      <table class="lv-counts"><thead><tr><th>Wave</th><th>Have</th><th>Routes</th></tr></thead><tbody>
-        ${waves.map((w) => html`<tr>
-          <td><span class="lv-sw" style=${`background:${waveBg(w)}`}>${w}</span></td>
-          <td class="muted">${fills[w] || 0}</td>
-          <td><input type="number" min=${fills[w] || 0} step="1" inputmode="numeric" value=${vals[w]} aria-label=${`${w} routes`}
-            class=${bad.includes(w) ? 'bad' : ''} onInput=${(e) => setVals((v) => ({ ...v, [w]: e.target.value }))} /></td>
-        </tr>`)}
-        <tr class="lv-counts-tot"><td>Routes in all</td><td class="muted">${info.routes_filled}</td><td><b>${total}</b></td></tr>
-        <tr><td>Backups</td><td class="muted">${info.backup_filled}</td>
-          <td><input type="number" min="0" step="1" inputmode="numeric" value=${bk} aria-label="Backups"
-            class=${bkBad ? 'bad' : ''} onInput=${(e) => setBk(e.target.value)} /></td></tr>
-      </tbody></table>
-      ${bad.length ? html`<p class="lv-note warn">${bad.map((w) => `${w}: ${fills[w] || 0} already have a route there — take someone off or move them to backup to go lower.`).join(' ')}</p>` : ''}
-      <div class="row" style="margin-top:12px">
-        <button class="primary" disabled=${busy || bad.length || bkBad || same} onClick=${save}>${busy ? html`<${Spinner}/> Saving…` : 'Save'}</button>
-        <button disabled=${busy} onClick=${onClose}>Cancel</button>
-      </div>
     </div>
   </div>`;
 }

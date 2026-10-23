@@ -6,13 +6,15 @@ import { Step8Review } from './step8-review.js';
 import { ensureStanding, ensureDriverPrefs } from './step7-standing.js';
 import { Banner, Spinner, download } from '../ui.js';
 import { assembleFromWizard } from '../build-inputs.js';
-import { build, editRequest } from '../solver-client.js';
+import { build, editRequest, isReady } from '../solver-client.js';
 import { storeGet, loadTrainingHistory, saveTrainingWeek, canLive, liveWeek, liveWeeks, deleteLiveWeek, actualHoursOnce } from '../api.js';
 import { saveWeek, actualList, prevISO, prevWorkedFrom } from '../live/live-model.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate as pd } from '../lib/weeks.js';
 import { GROUP_OPTIONS } from '../lib/config-assemble.js';
 import { AdvancedPanel } from './advanced-panel.js';
+import { buildReq, saveEngine, restoreEngine, runAsking, coverage, openSummary, CoverageCard, WeekGrid, DayMenu, PickDriver,
+  TradeModal, AddDriverCard, CountsEditor } from './build-editor.js';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -41,6 +43,8 @@ export function translateOverride(line) {
   if (m) return `${m[1]} works a 6-day (over the usual ${m[2]} days) — approved.`;
   m = line.match(/^CONSEC>(\d+): (.+) run=(\d+)/);
   if (m) return `${m[2]} works ${m[3]} days in a row — approved.`;
+  m = line.match(/^DAYS7>(\d+): (.+?) (\d+) days in 7 from (\w{3} [\d/]+)/);
+  if (m) return `${m[2]} works ${m[3]} days in 7 (from ${m[4]}, last week counts) — approved.`;
   m = line.match(/^OT: (.+) road days over (\d+)h/);
   if (m) return `${m[1]} goes over ${m[2]}h of road (overtime) — approved.`;
   m = line.match(/^DAYCAP: (.+) over (\d+) primary days/);
@@ -280,8 +284,8 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
         ? `Move the ${day} ${what} — currently ${fromName}`
         : `Assign the open ${day} ${what}`}</h3>
       <p class="hint">Pick who takes it. Green is safe. Yellow breaks a company policy (day targets, Fair caps)
-        — allowed, but logged. Red asked for the day off — you'll have to confirm. Grey is a compliance
-        rule (5-day streaks, overtime, worked-day caps) and can't be overridden.</p>
+        — allowed, but logged. Orange is a 6-day or overtime — allowed after a pop-up. Red asked for the day
+        off — you'll have to confirm. Grey is locked (over 12h a day, over 60h in 7 days, 7 days in a row, a clash).</p>
 
       ${st.error ? html`<${Banner} kind="err">
         ${st.error.message}
@@ -390,8 +394,8 @@ export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
     <div class="edit-modal card">
       <h3>Add an extra shift — ${name}${data ? html` <span class="muted">(${data.hours}h now)</span>` : ''}</h3>
       <p class="hint">Pick a day. A route adds ${data ? data.ph : 10}h, a backup adds ${data ? data.bh : 2}h.
-        Yellow is allowed but flagged. Red is a day they asked off — you'll have to confirm.
-        🔒 is a compliance rule and can't be overridden.</p>
+        Yellow is allowed but flagged. Orange is a 6-day or overtime — allowed after a pop-up. Red is a day
+        they asked off — you'll have to confirm. 🔒 is locked (12h a day, 60h in 7 days, 7 days in a row).</p>
 
       ${opts.error ? html`<${Banner} kind="err">
         ${opts.error.message}
@@ -559,8 +563,8 @@ function MoveBar({ editor, cands, busy, onPick, onClose, onListView, onWave }) {
         : `Assigning the open ${editor.day} ${what}`}</b>
       ${cands && cands.loading ? html` <span class="muted"><${Spinner}/> checking every driver against the rules…</span>`
         : cands && cands.error ? ''
-        : html` <span class="muted">— green rows can take it, yellow is allowed but flagged, red asked for
-          the day off (you'll confirm), grey is locked by a compliance rule.</span>`}
+        : html` <span class="muted">— press <b>+ Take it</b> in the ${editor.day} column: green is safe, yellow is
+          flagged, orange is a 6-day / overtime (a pop-up), red asked for the day off (you'll confirm), 🔒 is locked.</span>`}
       ${busy ? html` <span class="muted"><${Spinner}/> applying…</span>` : ''}
     </div>
     <div class="movebar-btns">
@@ -591,6 +595,9 @@ function PublishCard({ wizard, r }) {
       (The Live board, where the week is worked day by day, is on jajb-ops.web.app/schedule/.)</p>`;
   }
   async function publish() {
+    // not everything covered yet (2026-10-23): say what, and ask
+    const open = openSummary(r);
+    if (open.length && !window.confirm(`Not everything is covered yet:\n\n   • ${open.join('\n   • ')}\n\nPublish anyway?`)) return;
     setSt({ busy: true, err: '' });
     try {
       const weekISO = wizard.week.startISO;
@@ -699,13 +706,17 @@ export function Step9Build() {
   const wizard = useStore((s) => s.wizard);
   const b = wizard.build;
   const [progress, setProgress] = useState(null);
-  const [editor, setEditor] = useState(null);       // {day, role, fromName, view:'table'|'list'} | null
-  const [q, setQ] = useState('');                    // Per-driver name search (Jose 2026-10-09)
+  const [editor, setEditor] = useState(null);       // {day, role, fromName, view:'table'|'list'} | null — "give it to someone else"
   const [adder, setAdder] = useState(null);         // {name} | null — the add-a-shift modal
   const [waver, setWaver] = useState(null);         // {day, name} | null — the change-wave modal
+  const [cell, setCell] = useState(null);           // {name, day} | null — one day's choices (2026-10-23)
+  const [finder, setFinder] = useState(null);       // {day, role, mode} | null — fill / extra on a day
+  const [trader, setTrader] = useState(null);       // {name, day} | null — trade two drivers' shifts
+  const [counter, setCounter] = useState(null);     // a day | null — that day's route / backup counts
   const [cands, setCands] = useState(null);         // {loading, error, list} for the current editor
   const [applying, setApplying] = useState(false);
   const [confirm, setConfirm] = useState(null);     // ConfirmOverride request | null
+  const [limit, setLimit] = useState(null);         // LimitConfirm request | null (6-day / overtime)
 
   // Saved exclusions / trainers / dispatch apply even if that step was skipped.
   useEffect(() => { ensureStanding(); }, []);
@@ -713,6 +724,8 @@ export function Step9Build() {
   // (they change on the Drivers page / Live board), again when the week changes.
   const prefsWeek = wizard.week.startISO;
   useEffect(() => { ensureDriverPrefs(); }, [prefsWeek]);
+  // a reloaded page: put the build (hand edits included) back into the engine right away
+  useEffect(() => { if (b.status === 'done' && b.engine && !isReady()) restoreEngine(); }, []);
 
   // One candidate fetch per selected slot, shared by the table highlight and
   // the compact list (switching views doesn't refetch).
@@ -721,7 +734,7 @@ export function Step9Build() {
     if (!editor) { setCands(null); return undefined; }
     let alive = true;
     setCands({ loading: true, error: null, list: null });
-    editRequest('candidates', { day: eDay, role: eRole, from_name: eFrom }).then((msg) => {
+    buildReq('candidates', { day: eDay, role: eRole, from_name: eFrom }).then((msg) => {
       if (!alive) return;
       if (!msg.ok) setCands({ loading: false, error: msg.error, list: null });
       else setCands({ loading: false, error: null, list: msg.data.candidates });
@@ -729,33 +742,32 @@ export function Step9Build() {
     return () => { alive = false; };
   }, [eDay, eRole, eFrom]);
 
-  // Every successful mutation hands back a fresh report + Excel; swap them in.
+  // Every successful mutation hands back a fresh report + Excel; swap them in,
+  // and keep a copy of the engine with the draft so a page reload doesn't lose the edits.
   function commitReport(msg, note) {
-    setWizard((w) => ({ build: { ...w.build, report: msg.report, xlsx: msg.xlsx } }));
+    setWizard((w) => ({ build: { ...w.build, report: msg.report, xlsx: msg.xlsx || w.build.xlsx } }));
     const log = (msg.report && msg.report.edits) || [];
-    toast(note || (log.length ? log[log.length - 1] : 'Edit applied'));
+    toast(note || (log.length ? log[log.length - 1].replace(/\s+\[.*$/, '') : 'Edit applied'));
+    saveEngine();
   }
 
-  // Hand the selected slot to `toName` (null = leave it unfilled). A driver
-  // who asked for the day off goes through the confirmation dialog first.
+  // Hand the selected slot to `toName` (null = leave it unfilled), through the
+  // day-off confirm and the 6-day / overtime pop-up when they're needed.
   function pickSlot(toName) {
     if (!editor || applying) return;
     const c = toName && cands && cands.list ? cands.list.find((x) => x.name === toName) : null;
     if (c && c.status === 'blocked') return;
-    if (c && c.status === 'unavail') {
-      setConfirm({ name: toName, day: editor.day, role: editor.role, reasons: c.reasons,
-        run: () => applySlot(toName, true) });
-      return;
-    }
-    applySlot(toName, false);
+    if (!c) { applySlot(toName, {}); return; }
+    runConfirmed({ name: toName, day: editor.day, role: editor.role,
+      unavReasons: c.status === 'unavail' ? c.reasons : null, limits: c.limits },
+    setConfirm, setLimit, (flags) => applySlot(toName, flags));
   }
 
-  async function applySlot(toName, confirmUnavailable) {
+  async function applySlot(toName, flags) {
     if (!editor || applying) return;
     setApplying(true);
-    const msg = await editRequest('apply',
-      { day: editor.day, role: editor.role, from_name: editor.fromName, to_name: toName,
-        confirm_unavailable: !!confirmUnavailable });
+    const msg = await buildReq('apply',
+      { day: editor.day, role: editor.role, from_name: editor.fromName, to_name: toName, ...flags });
     setApplying(false);
     if (!msg.ok) { setCands((c) => ({ ...(c || {}), loading: false, error: msg.error })); return; }
     setEditor(null);
@@ -767,10 +779,34 @@ export function Step9Build() {
   async function undoLast() {
     if (applying) return;
     setApplying(true);
-    const msg = await editRequest('undo', {});
+    const msg = await buildReq('undo', {});
     setApplying(false);
     if (!msg.ok) { toast(msg.error.message, 'err'); return; }
     commitReport(msg, 'Undid the last edit');
+  }
+
+  // One day's choices (the grid's cell menu) -> the engine.
+  async function run(op, payload) {
+    setApplying(true);
+    const m = await buildReq(op, payload);
+    setApplying(false);
+    if (m.ok) commitReport(m); else toast(m.error.message, 'err');
+    return m;
+  }
+  function cellAct(what, p) {
+    setCell(null);
+    if (what === 'move') setEditor({ ...p, view: 'table' });
+    else if (what === 'trade') setTrader(p);
+    else if (what === 'wave') setWaver(p);
+    else if (what === 'remove') run('apply', { day: p.day, role: p.role, from_name: p.fromName });
+    else if (what === 'unduty') run('clear_duty', p);
+    else if (what === 'role') {
+      runAsking('set_role', p, { name: p.name, day: p.day, role: p.to }, setConfirm, setLimit, (m) => commitReport(m));
+    } else if (what === 'add') {
+      const { st, ...payload } = p;
+      runConfirmed({ name: p.name, day: p.day, role: p.role, unavReasons: st && st.status === 'unavail' ? st.reasons : null,
+        limits: st && st.limits }, setConfirm, setLimit, (flags) => run('apply_add', { ...payload, ...flags }));
+    }
   }
 
   const weekNum = parseInt(wizard.week.num, 10);
@@ -829,6 +865,7 @@ export function Step9Build() {
       return;
     }
     setWizard({ build: { status: 'done', report: msg.report, xlsx: msg.xlsx, error: null }, trainerHistory });
+    saveEngine();                                // hand edits survive a reload from here on
     // the week's training record: drives the rotation, and (on Firebase) is
     // the shared record other JAJB apps can read later
     try {
@@ -894,24 +931,11 @@ export function Step9Build() {
   const status = r.clean ? (overridden.length ? `CLEAN — ${overridden.length} manual override${overridden.length === 1 ? '' : 's'}` : 'CLEAN')
     : (chk.errors && chk.errors.length ? 'FAILED' : 'WARNINGS');
   const statusKind = r.clean ? (overridden.length ? 'warn' : 'ok') : (chk.errors && chk.errors.length ? 'err' : 'warn');
-
-  // Rows arrive sorted by hours desc, so each tier's block stays hours-sorted.
-  const byTier = {};
-  for (const d of (r.drivers || [])) (byTier[d.cls] = byTier[d.cls] || []).push(d);
-  // Per-driver search (Jose 2026-10-09): case and accents ignored, any part of the name
-  const fold = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-  const qf = fold(q.trim());
-  if (qf) for (const t of Object.keys(byTier)) byTier[t] = byTier[t].filter((d) => fold(d.name).includes(qf));
-  const tierSections = TIER_ORDER.filter((t) => byTier[t] && byTier[t].length);
-  const nShown = tierSections.reduce((a, t) => a + byTier[t].length, 0);
-  // days in week order, Sun..Sat (the engine lists them alphabetically)
-  const wk = (days) => (days || []).slice().sort((a, b) => DAY_IDX[a] - DAY_IDX[b]);
-
-  // In-table move mode: highlight who can take the selected slot right in the
-  // per-driver rows, so the pick is made with full context in view.
-  const inTableMove = !!(editor && editor.view === 'table');
-  const candMap = (inTableMove && cands && cands.list)
-    ? new Map(cands.list.map((c) => [c.name, c])) : null;
+  const cov = coverage(r);
+  const covDay = (day) => cov.days.find((x) => x.day === day);
+  const cellRow = cell && (r.drivers || []).find((d) => d.name === cell.name);
+  const edits = r.edits || [];
+  const moving = editor && editor.view === 'table' ? editor : null;
 
   return html`<div>
     <div class="card">
@@ -933,114 +957,45 @@ export function Step9Build() {
       </div>
       <${PublishCard} wizard=${wizard} r=${r} />
 
-      ${(r.infeasible || []).length ? html`<${Banner} kind="warn">
-        <b>Some slots could not be filled:</b>
-        <ul>${r.infeasible.map((l) => {
-          let m = l.match(/P1 INFEASIBLE (\w+)/);
-          const slot = m ? { day: m[1], role: 'road' }
-            : (m = l.match(/P2 SHORT (\w+)/)) ? { day: m[1], role: 'backup' } : null;
-          return html`<li>${translateInfeasible(l)}
-            ${slot ? html` <button class="small" onClick=${() =>
-              setEditor({ ...slot, fromName: null, view: 'table' })}>Assign someone…</button>` : ''}</li>`;
-        })}</ul><//>` : ''}
       ${(r.notes || []).length ? html`<${Banner} kind="info">
         <b>Notes:</b>
         <ul>${r.notes.map((l) => html`<li>${l}</li>`)}</ul><//>` : ''}
       <${RuleProblems} lines=${chk.errors || []} />
       ${overridden.length ? html`<${Banner} kind="warn">
-        <b>Manual overrides you approved:</b>
+        <b>Rules you bent by hand (approved):</b>
         <ul>${overridden.map((l) => html`<li>${translateOverride(l)}</li>`)}</ul>
         <span class="hint">Undo the edit below to take one back.</span><//>` : ''}
+    </div>
 
-      <h3>Per-day fill</h3>
-      <div class="scroll-x"><table>
-        <thead><tr><th>Day</th><th>Routes</th><th>Backups</th></tr></thead>
-        <tbody>${Object.entries(chk.per_day || {}).map(([d, pd]) => html`
-          <tr><td>${d}</td><td>${pd.routes}</td><td>${pd.backup}</td></tr>`)}</tbody>
-      </table></div>
+    <${CoverageCard} r=${r} busy=${applying} onFind=${setFinder} onCounts=${setCounter} />
 
-      <h3>Per-driver</h3>
-      <p class="hint">Click any day to move that shift — the table lights up green on everyone who can safely
-        take it, and the bar above offers <b>Change wave…</b> for that same shift. The <b>+</b> next to a name
-        adds an extra route or backup. Compliance rules (5 days in a row, never 6 days in any 7, overtime, worked-day caps) are
-        locked; a driver's day off can only be overridden after you confirm it.</p>
-      ${editor && editor.view === 'table' ? html`<${MoveBar} editor=${editor} cands=${cands} busy=${applying}
+    <div class="card">
+      <h3>Edit the week</h3>
+      <p class="hint">Click any day to change it — give it to someone else, trade it, change the wave, make it a backup or a
+        route, or take it off. Click an empty or Unavailable day to add a route or a backup. Click a name for all of that
+        driver's days. A 6-day or overtime is allowed after a pop-up; more than 12h in a day, 60h in 7 days and 7 days in
+        a row stay locked.</p>
+      <div class="be-bar">
+        <span><b>${edits.length}</b> manual edit${edits.length === 1 ? '' : 's'}</span>
+        ${r.can_undo ? html`<button class="small" disabled=${applying} onClick=${undoLast}
+          title=${edits.length ? 'Undo: ' + edits[edits.length - 1] : 'Undo the last edit'}>↶ Undo last edit</button>`
+          : edits.length ? html`<span class="muted">(undo history clears when the page reloads — the edits stay)</span>` : ''}
+        ${cov.openR || cov.openB ? html`<span class="lv-open">${openSummary(r).join(' · ')}</span>`
+          : html`<span class="cov-tag ok">✓ every route and backup filled</span>`}
+        ${applying ? html`<span class="muted"><${Spinner}/> applying…</span>` : ''}
+      </div>
+      ${moving ? html`<${MoveBar} editor=${editor} cands=${cands} busy=${applying}
         onPick=${pickSlot} onClose=${() => setEditor(null)}
         onListView=${() => setEditor({ ...editor, view: 'list' })}
         onWave=${() => { setWaver({ day: editor.day, name: editor.fromName }); setEditor(null); }} />` : ''}
-      <div class="row" style="margin:6px 0 8px">
-        <input type="search" placeholder="Search a driver…" value=${q} onInput=${(e) => setQ(e.target.value)}
-          aria-label="Search a driver" style="min-width:240px" />
-        ${qf ? html`<span class="muted">${nShown} match${nShown === 1 ? '' : 'es'}</span>
-          <button class="link" onClick=${() => setQ('')}>Clear</button>` : ''}
-      </div>
-      ${qf && !nShown ? html`<p class="muted">No driver matches “${q.trim()}”.</p>` : ''}
-      <div class="scroll-x"><table>
-        <thead><tr><th>Driver</th><th>Group</th><th>Road</th><th>Backup</th><th>Other</th><th>Hours</th></tr></thead>
-        <tbody>${tierSections.map((t) => {
-          const meta = TIER_META[t];
-          const rows = byTier[t];
-          const hrs = rows.map((x) => x.hours);
-          const lo = Math.min(...hrs), hi = Math.max(...hrs);
-          return html`
-            <tr class="tier-sep"><td colspan="6">
-              <span class="chip ${meta.chip}">${meta.label}</span>
-              <span class="muted"> · ${rows.length} driver${rows.length === 1 ? '' : 's'} · ${lo === hi ? lo + 'h' : lo + '–' + hi + 'h'}</span>
-            </td></tr>
-            ${rows.map((d) => {
-              const other = [...d.helper_days.map((x) => [x, ' (train)']),
-                ...d.dispatch_days.map((x) => [x, ' (disp)']),
-                ...d.meeting_days.map((x) => [x, ' (mtg)'])]
-                .sort((a, b) => DAY_IDX[a[0]] - DAY_IDX[b[0]]).map((x) => x.join('')).join(', ');
-              // a 0h driver with submitted days off: say WHY at a glance
-              const why = (!other && d.hours === 0 && (d.unavailable || []).length)
-                ? `unavailable ${wk(d.unavailable).join(' ')}` : '';
+      <${WeekGrid} r=${r} cov=${cov} busy=${applying} moving=${moving} cands=${cands}
+        onCell=${(name, day) => setCell({ name, day })} onName=${(name) => setAdder({ name })}
+        onTake=${pickSlot} onCounts=${setCounter} />
+      <div style="margin-top:12px"><${AddDriverCard} r=${r} busy=${applying}
+        onDone=${(m, n) => { commitReport(m, `${n} added to the week — now give them shifts`); setAdder({ name: n }); }} /></div>
+    </div>
 
-              // Move-mode annotations: is this row the source, a candidate, or blocked?
-              const c = candMap ? candMap.get(d.name) : null;
-              const isSrc = inTableMove && editor.fromName === d.name;
-              const pickable = c && c.status !== 'blocked';
-              const rowCls = c ? 'cand-row ' + c.status + (pickable ? ' pickable' : '')
-                : isSrc ? 'cand-row src' : '';
-              const rowTitle = c
-                ? (pickable ? `Give ${d.name} the ${editor.day} ${editor.role === 'road' ? 'route' : 'backup'}`
-                    + ((c.reasons || []).length ? ' — ' + c.reasons.join('; ') : '')
-                  : 'Locked (compliance): ' + (c.reasons || []).join('; '))
-                : undefined;
-              // a "+ Fri" target chip in the column the day would land in
-              const addChip = (role) => (pickable && editor.role === role)
-                ? html`<button class=${'day-chip add' + (c.status === 'warn' || c.status === 'unavail' ? ' ' + c.status : '')}
-                    disabled=${applying}
-                    title=${(c.reasons || []).join('; ') || rowTitle}
-                    onClick=${(e) => { e.stopPropagation(); pickSlot(d.name); }}>+ ${editor.day}${c.status === 'unavail' ? ' (day off)' : ''}</button>`
-                : '';
-              const blockedWhy = (role) => (c && c.status === 'blocked' && editor.role === role)
-                ? html`<span class="cand-inline-why">🔒 ${(c.reasons || [])[0] || ''}</span>` : '';
-              // day chips: start a move normally; inert while a move is underway
-              const chip = (day, role) => html`<button
-                class=${'day-chip' + (role === 'backup' ? ' bk' : '')
-                  + (isSrc && editor.day === day && editor.role === role ? ' src' : '')}
-                title=${inTableMove ? undefined : `Move this ${role === 'road' ? 'route' : 'backup'} day`}
-                onClick=${(e) => { e.stopPropagation();
-                  if (!editor) setEditor({ day, role, fromName: d.name, view: 'table' }); }}>${day}</button>`;
-              return html`<tr class=${rowCls} title=${rowTitle}
-                onClick=${pickable && !applying ? () => pickSlot(d.name) : undefined}>
-                <td>${d.name}${!inTableMove ? html` <button class="add-shift"
-                  title=${'Add an extra shift for ' + d.name}
-                  onClick=${(e) => { e.stopPropagation(); setAdder({ name: d.name }); }}>+</button>` : ''}</td>
-                <td><span class="chip ${meta.chip}">${meta.short}${d.target != null ? ':' + d.target : ''}</span></td>
-                <td>${d.road_days.length || addChip('road') || blockedWhy('road')
-                  ? html`${wk(d.road_days).map((day) => chip(day, 'road'))}${addChip('road')}${blockedWhy('road')}` : '—'}</td>
-                <td>${d.backup_days.length || addChip('backup') || blockedWhy('backup')
-                  ? html`${wk(d.backup_days).map((day) => chip(day, 'backup'))}${addChip('backup')}${blockedWhy('backup')}` : '—'}</td>
-                <td class="muted">${other || why || '—'}</td>
-                <td>${pickable
-                  ? html`<span class=${'hours-delta' + (c.status === 'warn' || c.status === 'unavail' ? ' ' + c.status : '')}>${c.hours}h → <b>${c.new_hours}h</b></span>`
-                  : `${d.hours}h`}</td></tr>`;
-            })}`;
-        })}</tbody>
-      </table></div>
-
+    <div class="card">
       <h3>Checks</h3>
       <p class="muted">
         Pre-made schedule kept: ${chk.seed_pct == null ? 'n/a' : chk.seed_pct + '%'} ·
@@ -1049,14 +1004,13 @@ export function Step9Build() {
       </p>
       ${(chk.fifth_day || []).length ? html`<p class="muted">42h fifth-day backups: ${chk.fifth_day.map((x) => x[0]).join(', ')}</p>` : ''}
       ${prefsSkipped(r).length ? html`<p class="muted">Driver preferences not used: ${prefsSkipped(r).join(', ')}</p>` : ''}
-
       <details style="margin-top:10px"><summary>Full verification log</summary>
         <pre class="log">${r.summary_text}</pre></details>
     </div>
 
-    ${(r.edits || []).length ? html`<div class="card" style="border-left:4px solid var(--ok, #2c7a44)">
-      <h3>Manual edits (${r.edits.length})</h3>
-      <ul>${r.edits.map((e) => html`<li class=${e.includes('[OVERRIDE') ? 'edit-override' : ''}>${e}</li>`)}</ul>
+    ${edits.length ? html`<div class="card" style="border-left:4px solid var(--ok, #2c7a44)">
+      <h3>Manual edits (${edits.length})</h3>
+      <ul>${edits.map((e) => html`<li class=${/\[(OVERRIDE|OK'D)/.test(e) ? 'edit-override' : ''}>${e}</li>`)}</ul>
       <p class="hint">Already reflected in the checks above and in the Excel download.
         Rebuilding re-runs the engine and discards these edits.</p>
       ${r.can_undo ? html`<button disabled=${applying} onClick=${undoLast}>Undo last edit</button>` : ''}
@@ -1066,14 +1020,29 @@ export function Step9Build() {
       onPick=${pickSlot} onClose=${() => setEditor(null)}
       onTableView=${() => setEditor({ ...editor, view: 'table' })} />` : ''}
 
-    ${confirm ? html`<${ConfirmOverride} req=${confirm} onCancel=${() => setConfirm(null)}
-      onConfirm=${() => { const q = confirm; setConfirm(null); q.run(); }} />` : ''}
+    ${cell && cellRow && covDay(cell.day) ? html`<${DayMenu} d=${cellRow} info=${covDay(cell.day)} r=${r} busy=${applying}
+      onClose=${() => setCell(null)} act=${cellAct} />` : ''}
 
-    ${waver ? html`<${WaveEditor} day=${waver.day} name=${waver.name} onClose=${() => setWaver(null)}
+    ${finder ? html`<${PickDriver} find=${finder} info=${covDay(finder.day)} onClose=${() => setFinder(null)}
+      onDone=${(m) => { setFinder(null); commitReport(m); }} />` : ''}
+
+    ${trader ? html`<${TradeModal} name=${trader.name} day=${trader.day} onClose=${() => setTrader(null)}
+      onDone=${(m) => { setTrader(null); commitReport(m); }} />` : ''}
+
+    ${counter && covDay(counter) ? html`<${CountsEditor} info=${covDay(counter)} fills=${covDay(counter).fills} busy=${applying}
+      onClose=${() => setCounter(null)}
+      onSave=${async (p) => { const m = await run('set_counts', p); if (m.ok) setCounter(null); }} />` : ''}
+
+    ${waver ? html`<${WaveEditor} day=${waver.day} name=${waver.name} req=${buildReq} onClose=${() => setWaver(null)}
       onApplied=${(m) => { setWaver(null); commitReport(m); }} />` : ''}
 
-    ${adder ? html`<${AddEditor} name=${adder.name} onClose=${() => setAdder(null)}
+    ${adder ? html`<${AddEditor} name=${adder.name} req=${buildReq} onClose=${() => setAdder(null)}
       onApplied=${(m) => { setAdder(null); commitReport(m); }} />` : ''}
+
+    ${confirm ? html`<${ConfirmOverride} req=${confirm} onCancel=${() => setConfirm(null)}
+      onConfirm=${() => { const x = confirm; setConfirm(null); x.run(); }} />` : ''}
+    ${limit ? html`<${LimitConfirm} req=${limit} onCancel=${() => setLimit(null)}
+      onConfirm=${() => { const x = limit; setLimit(null); x.run(); }} />` : ''}
 
     <${QuickAdjust} wizard=${wizard} onRebuild=${runBuild} />
 

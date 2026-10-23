@@ -157,7 +157,7 @@ if pick:
     runner.use_slot('build')
     b = J(runner.candidates, {'day': day, 'role': 'backup'})
     bm = next(x for x in b['candidates'] if x['name'] == nm)
-    ok(bm['status'] == 'blocked', 'the builder still locks 6 days in 7')
+    ok(bm['status'] == 'confirm', 'the builder offers it too, after the pop-up (Jose 2026-10-23)')
 # last week Wed-Sat + this week Mon-Tue (not 6 in a row): the 6th day in those 7 needs the pop-up
 runner.use_slot('live3b')
 dates = {x['day']: x['date'] for x in r3['days']}

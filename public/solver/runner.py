@@ -17,6 +17,8 @@ UI can change assignments without a rebuild:
     runner.apply_add(json)        -> give a driver an extra shift (plain / via swap / extra route)
     runner.wave_options(json)     -> which other waves a driver's shift could move to that day
     runner.apply_wave(json)       -> move a shift to another wave (roads swap; backups relabel)
+    runner.trade_options(json)    -> which shifts a driver's shift could be traded for
+    runner.apply_trade(json)      -> two drivers swap shifts (each side checked)
     runner.undo_last(json)        -> restore the state before the most recent edit
 All take/return JSON strings. The rules mirrored here are the same invariants
 check_invariants() enforces -- after every edit the verifier reruns, so even a
@@ -43,10 +45,15 @@ HOURS + 6-DAYS (2026-10-06, Jose): two HARD limits everywhere, on the clock
 hours (route 10h, backup 2h, meeting 2h, dispatch 12h; last week from its Live
 board when published, else 10h per worked day): never over 12h in a day, never
 over 60h in ANY 7-day window (last week included). And 7 days in a row is
-never allowed. On the LIVE board only, a 6-day (6 in a row or a 6th worked
-day in the week) and overtime (road over 40h / over the road-day cap) are
-allowed after a pop-up: _assess() puts them in `limits`, the edit must carry
-confirm_limits, and the verifier lists them as approved overrides.
+never allowed. A 6-day (6 in a row or a 6th worked day in the week) and
+overtime (road over 40h / over the road-day cap) are allowed BY HAND after a
+pop-up -- on the Live board, and since 2026-10-23 in the builder's manual edits
+too (the solver itself never schedules one): _assess() puts them in `limits`,
+the edit must carry confirm_limits, and the verifier lists them as approved
+overrides.
+
+TRADES (2026-10-23): trade_options / apply_trade swap two drivers' shifts (A
+takes B's day, B takes A's), each side checked like a new shift.
 
 AUTO TRAINERS (2026-10): cfg["auto_training"] = [{trainee, pool}] is resolved
 to concrete training_pairs by rotation before the build (see
@@ -789,12 +796,14 @@ def _assess(res, dr, day, role):
       'warn'    - company POLICY (tier pins, Fair caps, backup eligibility,
                   weekend spread). Allowed; logged and flagged.
       'ok'      - nothing breaks.
-    LIVE board (2026-10-06): a 6-day and overtime go to `limits` instead of
-    'blocked' -- status 'confirm', allowed after a pop-up (confirm_limits).
+    A 6-day and overtime go to `limits` instead of 'blocked' -- status
+    'confirm', allowed after a pop-up (confirm_limits). The Live board since
+    2026-10-06; the builder's manual edits since 2026-10-23 (Jose: "if I have to
+    manually do it, then I need to be able to" - a tight roster leaves backups
+    open). 7 in a row / 7 days in 7 / 12h a day / 60h in 7 days stay locked.
     Returns (status, reasons, notes, limits)."""
     n = norm(dr["name"])
     blocks, unav, warns, notes, limits = [], [], [], [], []
-    live = _STATE.get("live", False)
     # the day already has real hours (Route Tracker) (Jose 2026-10-08: no "~20h"
     # locks, no false 6th day). A day already OVER: its hours and whether it was worked
     # are counted from the clock-outs; an edit there changes the plan, not the clock -
@@ -835,28 +844,27 @@ def _assess(res, dr, day, role):
     if not blocks and not real:
         rl = _run_len(res, dr, day)
         if rl > res.MAXC:
-            if live and rl == res.MAXC + 1:
+            if rl == res.MAXC + 1:
                 limits.append(f"6-day: would work {rl} days in a row (usual max {res.MAXC})")
             else:
-                blocks.append(f"would work {rl} days in a row (max "
-                              f"{res.MAXC + 1 if live else res.MAXC})")
+                blocks.append(f"would work {rl} days in a row (max {res.MAXC + 1})")
         elif dr.get("max_row") is not None and rl > dr["max_row"]:
             # the driver's own limit (Drivers page): POLICY - allowed, flagged
             warns.append(f"asked for no more than {_plural(dr['max_row'], 'day')} "
                          f"in a row (Drivers page)")
         # never 6 worked days in any 7 in a row, last week included (Jose 2026-10-07).
-        # Builder: locked. Live board: the 6th day goes through after the pop-up (Jose
-        # 2026-10-07, same day: "I want to be allowed to bypass this rule manually") and
-        # that driver's days then shake until it's fixed; 7 days in 7 stays locked.
+        # By hand the 6th day goes through after the pop-up (Jose 2026-10-07: "I want to
+        # be allowed to bypass this rule manually"; the builder too since 2026-10-23) and
+        # that driver's days then shake on the Live board until it's fixed; 7 days in 7
+        # stays locked.
         s7 = _all_worked(res, dr) | {res.DATEALL[day]}
         n7, a7 = days7_worst(s7, [res.DATEALL[day]])
         if n7 > _max7d(res):
             span = f"{a7:%a %m/%d}-{a7 + 6 * ONE:%a %m/%d}"
-            if live and n7 == _max7d(res) + 1:
+            if n7 == _max7d(res) + 1:
                 limits.append(f"6-day: would work {n7} days in 7 ({span}; usual max {_max7d(res)})")
             else:
-                blocks.append(f"would work {n7} days in 7 ({span}; max "
-                              f"{_max7d(res) + 1 if live else _max7d(res)})")
+                blocks.append(f"would work {n7} days in 7 ({span}; max {_max7d(res) + 1})")
         blocks += _hour_limits(res, dr, day, role)
 
     # total worked-days caps
@@ -864,7 +872,7 @@ def _assess(res, dr, day, role):
            + len(_act_dates(dr) - _sched_dates(res, dr)))     # + real unscheduled shifts
     inc = 0 if now and dt in _act_dates(dr) else 1           # today's real shift is in tot already
     if not real and tot + inc > res.MAXTOT:
-        if live and tot + inc == res.MAXTOT + 1:
+        if tot + inc == res.MAXTOT + 1:
             limits.append(f"6-day: a 6th worked day this week (usual max {res.MAXTOT})")
         else:
             blocks.append(f"already at {tot} worked days")
@@ -886,10 +894,9 @@ def _assess(res, dr, day, role):
     if role in ("road", "trainer"):          # a trainer day counts as a road day
         wk = _road_hours_real(res, dr) + (max(act[dt], res.PH) - act[dt] if now else res.PH)
         if HCAP and not real and wk > HCAP:
-            (limits if live else blocks).append(
-                f"overtime: road hours go to {_num(wk)}h (over {HCAP}h)")
+            limits.append(f"overtime: road hours go to {_num(wk)}h (over {HCAP}h)")
         elif _pdays(dr) + 1 > res.MAXPRIM:
-            (limits if live else blocks).append(f"at the {res.MAXPRIM} road-day cap")
+            limits.append(f"at the {res.MAXPRIM} road-day cap")
         capx = (getattr(res, "CAPX", {}) or {}).get(n, 0)
         if n in res.TARGET and n not in res.REDS:
             pin = min(res.TARGET[n] + capx, res.MAXPRIM)
@@ -1449,6 +1456,144 @@ def apply_add(payload_json):
                                message=traceback.format_exc()))
 
 
+# ---- trades (Jose 2026-10-23): two drivers swap shifts --------------------------
+# A gives B their (day, role) shift and takes B's (day2, role2) one. Two days: A
+# works day2 instead of day, B the other way round. The same day: a route and a
+# backup change hands (route counts per wave don't move). Each side is checked
+# like a new shift, with both shifts already off the grid.
+_RANK = {"ok": 0, "warn": 1, "confirm": 2, "unavail": 3, "blocked": 4}
+
+
+def _held(res, i, dr, day):
+    """(role, label) of the plain route / backup dr holds on `day`, else (None, label)."""
+    label = res.cell.get(day, {}).get(i, "")
+    if "TRAIN" in label:
+        return None, label
+    if day in dr["prim"]:
+        return "road", label
+    if day in dr["bk"]:
+        return "backup", label
+    return None, label
+
+
+@contextlib.contextmanager
+def _off(res, shifts):
+    """Take shifts [(dr, day, role)] off for a rule check, then put the lists back
+    exactly (_assess reads only the drivers' day lists)."""
+    keep = [(dr, list(dr["prim"]), list(dr["bk"])) for dr, _, _ in shifts]
+    try:
+        for dr, day, role in shifts:
+            lst = dr["prim"] if role == "road" else dr["bk"]
+            if day in lst:
+                lst.remove(day)
+        yield
+    finally:
+        for dr, prim, bk in keep:
+            dr["prim"][:] = prim
+            dr["bk"][:] = bk
+
+
+def _trade_side(res, dr, day, role):
+    st, why, _, lim = _assess(res, dr, day, role)
+    return dict(status=st, reasons=why, limits=lim)
+
+
+def trade_options(payload_json):
+    """payload: {name, day}. Every shift `name` could trade their route / backup on
+    `day` for: [{name, cls, day, role, label, status (the worse side), mine, theirs,
+    hours, new_hours, my_hours, my_new_hours}]. mine = name taking that shift, theirs =
+    the other driver taking name's."""
+    try:
+        p = json.loads(payload_json)
+        res = _STATE.get("res")
+        if res is None:
+            return _no_state()
+        _take_today(p)
+        day = p.get("day")
+        i, dr = _find(res, p.get("name") or "")
+        if dr is None or day not in res.DAYS:
+            return json.dumps(dict(ok=False, kind="edit", message="Bad request."))
+        role, label = _held(res, i, dr, day)
+        if role is None:
+            return json.dumps(dict(ok=False, kind="edit",
+                message=("That is a training-pair day - training days can only be changed by a rebuild."
+                         if "TRAIN" in label else f"{dr['name']} has no route or backup on {day}.")))
+        hrs = {"road": res.PH, "backup": res.BH}
+        mine0 = _hours(res, dr)
+        out = []
+        for j, ot in enumerate(res.roster):
+            if j == i:
+                continue
+            for d2 in res.DAYS:
+                r2, l2 = _held(res, j, ot, d2)
+                if r2 is None or (d2 == day and r2 == role):
+                    continue
+                with _off(res, [(dr, day, role), (ot, d2, r2)]):
+                    mine = _trade_side(res, dr, d2, r2)
+                    theirs = _trade_side(res, ot, day, role)
+                st = max(mine["status"], theirs["status"], key=_RANK.get)
+                h = _hours(res, ot)
+                out.append(dict(name=ot["name"], cls=_classify(ot, res), day=d2, role=r2,
+                                label=l2, status=st, mine=mine, theirs=theirs,
+                                hours=h, new_hours=h - hrs[r2] + hrs[role],
+                                my_hours=mine0, my_new_hours=mine0 - hrs[role] + hrs[r2]))
+        out.sort(key=lambda c: (_RANK[c["status"]], ALL_DAYS.index(c["day"]), norm(c["name"])))
+        return json.dumps(dict(ok=True, name=dr["name"], day=day, role=role, label=label,
+                               options=out))
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def apply_trade(payload_json):
+    """payload: {name, day, with_name, with_day, confirm_unavailable?, confirm_limits?}.
+    `name` takes with_name's shift on with_day; with_name takes name's shift on day.
+    The confirm flags cover both sides (the UI shows each side's pop-up first)."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        day, d2 = p.get("day"), p.get("with_day")
+        i, a = _find(res, p.get("name") or "")
+        j, b = _find(res, p.get("with_name") or "")
+        if a is None or b is None or i == j or day not in res.DAYS or d2 not in res.DAYS:
+            return json.dumps(dict(ok=False, kind="edit", message="Bad request."))
+        ra, la = _held(res, i, a, day)
+        rb, lb = _held(res, j, b, d2)
+        if ra is None or rb is None:
+            return json.dumps(dict(ok=False, kind="edit",
+                message="One of those shifts changed (or is a training-pair day) - close and reopen the trade."))
+        if day == d2 and ra == rb:
+            return json.dumps(dict(ok=False, kind="edit", message="Both shifts are the same - nothing to trade."))
+        snap = _snapshot(res)
+        # both shifts off the grid, then each side gated like a new shift
+        for dr, k, dd, lst in ((a, i, day, ra), (b, j, d2, rb)):
+            (dr["prim"] if lst == "road" else dr["bk"]).remove(dd)
+            res.cell[dd].pop(k, None)
+        tags = []
+        for dr, dd, rr in ((a, d2, rb), (b, day, ra)):
+            err, st, why = _gate(res, dr, dd, rr, p)
+            if err:
+                _restore(res, snap)
+                return err
+            tags.append(_note_override(dr, dd, st, why))
+        a["prim" if rb == "road" else "bk"].append(d2)
+        res.cell[d2][i] = lb
+        b["prim" if ra == "road" else "bk"].append(day)
+        res.cell[day][j] = la
+        what = {"road": "route", "backup": "backup"}
+        desc = (f"Traded: {a['name']} takes {b['name']}'s {d2} {what[rb]}{tags[0]}, "
+                f"{b['name']} takes {a['name']}'s {day} {what[ra]}{tags[1]}")
+        _STATE["undo"].append(snap)
+        _STATE["edits"].append(desc)
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
 _WAVE_RE = re.compile(r"(\d{1,2}:\d{2} [AP]M)")
 
 
@@ -1971,6 +2116,7 @@ def load_state(payload_json):
         chk = _verify(res)
         res.infeasible = ([ln for ln in res.infeasible if not ln.startswith(("P1 ", "P2 "))]
                           + _recount_short(res, chk))
+        _save_out(res)            # the builder's slot: a reloaded page gets its workbook back (2026-10-23)
         return json.dumps(_report(res.cfg, res, chk), default=str)
     except Exception:  # noqa: BLE001
         return _crash()
