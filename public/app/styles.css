@@ -263,6 +263,15 @@ pre.log { background: #1d1d1f; color: #e6e6ea; padding: 14px; border-radius: 12p
 .cand.warn { background: #fffaf0; }
 .cand.blocked { background: #f6f7f9; opacity: .8; }
 .cand-pick { padding: 4px 12px; font-size: 13px; }
+/* the Undo bar under "Who can work extra?": stays in view at the bottom while the list scrolls */
+.cand-undo { position: sticky; bottom: 12px; margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  justify-content: space-between; padding: 10px 14px; border-radius: 12px; background: #1d2b4f; color: #fff;
+  box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+.cand-undo button { background: #fff; color: #1d2b4f; border-color: #fff; font-weight: 600; }
+.of-confirm { width: 520px; }
+.of-who { list-style: none; margin: 0; padding: 0; max-height: 46vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+.of-who li { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.of-who li:last-child { border-bottom: 0; }
 .cand.ok .cand-pick { border-color: #bfe6cc; background: #eafaef; color: #14682e; }
 .cand.ok .cand-pick:hover { background: #d8f3e2; }
 .cand.warn .cand-pick { border-color: #f0e0a8; background: #fff8e6; color: #8a6d1a; }

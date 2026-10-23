@@ -591,9 +591,30 @@ function MarkDialog({ req, busy, onClose, onSave }) {
   </div>`;
 }
 
+// How long the "Undo" bar stays under "Who can work extra?" after a pick (Jose 2026-10-23)
+const PICK_UNDO_MS = 10000;
+// "Added Ann Lee — Sat route. Undo (8)": stuck to the bottom of the list, counts down, then goes.
+// picked = {name, day, role, at}; onUndo takes the shift off again (the engine's undo).
+function PickUndo({ picked, busy, onUndo, onGone }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => {
+      const n = Date.now();
+      setNow(n);
+      if (n - picked.at >= PICK_UNDO_MS) onGone();
+    }, 250);
+    return () => clearInterval(t);
+  }, [picked]);
+  const left = Math.max(0, Math.ceil((PICK_UNDO_MS - (now - picked.at)) / 1000));
+  return html`<div class="cand-undo" role="status">
+    <span>Added <b>${picked.name}</b> — ${picked.day} ${picked.role === 'road' ? 'route' : 'backup'}.</span>
+    <button class="small" disabled=${busy} onClick=${onUndo}>Undo (${left})</button>
+  </div>`;
+}
+
 // "Who can work extra?" — every driver checked against the rules for one
-// day and role, safest first.
-function Finder({ view, finder, setFinder, ready, rev, busy, onPick }) {
+// day and role, safest first. picked (optional): the last pick, still undoable (PickUndo).
+function Finder({ view, finder, setFinder, ready, rev, busy, onPick, picked, onUndoPick, onPickGone }) {
   const [st, setSt] = useState(null);
   const days = view.days.filter((x) => x.open);
   const info = view.days.find((x) => x.day === finder.day);
@@ -651,6 +672,7 @@ function Finder({ view, finder, setFinder, ready, rev, busy, onPick }) {
         })}
       </div>`;
     })}
+    ${picked ? html`<${PickUndo} picked=${picked} busy=${busy} onUndo=${onUndoPick} onGone=${onPickGone} />` : ''}
   </div>`;
 }
 
@@ -684,6 +706,7 @@ function Board() {
   const [weekTip, setWeekTip] = useState(false);       // the Week to Amazon how-to (2026-10-09)
   const [opts, setOpts] = useState(null);       // add_options for the driver whose day/week is open
   const [finder, setFinder] = useState({ day: null, role: 'road' });
+  const [picked, setPicked] = useState(null);  // the last "Who can work extra?" pick, undoable for a few seconds
   const [showLog, setShowLog] = useState(false);
   const [sortBy, setSortBy] = useState(readSort);   // 'tier' | 'name'
   const [q, setQ] = useState('');                   // name search
@@ -1138,7 +1161,16 @@ function Board() {
         const m = hasOpen ? await run('apply', { day, role, to_name: c.name, ...flags })
           : await run('apply_add', { name: c.name, day, role, ...(role === 'road' ? { extra_route: true, keep_counts: true } : {}), ...flags });
         if (!m.ok) toast(m.error.message, 'err');
+        else setPicked({ name: c.name, day, role, week: R.current.sel, rev: R.current.data && R.current.data.rev, at: Date.now() });
       });
+  }
+  // the Undo under "Who can work extra?": only while this pick is still the last change on the board
+  // (same week, same saved version — anyone else's change in between hides it)
+  const pickLive = picked && picked.week === sel && data && data.rev === picked.rev && rep && rep.can_undo ? picked : null;
+  async function undoPick() {
+    setPicked(null);
+    const m = await run('undo', {});
+    if (!m.ok) toast(m.error.message, 'err');
   }
 
   async function cellAct(what, p) {
@@ -1522,7 +1554,7 @@ function Board() {
     </div>
 
     <${Finder} view=${view} finder=${finder} setFinder=${setFinder} ready=${ready} rev=${data.rev} busy=${busy}
-      onPick=${finderPick} />
+      onPick=${finderPick} picked=${pickLive} onUndoPick=${undoPick} onPickGone=${() => setPicked(null)} />
 
     <div class="card">
       <div class="row" style="justify-content:space-between">

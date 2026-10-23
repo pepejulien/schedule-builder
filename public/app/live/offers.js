@@ -15,7 +15,7 @@ import {
   TIERS, defaultForm, offerDays, offerWaves, buildOfferFields, takeStatus, timeLabel, dayLabel,
   dayOffers, upcomingGroups, stripHead, offerCounts, countsLabel, stripStatus, daySummary, daySummaryLabel, hasOpenOffer,
   isCancelled, cancelledToggle, canDelete, deleteBlocked, cancelConfirm, deleteConfirm, postedLine, editForm, buildEditFields,
-  previewFields, previewLabel,
+  previewFields, previewLabel, daysHint, offerSummary, audienceLines, driverLine,
 } from './offers-model.js';
 import { offerRole, offerLine, takeTone } from './requests-model.js';
 
@@ -119,6 +119,32 @@ function useRecipients(f) {
   return st;
 }
 
+// "Post this offer?" (Jose 2026-10-23): what it is, who it's for and every driver who will see it, asked fresh
+// from drv_offer_preview when Post / Save is pressed. ask = {fields, editing, state: loading | ok | err | none, res}.
+function ConfirmPost({ ask, busy, onYes, onNo }) {
+  const { fields, editing, state, res } = ask;
+  const list = state === 'ok' && res && Array.isArray(res.drivers) ? res.drivers : null;
+  const n = state === 'ok' && res ? Number(res.eligible) || 0 : null;
+  return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget && !busy) onNo(); }}>
+    <div class="edit-modal card of-confirm" role="dialog" aria-label=${editing ? 'Save this offer?' : 'Post this offer?'}>
+      <h3>${editing ? 'Save this offer?' : 'Post this offer?'}</h3>
+      <p><b>${offerSummary(fields)}</b></p>
+      <p class="muted" style="margin-top:0">Sent to: ${audienceLines(fields).join(' · ')}</p>
+      ${state === 'loading' ? html`<p class="muted"><${Spinner}/> Checking who will see it…</p>` : ''}
+      ${state === 'err' ? html`<${Banner} kind="warn">Couldn't count who will see it. You can still ${editing ? 'save' : 'post'} it.<//>` : ''}
+      ${n === 0 ? html`<${Banner} kind="warn">Nobody would see this offer with these choices.<//>` : ''}
+      ${n ? html`<p style="margin-bottom:6px"><b>${previewLabel({ state: 'ok', res })}</b></p>` : ''}
+      ${list && list.length ? html`<ul class="of-who">${list.map((d) => html`<li key=${d.tid}>
+        <span>${d.name}</span><span class="muted">${driverLine(d)}</span></li>`)}</ul>` : ''}
+      <div class="row" style="margin-top:14px">
+        <button class="primary" disabled=${busy || state === 'loading'} onClick=${onYes}>${editing ? 'Save' : 'Post'}</button>
+        <button disabled=${busy} onClick=${onNo}>Go back</button>
+        ${busy ? html`<span><${Spinner}/> ${editing ? 'Saving…' : 'Posting…'}</span>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
 // The offer form, opened inline in the strip and on the Requests page. Post (no offer): days = the shown week's
 // view.days; today = 'YYYY-MM-DD'; date = the day it opens on (the first day left when it isn't postable).
 // Edit (offer = the schedule_offers row, Jose 2026-10-20): only spots, who it's sent to and the note change; the
@@ -139,31 +165,49 @@ export function OfferForm({ days, today, date, offer, onDone, onCancel, uid = 's
   const waves = editing ? (f.wave ? [f.wave] : []) : offerWaves(info);
   const vet = f.kind === 'vet';
   const recipients = useRecipients(f);
+  const [ask, setAsk] = useState(null);         // the "Post this offer?" pop-up (ConfirmPost)
+  const askSeq = useRef(0);
 
-  async function post() {
-    const r = buildOfferFields(f);
+  // Post / Save: check the form, then the pop-up with who will see it (asked fresh); the pop-up's button saves
+  function confirmFirst() {
+    const r = editing ? buildEditFields(f, offer) : buildOfferFields(f);
     if (r.error) { setErr(r.error); return; }
+    setErr('');
+    // the pop-up shows the whole offer (an edit's fields are only spots / audience / note)
+    const all = editing ? { ...buildOfferFields(f).fields, ...r.fields } : r.fields;
+    const pf = canPreviewOffer() ? previewFields(f) : null;
+    const n = ++askSeq.current;
+    setAsk({ fields: all, save: r.fields, editing, state: pf ? 'loading' : 'none', res: null });
+    if (!pf) return;
+    Promise.resolve().then(() => previewOffer(pf))
+      .then((res) => { if (askSeq.current === n) setAsk((a) => a && { ...a, state: 'ok', res }); })
+      .catch(() => { if (askSeq.current === n) setAsk((a) => a && { ...a, state: 'err' }); });
+  }
+  const closeAsk = () => { askSeq.current++; setAsk(null); };
+  async function post(fields) {
     setBusy(true); setErr('');
     try {
-      await saveOffer(r.fields);
+      await saveOffer(fields);
       toast('Offer posted.');
+      closeAsk();
       setF((o) => ({ ...defaultForm(), kind: o.kind, date: o.date }));
       if (onDone) onDone();
     } catch (e) {
+      closeAsk();
       setErr('Could not post the offer: ' + (e.message || e));
     } finally { setBusy(false); }
   }
-  async function save() {
-    const r = buildEditFields(f, offer);
-    if (r.error) { setErr(r.error); return; }
+  async function save(fields) {
     setBusy(true); setErr('');
     try {
-      await editOffer(offer.id, r.fields);
+      await editOffer(offer.id, fields);
       toast('Offer saved.');
+      closeAsk();
       setBusy(false);
       if (onDone) onDone();
     } catch (e) {
       const code = String((e && e.code) || '');
+      closeAsk();
       // a driver took a spot between the read and the write: the rules refuse the status
       setErr(code === 'permission-denied' ? 'Someone just took it — try again.'
         : code.startsWith('offer/') ? e.message : 'Could not save the offer: ' + (e.message || e));
@@ -210,11 +254,19 @@ export function OfferForm({ days, today, date, offer, onDone, onCancel, uid = 's
       onChange=${() => set({ sendTo: 'groups' })} /><span>Pick groups</span></label>
     ${f.sendTo === 'groups' ? html`<div class="of-indent">
       <${TierChecks} list=${f.tiers} name="Tiers to send to" onChange=${(tiers) => set({ tiers })} />
-      <div class="row"><label class="dv-check"><input type="checkbox" checked=${f.under}
-        onChange=${(e) => set({ under: e.target.checked })} />Under</label>
-        ${hoursBox(f.underHours, (v) => set({ underHours: v, under: true }), 'Hours this week')}
-        <span class="dv-check">hours this week</span></div>
     </div>` : ''}
+    ${vet ? html`
+    <h3>Hours and days</h3>
+    <div class="row"><label class="dv-check"><input type="checkbox" checked=${f.noOt}
+      onChange=${(e) => set({ noOt: e.target.checked })} />No overtime: at most</label>
+      ${hoursBox(f.noOtHours, (v) => set({ noOtHours: v, noOt: true }), 'Most hours this week, this shift included')}
+      <span class="dv-check">hours this week, <b>counting this shift</b></span></div>
+    <div class="row"><label class="dv-check"><input type="checkbox" checked=${f.daysOn}
+      onChange=${(e) => set({ daysOn: e.target.checked })} />Working</label>
+      <input type="number" min="0" max="6" step="1" class="of-num" value=${f.maxDays} aria-label="Most days this week before this shift"
+        onInput=${(e) => set({ maxDays: e.target.value, daysOn: true })} />
+      <span class="dv-check">days or fewer this week${daysHint(f.maxDays) ? ` — ${daysHint(f.maxDays)}` : ''}</span></div>` : ''}
+    ${f.oldUnder != null ? html`<div class="hint" style="margin:4px 0 0">Also kept from before: under ${f.oldUnder} hours this week (not counting this shift).</div>` : ''}
 
     <h3>Approval</h3>
     <label class="row lv-radio"><input type="radio" name=${md} checked=${f.mode === 'fcfs'} disabled=${editing}
@@ -226,9 +278,9 @@ export function OfferForm({ days, today, date, offer, onDone, onCancel, uid = 's
     ${f.mode === 'window' ? html`<div class="of-indent">
       <div class="muted">Approve right away:</div>
       <${TierChecks} list=${f.prTiers} name="Tiers approved right away" disabled=${editing} onChange=${(prTiers) => set({ prTiers })} />
-      <div class="row"><span class="dv-check">under</span>
+      <div class="row"><span class="dv-check">at most</span>
         ${hoursBox(f.prHours, (v) => set({ prHours: v }), 'Hours this week to approve right away', editing)}
-        <span class="dv-check">hours this week</span></div>
+        <span class="dv-check">hours this week, counting this shift</span></div>
     </div>` : ''}
 
     ${editing ? html`<p class="hint" style="margin-top:12px">The day, the shift and the approval can't change — drivers
@@ -240,11 +292,12 @@ export function OfferForm({ days, today, date, offer, onDone, onCancel, uid = 's
     ${err ? html`<${Banner} kind="err">${err}<//>` : ''}
     ${canPreviewOffer() ? html`<p class="hint" style="margin:10px 0 6px" aria-live="polite">${previewLabel(recipients)}</p>` : ''}
     <div class="row">
-      ${editing ? html`<button class="primary" disabled=${busy} onClick=${save}>Save</button>`
-        : html`<button class="primary" disabled=${busy || !choices.length} onClick=${post}>Post</button>`}
+      ${editing ? html`<button class="primary" disabled=${busy} onClick=${confirmFirst}>Save…</button>`
+        : html`<button class="primary" disabled=${busy || !choices.length} onClick=${confirmFirst}>Post…</button>`}
       ${onCancel ? html`<button disabled=${busy} onClick=${onCancel}>Cancel</button>` : ''}
-      ${busy ? html`<span><${Spinner}/> ${editing ? 'Saving…' : 'Posting…'}</span>` : ''}
     </div>
+    ${ask ? html`<${ConfirmPost} ask=${ask} busy=${busy} onNo=${closeAsk}
+      onYes=${() => (ask.editing ? save(ask.save) : post(ask.save))} />` : ''}
   </div>`;
 }
 
