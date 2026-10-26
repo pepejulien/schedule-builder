@@ -18,7 +18,8 @@ export const TIER_ORDER = [
 ];
 
 function makeInWin(asofDate) {
-  const days = (iso) => (asofDate - new Date(iso + 'T00:00:00')) / 86400000;
+  // rounded: across a DST change the gap is n days +/- 1 hour (2026-10-26, as the board)
+  const days = (iso) => Math.round((asofDate - new Date(iso + 'T00:00:00')) / 86400000);
   return (iso, w) => (w === 0 ? true : days(iso) <= (w - 1));
 }
 
