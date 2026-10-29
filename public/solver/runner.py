@@ -2007,8 +2007,8 @@ def set_counts(payload_json):
     the day's waves has (and so the day's total) and how many backups -- the
     Live board's day header (Jose 2026-10-09: adding drivers to a full wave
     keeps raising the count, and Amazon's real number had no way back in).
-    A wave can't go below the routes already in it: take someone off or move
-    them to backup first. Waves not named keep their count."""
+    A wave may go below the drivers already in it (Jose 2026-10-29: no fighting
+    the board) -- it just shows over, e.g. 5/4. Waves not named keep their count."""
     try:
         p = json.loads(payload_json)
         res, cfg = _STATE.get("res"), _STATE.get("cfg")
@@ -2031,11 +2031,6 @@ def set_counts(payload_json):
             if not _whole(n):
                 return json.dumps(dict(ok=False, kind="edit",
                                        message=f"{w}: enter a whole number, 0 or more."))
-            have = _wave_filled(res, day, w)
-            if n < have:
-                return json.dumps(dict(ok=False, kind="edit",
-                    message=f"{have} driver(s) already have a {w} route on {day} - "
-                            f"take someone off or move them to backup before going below {have}."))
         bk = p.get("backup", res.backup.get(day, 0))
         if not _whole(bk):
             return json.dumps(dict(ok=False, kind="edit", message="Backups: enter a whole number, 0 or more."))

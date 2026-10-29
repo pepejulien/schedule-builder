@@ -14,13 +14,14 @@ export const waveBg = (w) => WAVE_COLORS[String(w).replace(/ [AP]M$/, '')] || SH
 
 // Click on a day's "31/33 · bk 7/7" (Jose 2026-10-09): set how many routes each wave has and
 // how many backups — adding someone to a full wave raises the count, and this puts Amazon's real
-// number back. A wave can't go below the routes already in it (the engine says so too).
+// number back. A wave may go below the drivers already in it (Jose 2026-10-29) — it just shows over.
 export function CountsEditor({ info, fills, busy, onSave, onClose }) {
   const waves = Object.keys(info.waves || {}).sort((a, b) => waveMins(a) - waveMins(b));
   const [vals, setVals] = useState(() => Object.fromEntries(waves.map((w) => [w, String(info.waves[w])])));
   const [bk, setBk] = useState(String(info.backup ?? 0));
   const num = (v) => (/^\d+$/.test(String(v).trim()) ? parseInt(v, 10) : null);
-  const bad = waves.filter((w) => num(vals[w]) == null || num(vals[w]) < (fills[w] || 0));
+  const bad = waves.filter((w) => num(vals[w]) == null);
+  const over = waves.filter((w) => !bad.includes(w) && num(vals[w]) < (fills[w] || 0));
   const bkBad = num(bk) == null;
   const total = waves.reduce((t, w) => t + (num(vals[w]) || 0), 0);
   const same = waves.every((w) => num(vals[w]) === info.waves[w]) && num(bk) === info.backup;
@@ -35,7 +36,7 @@ export function CountsEditor({ info, fills, busy, onSave, onClose }) {
         ${waves.map((w) => html`<tr>
           <td><span class="lv-sw" style=${`background:${waveBg(w)}`}>${w}</span></td>
           <td class="muted">${fills[w] || 0}</td>
-          <td><input type="number" min=${fills[w] || 0} step="1" inputmode="numeric" value=${vals[w]} aria-label=${`${w} routes`}
+          <td><input type="number" min="0" step="1" inputmode="numeric" value=${vals[w]} aria-label=${`${w} routes`}
             class=${bad.includes(w) ? 'bad' : ''} onInput=${(e) => setVals((v) => ({ ...v, [w]: e.target.value }))} /></td>
         </tr>`)}
         <tr class="lv-counts-tot"><td>Routes in all</td><td class="muted">${info.routes_filled}</td><td><b>${total}</b></td></tr>
@@ -43,7 +44,8 @@ export function CountsEditor({ info, fills, busy, onSave, onClose }) {
           <td><input type="number" min="0" step="1" inputmode="numeric" value=${bk} aria-label="Backups"
             class=${bkBad ? 'bad' : ''} onInput=${(e) => setBk(e.target.value)} /></td></tr>
       </tbody></table>
-      ${bad.length ? html`<p class="lv-note warn">${bad.map((w) => `${w}: ${fills[w] || 0} already have a route there — take someone off or move them to backup to go lower.`).join(' ')}</p>` : ''}
+      ${bad.length ? html`<p class="lv-note warn">Enter a whole number, 0 or more.</p>` : ''}
+      ${over.length ? html`<p class="lv-note">${over.map((w) => `${w}: ${fills[w] || 0} drivers for ${num(vals[w])} routes — it will show over until you move someone.`).join(' ')}</p>` : ''}
       <div class="row" style="margin-top:12px">
         <button class="primary" disabled=${busy || bad.length || bkBad || same} onClick=${save}>${busy ? html`<${Spinner}/> Saving…` : 'Save'}</button>
         <button disabled=${busy} onClick=${onClose}>Cancel</button>

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Live board day counts (2026-10-09): set_counts sets a day's per-wave routes
-and backups, can't go below the routes already in a wave, logs the change, and
+and backups, can go below the routes already in a wave (it shows over), logs the change, and
 undo puts it back.
 
 Run:  python tests/gen_fixtures.py   (once)  then  python tests/set_counts_test.py
@@ -58,9 +58,11 @@ ok(r.get('ok'), 'raised the count by hand')
 d1 = next(d for d in r['days'] if d['day'] == D)
 ok(d1['routes'] == day['routes'] + 1 and d1['waves'][w0] == waves[w0] + 1, 'the count went up by one')
 
-# can't go below what's in the wave
+# below what's in the wave is allowed (Jose 2026-10-29): the wave just shows over
 r = J(runner.set_counts, {'day': D, 'waves': {w0: waves[w0]}})
-ok(not r.get('ok') and 'already have' in r.get('message', ''), 'below the routes in the wave is refused')
+ok(r.get('ok') and next(d for d in r['days'] if d['day'] == D)['waves'][w0] == waves[w0], 'below the routes in the wave is allowed')
+ok(not any(e.startswith('WAVE ') for e in r['check']['errors']), 'over its count is not a rule error')
+r = J(runner.undo_last)
 
 # take the added driver off: the slot is open, then lower the count back
 r = J(runner.apply_edit, {'day': D, 'role': 'road', 'from_name': free['name']})

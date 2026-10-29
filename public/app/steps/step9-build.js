@@ -114,14 +114,11 @@ export function RuleProblems({ lines }) {
 
 const ROLE_WORDS = { road: 'a route', backup: 'a backup', trainer: 'a trainer day', meeting: 'a meeting', dispatch: 'dispatch' };
 
-// A deliberate speed bump before scheduling someone on a day they submitted
-// off: tick the box AND type their first name. Compliance rules never get
+// Before scheduling someone on a day they submitted off: one click (Jose 2026-10-29 —
+// the checkbox + typed first name was too much friction). Compliance rules never get
 // here — those can't be overridden at all.
 export function ConfirmOverride({ req, onCancel, onConfirm }) {
-  const [ack, setAck] = useState(false);
-  const [typed, setTyped] = useState('');
   const first = req.name.trim().split(/\s+/)[0];
-  const okName = typed.trim().toLowerCase() === first.toLowerCase();
   const what = ROLE_WORDS[req.role] || 'a backup';
   const why = req.reasons[0] || 'marked Unavailable that day';
   return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onCancel(); }}>
@@ -129,19 +126,10 @@ export function ConfirmOverride({ req, onCancel, onConfirm }) {
       <h3>⚠ ${req.name} is OFF on ${req.day}</h3>
       <p><b>${why[0].toUpperCase() + why.slice(1)}.</b> You're about to give them ${what} anyway.</p>
       ${req.reasons.length > 1 ? html`<p class="muted">Also: ${req.reasons.slice(1).join('; ')}</p>` : ''}
-      <p class="hint">Only do this if you've talked to ${first} and they agreed to work ${req.day}.
-        It will be logged as an override on this schedule.</p>
-      <label class="row" style="gap:8px; margin:10px 0">
-        <input type="checkbox" checked=${ack} onChange=${(e) => setAck(e.target.checked)} />
-        I confirmed with ${first} that they will work ${req.day}.
-      </label>
-      <label>Type <b>${first}</b> to confirm:
-        <input type="text" value=${typed} autocomplete="off"
-          onInput=${(e) => setTyped(e.target.value)} style="margin-left:8px; width:160px" /></label>
+      <p class="hint">It will be logged as an override on this schedule.</p>
       <div class="row" style="margin-top:14px">
         <button onClick=${onCancel}>Cancel</button>
-        <button class="danger" disabled=${!(ack && okName)} onClick=${onConfirm}>
-          Schedule ${first} on ${req.day} anyway</button>
+        <button class="danger" onClick=${onConfirm}>Schedule ${first} on ${req.day} anyway</button>
       </div>
     </div>
   </div>`;
@@ -172,11 +160,17 @@ export function LimitConfirm({ req, onCancel, onConfirm }) {
   </div>`;
 }
 
-// Run an edit after whatever pop-ups it needs: the typed day-off confirm
-// (unavReasons), then the 6-day/overtime pop-up (limits). run(flags).
-export function runConfirmed({ name, day, role, unavReasons, limits }, setUnav, setLimit, run) {
+// Overtime only (no 6-day in it): the Live board says yes by itself (Jose 2026-10-29).
+export const overtimeOnly = (limits) => !!(limits && limits.length) && !limits.some((l) => /^6-day/.test(l));
+
+// Run an edit after whatever pop-ups it needs: the day-off confirm (unavReasons),
+// then the 6-day/overtime pop-up (limits). run(flags). autoOvertime (the Live board):
+// overtime alone needs no pop-up — it's OK'd and logged like a yes.
+export function runConfirmed({ name, day, role, unavReasons, limits }, setUnav, setLimit, run, { autoOvertime = false } = {}) {
   const step2 = (flags) => ((limits && limits.length)
-    ? setLimit({ name, day, role, limits, run: () => run({ ...flags, confirm_limits: true }) })
+    ? (autoOvertime && overtimeOnly(limits)
+      ? run({ ...flags, confirm_limits: true })
+      : setLimit({ name, day, role, limits, run: () => run({ ...flags, confirm_limits: true }) }))
     : run(flags));
   if (unavReasons) setUnav({ name, day, role, reasons: unavReasons, run: () => step2({ confirm_unavailable: true }) });
   else step2({});

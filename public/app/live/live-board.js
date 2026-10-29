@@ -3,7 +3,7 @@
 // Firestore as one transaction with a line in the week's change log.
 //
 // Rules are the builder's own (runner.py _assess): green = safe, yellow =
-// policy (allowed, flagged), red = they asked the day off (typed confirm),
+// policy (allowed, flagged), red = they asked the day off (one-click confirm),
 // grey = compliance (locked). Hours are SCHEDULED hours on the clock (route
 // 10h, backup 2h, meeting 2h, dispatch 12h). Here only, a 6th day worked in 7
 // (last week counts) and overtime go through after a pop-up (orange) -- the
@@ -23,7 +23,7 @@ import { HoursCheck } from './hours-check.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate, weekLabel } from '../lib/weeks.js';
 import {
-  WaveEditor, SlotEditor, ConfirmOverride, LimitConfirm, runConfirmed, TIER_META, TIER_ORDER,
+  WaveEditor, SlotEditor, ConfirmOverride, LimitConfirm, runConfirmed as runConfirmedAll, overtimeOnly, TIER_META, TIER_ORDER,
 } from '../steps/step9-build.js';
 import {
   loadEngine, saveWeek, logLines, summaryFromReport, sundayOf, todayISO, cellInfo,
@@ -38,6 +38,8 @@ import { OffersStrip, OfferDayLine, OfferDot } from './offers.js';
 import { TradesStrip } from './trades.js';
 import { CountsEditor } from './counts-editor.js';
 import { headCounts } from './offers-model.js';
+// Overtime alone is a yes on the Live board, no pop-up (Jose 2026-10-29); a 6-day still asks.
+const runConfirmed = (req, setUnav, setLimit, run) => runConfirmedAll(req, setUnav, setLimit, run, { autoOvertime: true });
 
 // Roster bookmark (2026-10-09, docs/roster-bookmarklet.md): the link only injects roster.js (next to
 // index.html, absolute, cache-busted), so fixing roster.js fixes every computer's bookmark.
@@ -1116,6 +1118,7 @@ function Board() {
       setConfirm({ ...who, reasons: [m.error.message.replace(/ Confirm the override first\.$/, '')],
         run: () => runAsking(op, { ...payload, confirm_unavailable: true }, who) });
     } else if (m.error.kind === 'needs_limits') {
+      if (overtimeOnly(m.error.limits)) return runAsking(op, { ...payload, confirm_limits: true }, who);
       setLimit({ ...who, limits: m.error.limits || [], run: () => runAsking(op, { ...payload, confirm_limits: true }, who) });
     } else toast(m.error.message, 'err');
     return m;

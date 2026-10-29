@@ -3,7 +3,7 @@
 // week grid like the Live board where any day opens its choices, trades between two
 // drivers, someone missing from the week. Rules are the engine's own (runner.py
 // _assess): green safe, yellow policy (flagged), orange a 6-day / overtime (a pop-up),
-// red a day off (typed confirm), grey locked (12h a day, 60h in 7 days, 7 in a row,
+// red a day off (one-click confirm), grey locked (12h a day, 60h in 7 days, 7 in a row,
 // clashes). The solver itself never bends a rule; only these hand edits do.
 import { html } from '../preact-setup.js';
 import { useState, useEffect } from 'preact/hooks';
