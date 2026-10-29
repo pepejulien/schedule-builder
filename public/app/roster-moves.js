@@ -6,7 +6,8 @@
 // and makes each one on the Live board the way the board makes a change: the engine, then one save
 // (expected rev, change-log lines). A route moves WITH its count (apply_wave move_count: one route
 // less at the old time, one more at the new one, the day's total stays; a driver who was an extra
-// at the old time moves as an extra; a time the board has no wave at yet gets one). Nothing else is changed.
+// at the old time moves as an extra; a time the board has no wave at yet gets one). A trainee moves together with their trainer
+// (the engine moves the pair). Nothing else is changed.
 //
 // checkMovesMsg() / planMoves() are pure (no DOM, no JAJB) so tests/roster_moves_test.mjs runs them.
 import { dayLabel, cellRole, allowedOrigins } from './roster-send.js';
@@ -62,12 +63,10 @@ export function planMoves(rep, iso, moves) {
     if (seen.has(drv.name)) { s.why = 'in the list twice'; return s; }
     seen.add(drv.name);
     const c = cellRole((drv.cells || {})[day.day]);
-    // the engine never splits a training pair (apply_wave: "training days can only be changed by a rebuild")
-    if (c.role === 'trainee' || c.role === 'trainer') {
-      s.why = `in a training pair${c.partner && c.partner !== 'ride-along' ? ` with ${c.partner}` : ''} — the trainee and trainer can't be moved apart`;
-      return s;
-    }
-    if (c.role !== 'route' || c.sched !== mv.from) { s.why = `the Live board changed — not at ${mv.from} any more`; return s; }
+    // a trainee / trainer moves WITH their partner (apply_wave moves the pair, Jose 2026-10-29)
+    const pair = c.role === 'trainee' || c.role === 'trainer';
+    if (!(c.role === 'route' || pair) || c.sched !== mv.from) { s.why = `the Live board changed — not at ${mv.from} any more`; return s; }
+    if (pair && c.partner && c.partner !== 'ride-along') s.partner = c.partner;
     // a start time the board has no wave at yet is fine: the engine adds it (Jose 2026-10-29)
     s.payload = { day: day.day, name: drv.name, wave: mv.to, move_count: true, note: NOTE };
     return s;
@@ -125,7 +124,7 @@ export function startRosterMovesPage(root, iso) {
       if (sentRev != null && ctx.d.meta.rev !== sentRev) changed = true;
       const plan = planMoves(ctx.rep, iso, moves);
       if (plan.error) return moves.map((m) => ({ name: m.name, ok: false, why: plan.error }));
-      const out = plan.steps.map((s) => ({ name: s.name, ok: false, why: s.why || '', to: s.to }));
+      const out = plan.steps.map((s) => ({ name: s.name, ok: false, why: s.why || '', to: s.to, partner: s.partner }));
       let rep = ctx.rep;
       for (const [k, s] of plan.steps.entries()) {
         if (!s.payload) continue;
@@ -154,7 +153,7 @@ export function startRosterMovesPage(root, iso) {
   function show(results, error) {
     list.textContent = '';
     const ul = el('ul', 'hint');
-    for (const r of results) ul.append(el('li', null, r.ok ? `${r.name} → ${r.to}` : `NOT moved: ${r.name} — ${r.why}`));
+    for (const r of results) ul.append(el('li', null, r.ok ? `${r.name}${r.partner ? ` + ${r.partner}` : ''} → ${r.to}` : `NOT moved: ${r.name} — ${r.why}`));
     if (results.length) list.append(ul);
     if (changed) list.append(el('p', 'hint', 'The Live board had changed since Amazon\'s page read it — each driver was checked again first.'));
     const bad = error || results.some((r) => !r.ok);

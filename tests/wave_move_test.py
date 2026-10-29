@@ -2,7 +2,7 @@
 """Roster bookmark (Jose 2026-10-23): apply_wave with move_count moves a driver's
 route to another wave with no swap -- one route count moves with them (one less at
 their wave, one more at the new one, the day's total stays) -- logs it, and undo
-puts it back. A training pair is refused; without move_count a swap is still needed.
+puts it back. A training pair moves together; without move_count a swap is still needed.
 
 Run:  python tests/gen_fixtures.py   (once)  then  python tests/wave_move_test.py
 """
@@ -115,14 +115,32 @@ _r._STATE['res'].waves[D][w1] = d1['waves'][w1]
 wo = J(runner.wave_options, {'day': D, 'name': mover['name']})
 ok(wo.get('ok') and wo['carry'] is True and all('count' in w and 'filled' in w for w in wo['waves']), 'wave_options: carry + counts')
 
-# a training pair is refused (it can't be split)
+# a training pair moves together (Jose 2026-10-29); without move_count (a swap) it's refused
 pair = next(((dd, x) for x in r0['drivers'] for dd, v in x['cells'].items() if 'TRAIN drives' in (v or '')), None)
 if pair:
     dd, x = pair
-    other = next((w for w in next(d for d in r0['days'] if d['day'] == dd)['waves'] if not x['cells'][dd].startswith(w)), None)
-    if other:
-        r = J(runner.apply_wave, {'day': dd, 'name': x['name'], 'wave': other, 'move_count': True})
-        ok(not r.get('ok') and 'training' in r.get('message', ''), 'trainee refused: ' + r.get('message', ''))
+    rp0 = J(runner.load_state, {'state': st, 'out': os.path.join(tmp, 'live.xlsx')})
+    pd0 = next(d for d in rp0['days'] if d['day'] == dd)
+    lab = x['cells'][dd]
+    cw = next(w for w in pd0['waves'] if lab.startswith(w))
+    tr = next(y for y in rp0['drivers'] if 'TRAIN helper' in (y['cells'].get(dd) or '')
+              and y['cells'][dd].startswith(cw) and runner._short(x['name']) in y['cells'][dd])
+    other = next((w for w in pd0['waves'] if w != cw), '12:35 PM')
+    r = J(runner.apply_wave, {'day': dd, 'name': tr['name'], 'wave': other, 'swap_name': x['name']})
+    ok(not r.get('ok') and 'together' in r.get('message', ''), 'pair swap refused: ' + r.get('message', ''))
+    wo = J(runner.wave_options, {'day': dd, 'name': tr['name']})
+    ok(wo.get('ok') and wo['role'] == 'pair' and wo['partner'] == x['name'] and wo['drives'], f'wave_options for a trainer: {wo.get("role")} {wo.get("partner")}')
+    r = J(runner.apply_wave, {'day': dd, 'name': tr['name'], 'wave': other, 'move_count': True})
+    ok(r.get('ok'), 'trainer moves the pair: ' + str(r.get('message', '')))
+    if r.get('ok'):
+        cc = {y['name']: y['cells'].get(dd) for y in r['drivers']}
+        ok(cc[x['name']] == other + lab[len(cw):] and cc[tr['name']].startswith(other + ' (TRAIN helper'),
+           f'both moved: {cc[x["name"]]} / {cc[tr["name"]]}')
+        pd = next(d for d in r['days'] if d['day'] == dd)
+        ok(pd['routes'] == pd0['routes'] and pd['routes_filled'] == pd0['routes_filled'], 'day total and filled stay')
+        ok('training pair' in r['edits'][-1], 'logged: ' + r['edits'][-1])
+        r = last = J(runner.undo_last)
+        ok({y['name']: y['cells'].get(dd) for y in r['drivers']}[x['name']] == lab, 'undo puts the pair back')
 else:
     print('  (no training pair in the fixture week)')
 

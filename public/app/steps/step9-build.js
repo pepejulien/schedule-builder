@@ -519,13 +519,16 @@ export function WaveEditor({ day, name, onClose, onApplied, req = editRequest, f
   }
 
   const d = st.data;
-  const road = d && d.role === 'road', move = road && free;
+  const pair = d && d.role === 'pair';
+  const road = d && (d.role === 'road' || pair), move = (road && free) || pair;
   return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="edit-modal card">
       <h3>Change ${name}’s wave on ${day}</h3>
-      ${d ? html`<p class="hint">Now in the <b>${d.current}</b> wave (${road ? 'route' : 'backup'}).${' '}
+      ${d ? html`<p class="hint">Now in the <b>${d.current}</b> wave (${pair ? 'training' : road ? 'route' : 'backup'}).${' '}
+        ${pair ? html`${d.partner ? html`Moves together with <b>${d.partner}</b>. ` : ''}` : ''}
         ${!road ? 'Backups can move to any wave.'
-          : !free ? 'Route counts per wave are exact, so pick who trades times with them.'
+          : !move ? 'Route counts per wave are exact, so pick who trades times with them.'
+          : d.drives === false ? 'They ride along, so no route count changes.'
           : d.carry ? html`Their route count goes with them — the day’s total stays the same.`
           : html`The ${d.current} wave had more drivers than routes (${d.filled} for ${d.count}), so they move as an extra route.`}</p>` : ''}
 
@@ -544,7 +547,7 @@ export function WaveEditor({ day, name, onClose, onApplied, req = editRequest, f
           : html`
           ${move ? html`<button class="slot-btn ok" disabled=${busy}
               onClick=${() => apply(w.wave)}>Move to ${w.wave}</button>
-            <span class="muted" style="margin-left:8px">${d.carry
+            <span class="muted" style="margin-left:8px">${d.drives === false ? '' : d.carry
               ? `${d.current} ${d.count}→${d.count - 1} routes, ${w.wave} ${w.count}→${w.count + 1}`
               : `${w.wave} becomes ${w.filled + 1} of ${w.count}`}</span>` : ''}
           ${w.swap_with.length === 0

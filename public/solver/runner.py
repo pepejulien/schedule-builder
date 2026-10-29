@@ -1808,15 +1808,20 @@ def wave_options(payload_json):
         if dr is None:
             return json.dumps(dict(ok=False, kind="edit",
                                    message=f"Driver not found: {p.get('name')}"))
-        role = "backup" if day in dr["bk"] else "road" if day in dr["prim"] else None
+        label = res.cell[day].get(i, "")
+        pair = "TRAIN" in label           # moves together with its partner (apply_wave move_count)
+        role = ("pair" if pair else "backup" if day in dr["bk"]
+                else "road" if day in dr["prim"] else None)
         if role is None:
             return json.dumps(dict(ok=False, kind="edit",
                                    message=f"{dr['name']} has no route or backup on {day}."))
-        label = res.cell[day].get(i, "")
-        if "TRAIN" in label:
-            return json.dumps(dict(ok=False, kind="edit",
-                message="That is a training-pair day - training days can only "
-                        "be changed by a rebuild."))
+        partner = None
+        if pair:
+            j0, ot = _pair_of(res, day, i, dr)
+            if j0 is False:
+                return json.dumps(dict(ok=False, kind="edit",
+                    message=f"Couldn't find {dr['name']}'s training partner on {day}."))
+            partner = ot["name"] if ot is not None else None
         cur = _cell_wave(label)
         out = []
         for t in res.waves[day]:
@@ -1824,6 +1829,10 @@ def wave_options(payload_json):
                 continue
             if role == "backup":
                 out.append(dict(wave=t, swap_with=None))
+                continue
+            if pair:                          # no swaps for a pair, just the move
+                out.append(dict(wave=t, swap_with=[], count=res.waves[day][t],
+                                filled=_wave_filled(res, day, t)))
                 continue
             occ = []
             for j, other in enumerate(res.roster):
@@ -1838,9 +1847,11 @@ def wave_options(payload_json):
                             filled=_wave_filled(res, day, t)))
         # for a move with its count (apply_wave move_count): does their count go along?
         cnt = res.waves[day].get(cur, 0) if cur else 0
-        carry = role == "road" and cur is not None and cnt >= 1 and cnt >= _wave_filled(res, day, cur)
-        return json.dumps(dict(ok=True, day=day, name=dr["name"], role=role,
-                               current=cur, waves=out, carry=carry,
+        drives = role == "road" or (pair and (
+            "TRAIN drives" in label or (partner and "TRAIN drives" in res.cell[day].get(_find(res, partner)[0], ""))))
+        carry = bool(drives) and cur is not None and cnt >= 1 and cnt >= _wave_filled(res, day, cur)
+        return json.dumps(dict(ok=True, day=day, name=dr["name"], role=role, partner=partner,
+                               current=cur, waves=out, carry=carry, drives=bool(drives),
                                count=cnt, filled=_wave_filled(res, day, cur) if cur else 0))
     except Exception:  # noqa: BLE001
         import traceback
@@ -1875,14 +1886,15 @@ def apply_wave(payload_json):
             return json.dumps(dict(ok=False, kind="edit",
                                    message=f"Driver not found: {p.get('name')}"))
         label = res.cell[day].get(i, "")
-        if "TRAIN" in label:
-            return json.dumps(dict(ok=False, kind="edit",
-                message="That is a training-pair day - training days can only "
-                        "be changed by a rebuild."))
         cur = _cell_wave(label)
         if cur == wave:
             return json.dumps(dict(ok=False, kind="edit",
                                    message=f"{dr['name']} is already in the {wave} wave."))
+        if "TRAIN" in label:
+            if not p.get("move_count"):
+                return json.dumps(dict(ok=False, kind="edit",
+                    message="A training pair moves together - use Move (not a swap)."))
+            return _move_pair(res, cfg, day, i, dr, cur, wave, p)
 
         if day in dr["bk"]:
             _STATE["undo"].append(_snapshot(res))
@@ -1927,6 +1939,67 @@ def apply_wave(payload_json):
         import traceback
         return json.dumps(dict(ok=False, kind="crash",
                                message=traceback.format_exc()))
+
+
+def _pair_of(res, day, i, dr):
+    """The other cell index of dr's training pair on `day`: (j, partner) --
+    (None, None) for a trainer riding along with nobody named, (False, None)
+    when the pair can't be found."""
+    lab = res.cell[day].get(i, "")
+    if "ride-along" in lab:
+        return None, None
+    pair = next((t for t in res.PAIRLOG if t[2] == day
+                 and norm(dr["name"]) in (norm(t[0]), norm(t[1]))), None)
+    if pair:
+        other = pair[1] if norm(pair[0]) == norm(dr["name"]) else pair[0]
+        j, ot = _find(res, other)
+        if ot is not None and "TRAIN" in res.cell[day].get(j, ""):
+            return j, ot
+    # no log entry (an older save): the partner named in the cell, pointing back at dr
+    m = re.search(r"w/ ([^)]+)\)", lab)
+    for j, other in enumerate(res.roster):
+        v = res.cell[day].get(j, "")
+        if j != i and "TRAIN" in v and m and _short(other["name"]) == m.group(1) \
+                and f"w/ {_short(dr['name'])})" in v:
+            return j, other
+    return False, None
+
+
+def _move_pair(res, cfg, day, i, dr, cur, wave, p):
+    """apply_wave move_count on a training-pair day (Jose 2026-10-29): the
+    trainee and trainer move together; the driving one's route count goes along
+    like any route (see apply_wave)."""
+    j, ot = _pair_of(res, day, i, dr)
+    if j is False:
+        return json.dumps(dict(ok=False, kind="edit",
+            message=f"Couldn't find {dr['name']}'s training partner on {day}."))
+    if j is not None and _cell_wave(res.cell[day].get(j, "")) != cur:
+        return json.dumps(dict(ok=False, kind="edit",
+            message=f"{dr['name']} and {ot['name']} aren't at the same start time on {day}."))
+    idx = [i] + ([j] if j is not None else [])
+    drv = next((k for k in idx if "TRAIN drives" in res.cell[day].get(k, "")), None)
+    _STATE["undo"].append(_snapshot(res))
+    a = res.waves[day].get(cur, 0) if cur else 0
+    b = res.waves[day].get(wave, 0)
+    carry = drv is not None and cur is not None and a >= 1 and a >= _wave_filled(res, day, cur)
+    for k in idx:
+        v = res.cell[day][k]
+        res.cell[day][k] = wave + v[len(cur):] if cur and v.startswith(cur) else v
+    if carry:
+        res.waves[day][cur] = a - 1
+    if drv is not None:
+        res.waves[day][wave] = b + 1 if carry else b
+    who = f"{dr['name']} + {ot['name']}" if ot is not None else dr["name"]
+    note = str(p.get("note") or "").strip()[:80]
+    desc = (f"Moved the {day} training pair {who} {cur} -> {wave}" + (f" {note}" if note else "")
+            + ("" if drv is None
+               else f" (routes {cur} {a}->{a - 1}, {wave} {b}->{b + 1})" if carry
+               else f" (an extra route - {wave} is now {_wave_filled(res, day, wave)}/{b})"))
+    _STATE["edits"].append(desc)
+    chk = _verify(res)
+    res.infeasible = _recount_short(res, chk)
+    _save_out(res)
+    return json.dumps(_report(cfg, res, chk), default=str)
 
 
 def set_counts(payload_json):

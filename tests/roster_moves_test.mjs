@@ -65,8 +65,10 @@ eq('day name', p.dayName, 'Sat');
 eq('route -> apply_wave with the count', p.steps[0],
   { name: 'Tiamia Allen Schwalbe', from: '10:05 AM', to: '10:25 AM',
     payload: { day: 'Sat', name: 'Tiamia Allen Schwalbe', wave: '10:25 AM', move_count: true, note: 'to match Amazon' } });
-ok('trainee refused, pair named', !p.steps[1].payload && /training pair with Cara Amos/.test(p.steps[1].why), p.steps[1].why);
-ok('trainer refused', !p.steps[2].payload && /training pair/.test(p.steps[2].why), p.steps[2].why);
+eq('trainee moves (the engine takes the trainer along)', p.steps[1],
+  { name: 'Tina Trainee', from: '10:05 AM', to: '10:25 AM', partner: 'Cara Amos',
+    payload: { day: 'Sat', name: 'Tina Trainee', wave: '10:25 AM', move_count: true, note: 'to match Amazon' } });
+ok('trainer moves too', !!p.steps[2].payload && p.steps[2].partner === 'Tina Trainee', JSON.stringify(p.steps[2]));
 eq('not at from any more', p.steps[3].why, 'the Live board changed — not at 10:05 AM any more');
 eq('a backup is not a route at from', p.steps[4].why, 'the Live board changed — not at 10:05 AM any more');
 eq('accents / case: the board name goes to the engine', p.steps[5].payload && p.steps[5].payload.name, 'José Núñez');

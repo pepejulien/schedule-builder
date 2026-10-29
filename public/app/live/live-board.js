@@ -467,7 +467,9 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
             onClick=${() => act('remove', { day, role, fromName: d.name })} />
         </div>` : ''}
 
-      ${kind === 'trainer' || kind === 'trainee' ? html`<div class="dm-grid one">
+      ${kind === 'trainer' || kind === 'trainee' ? html`<div class="dm-grid">
+        <${Act} icon="🕑" title="Change wave" sub=${c.partner && c.partner !== 'ride-along' ? `Moves with ${c.partner} — the route count goes along` : 'Move to another start time'} busy=${busy}
+          onClick=${() => act('wave', { day, name: d.name })} />
         <${Act} icon="−" title="End this training pair" sub=${kind === 'trainer' ? `${c.partner} drives alone; ${first} is off that day` : `${first} drives alone; ${c.partner} is off that day`}
           tone="dm-danger" busy=${busy} onClick=${() => act('unduty', { name: d.name, day })} /></div>` : ''}
       ${kind === 'disp' || kind === 'meet' ? html`<div class="dm-grid one">
