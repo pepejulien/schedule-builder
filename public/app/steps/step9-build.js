@@ -12,6 +12,7 @@ import { saveWeek, actualList, prevISO, prevWorkedFrom } from '../live/live-mode
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate as pd } from '../lib/weeks.js';
 import { candGroup, groupClass } from '../lib/cand-groups.js';
+import { waveBg } from '../live/counts-editor.js';
 import { GROUP_OPTIONS } from '../lib/config-assemble.js';
 import { AdvancedPanel } from './advanced-panel.js';
 import { buildReq, saveEngine, restoreEngine, runAsking, coverage, openSummary, CoverageCard, WeekGrid, DayMenu, PickDriver,
@@ -536,10 +537,10 @@ export function WaveEditor({ day, name, onClose, onApplied, req = editRequest, f
       ${d ? d.waves.map((w) => html`<div class="cand-group">
         <h4 class="cand-h ok">${w.wave} wave${move ? html` <span class="muted">· ${w.filled} of ${w.count} routes filled</span>` : ''}</h4>
         ${w.swap_with === null
-          ? html`<button class="slot-btn ok" disabled=${busy}
+          ? html`<button class="slot-btn wave" disabled=${busy} style=${`background:${waveBg(w.wave)}`}
               onClick=${() => apply(w.wave, null)}>Move backup to ${w.wave}</button>`
           : html`
-          ${move ? html`<button class="slot-btn ok" disabled=${busy}
+          ${move ? html`<button class="slot-btn wave" disabled=${busy} style=${`background:${waveBg(w.wave)}`}
               onClick=${() => apply(w.wave)}>Move to ${w.wave}</button>
             <span class="muted" style="margin-left:8px">${d.drives === false ? '' : d.carry
               ? `${d.current} ${d.count}→${d.count - 1} routes, ${w.wave} ${w.count}→${w.count + 1}`

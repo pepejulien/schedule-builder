@@ -327,6 +327,9 @@ tr.cand-row.src td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
 .slot-btn { padding: 4px 12px; font-size: 13px; }
 .slot-btn.ok { border-color: #bfe6cc; background: #eafaef; color: #14682e; }
 .slot-btn.ok:hover { background: #d8f3e2; }
+/* a move to another start time, in that wave's color (Jose 2026-10-29); green stays for a driver */
+.slot-btn.wave { border-color: rgba(0,0,0,.12); color: #16191f; font-weight: 600; }
+.slot-btn.wave:hover { filter: brightness(.95); }
 .slot-btn.warn { border-color: #f0e0a8; background: #fff8e6; color: #8a6d1a; }
 .slot-btn.warn:hover { background: #fdefc4; }
 .slot-btn.full { border-color: #e8b98a; background: #fdf1e7; color: #9a5b12; }
