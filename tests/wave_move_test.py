@@ -88,6 +88,32 @@ ok(next(d for d in r['days'] if d['day'] == D)['waves'] == d1['waves'], 'undo: o
 # same wave / unknown wave refused
 ok(not J(runner.apply_wave, {'day': D, 'name': mover['name'], 'wave': w1, 'move_count': True}).get('ok'), 'already there: refused')
 ok(not J(runner.apply_wave, {'day': D, 'name': mover['name'], 'wave': '9:99 AM', 'move_count': True}).get('ok'), 'unknown wave refused')
+ok(not J(runner.apply_wave, {'day': D, 'name': mover['name'], 'wave': 'soon', 'move_count': True}).get('ok'), 'junk wave refused')
+ok(not J(runner.apply_wave, {'day': D, 'name': mover['name'], 'wave': '12:35 PM'}).get('ok'), 'a new start time needs move_count')
+
+# a start time the day has no wave at yet (Jose 2026-10-29): the wave is added, the count goes along
+r = J(runner.apply_wave, {'day': D, 'name': mover['name'], 'wave': '12:35 PM', 'move_count': True})
+dn = next(d for d in r['days'] if d['day'] == D) if r.get('ok') else {}
+ok(r.get('ok') and dn['waves'].get('12:35 PM') == 1 and dn['waves'][w1] == d1['waves'][w1] - 1
+   and dn['routes'] == day['routes'], f'new wave added with the count: {dn.get("waves")}')
+ok(r.get('ok') and not any(e.startswith('WAVE ') for e in r['check']['errors']), 'new wave: no wave errors')
+J(runner.undo_last)
+
+# the count doesn't fit (Fri 10-23 "has no 10:45 AM route count"): a wave with fewer routes
+# than drivers -- the mover was an extra, so no count goes along and the move still works
+import runner as _r  # noqa: E402
+_r._STATE['res'].waves[D][w1] = 0                                     # like a board whose count was never set
+r = J(runner.apply_wave, {'day': D, 'name': mover['name'], 'wave': w0, 'move_count': True})
+dz = next(d for d in r['days'] if d['day'] == D) if r.get('ok') else {}
+ok(r.get('ok') and dz['waves'][w1] == 0 and dz['waves'][w0] == d1['waves'][w0],
+   f'over-filled wave: moves as an extra, counts stay: {dz.get("waves")}')
+ok(r.get('ok') and 'an extra route' in r['edits'][-1], 'logged as an extra: ' + (r.get('edits') or ['-'])[-1])
+J(runner.undo_last)
+_r._STATE['res'].waves[D][w1] = d1['waves'][w1]
+
+# wave_options says whether the count goes along
+wo = J(runner.wave_options, {'day': D, 'name': mover['name']})
+ok(wo.get('ok') and wo['carry'] is True and all('count' in w and 'filled' in w for w in wo['waves']), 'wave_options: carry + counts')
 
 # a training pair is refused (it can't be split)
 pair = next(((dd, x) for x in r0['drivers'] for dd, v in x['cells'].items() if 'TRAIN drives' in (v or '')), None)

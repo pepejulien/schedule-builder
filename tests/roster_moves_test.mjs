@@ -76,7 +76,7 @@ eq('twice', p.steps[8].why, 'in the list twice');
 ok('only the payload steps carry no why', p.steps.every((s) => !!s.payload !== !!s.why), JSON.stringify(p.steps));
 // Ida's first move is in the list already; a wave the board doesn't have that day
 const p2 = planMoves(rep, '2026-10-24', [mv('Ida Byid', '10:45 AM', '11:05 AM')]);
-eq('no such wave on the board', p2.steps[0].why, 'the Live board has no 11:05 AM wave on Sat');
+eq('a wave the board has no count at yet still goes to the engine (it adds the wave)', p2.steps[0].payload && p2.steps[0].payload.wave, '11:05 AM');
 ok('closed day', /closed/.test(planMoves(rep, '2026-10-23', [mv('Tiamia Allen Schwalbe', '10:05 AM', '10:25 AM')]).error || ''));
 ok('not in the week', /isn't in this Live board week/.test(planMoves(rep, '2026-10-31', []).error || ''));
 

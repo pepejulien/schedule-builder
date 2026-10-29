@@ -1595,6 +1595,7 @@ def apply_trade(payload_json):
 
 
 _WAVE_RE = re.compile(r"(\d{1,2}:\d{2} [AP]M)")
+_NEW_WAVE_RE = re.compile(r"^(1[0-2]|[1-9]):[0-5]\d [AP]M$")   # a start time a day can gain
 
 
 def _wave_filled(res, day, wave):
@@ -1833,9 +1834,14 @@ def wave_options(payload_json):
                     occ.append(dict(name=other["name"], cls=_classify(other, res),
                                     hours=_hours(res, other)))
             occ.sort(key=lambda c: norm(c["name"]))
-            out.append(dict(wave=t, swap_with=occ))
+            out.append(dict(wave=t, swap_with=occ, count=res.waves[day][t],
+                            filled=_wave_filled(res, day, t)))
+        # for a move with its count (apply_wave move_count): does their count go along?
+        cnt = res.waves[day].get(cur, 0) if cur else 0
+        carry = role == "road" and cur is not None and cnt >= 1 and cnt >= _wave_filled(res, day, cur)
         return json.dumps(dict(ok=True, day=day, name=dr["name"], role=role,
-                               current=cur, waves=out))
+                               current=cur, waves=out, carry=carry,
+                               count=cnt, filled=_wave_filled(res, day, cur) if cur else 0))
     except Exception:  # noqa: BLE001
         import traceback
         return json.dumps(dict(ok=False, kind="crash",
@@ -1844,18 +1850,24 @@ def wave_options(payload_json):
 
 def apply_wave(payload_json):
     """payload: {day, name, wave, swap_name?, move_count?, note?}. Move the driver's
-    shift on `day` into `wave`. Roads require `swap_name` (a plain-route holder of
-    the target wave) so per-wave counts stay exact; backups just relabel.
-    move_count (the Roster bookmark, Jose 2026-10-23): no swap -- one route count
-    moves with the driver instead (one less at their wave, one more at `wave`, the
-    day's total stays), to match Amazon's own wave split; `note` goes in the log line."""
+    shift on `day` into `wave`. Backups just relabel. A route either swaps times
+    with `swap_name` (a plain-route holder of the target wave), or -- move_count
+    (the Roster bookmark 2026-10-23, the Live board's "Move here" 2026-10-29) --
+    moves alone and its route count goes with it: one less at their wave, one
+    more at `wave`, the day's total stays (Jose: the day's waves change every day,
+    the counts set when the week was built shouldn't be fought). A driver who was
+    an extra at their wave (it had more drivers than routes) takes no count along:
+    their old wave just stops being over. With move_count `wave` may be a start
+    time the day has no wave at yet. `note` goes in the log line."""
     try:
         p = json.loads(payload_json)
         res, cfg = _STATE.get("res"), _STATE.get("cfg")
         if res is None:
             return _no_state()
         day, wave = p.get("day"), p.get("wave")
-        if day not in res.DAYS or wave not in res.waves[day]:
+        new_wave = (p.get("move_count") and day in res.DAYS and isinstance(wave, str)
+                    and wave not in res.waves[day] and _NEW_WAVE_RE.match(wave))
+        if day not in res.DAYS or (wave not in res.waves[day] and not new_wave):
             return json.dumps(dict(ok=False, kind="edit",
                                    message=f"Bad wave: {day} / {wave}"))
         i, dr = _find(res, p.get("name") or "")
@@ -1877,18 +1889,19 @@ def apply_wave(payload_json):
             res.cell[day][i] = wave + " Backup"
             desc = f"Moved {dr['name']}'s {day} backup to the {wave} wave"
         elif day in dr["prim"] and p.get("move_count"):
-            # Amazon put them at another start time (Jose 2026-10-23): their route count goes with them
-            a, b = res.waves[day].get(cur, 0) if cur else 0, res.waves[day][wave]
-            if a < 1:
-                return json.dumps(dict(ok=False, kind="edit",
-                    message=f"{day} has no {cur or 'wave'} route count to move with {dr['name']}."))
             _STATE["undo"].append(_snapshot(res))
-            res.waves[day][cur] = a - 1
-            res.waves[day][wave] = b + 1
+            a = res.waves[day].get(cur, 0) if cur else 0
+            b = res.waves[day].get(wave, 0)
+            # their count goes along unless they were over their wave's count (an extra)
+            carry = cur is not None and a >= 1 and a >= _wave_filled(res, day, cur)
             res.cell[day][i] = wave
+            if carry:
+                res.waves[day][cur] = a - 1
+            res.waves[day][wave] = b + 1 if carry else b
             note = str(p.get("note") or "").strip()[:80]
-            desc = (f"Moved {dr['name']} {day} {cur} -> {wave}" + (f" {note}" if note else "")
-                    + f" (routes {cur} {a}->{a - 1}, {wave} {b}->{b + 1})")
+            desc = (f"Moved {dr['name']} {day} {cur or 'route'} -> {wave}" + (f" {note}" if note else "")
+                    + (f" (routes {cur} {a}->{a - 1}, {wave} {b}->{b + 1})" if carry
+                       else f" (an extra route - {wave} is now {_wave_filled(res, day, wave)}/{b})"))
         elif day in dr["prim"]:
             j, sw = _find(res, p.get("swap_name") or "")
             vj = res.cell[day].get(j, "") if sw is not None else ""

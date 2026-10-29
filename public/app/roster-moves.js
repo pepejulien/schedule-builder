@@ -5,7 +5,8 @@
 // Amazon is filled, then gets the moves that went in (window.postMessage — only from Amazon's origin)
 // and makes each one on the Live board the way the board makes a change: the engine, then one save
 // (expected rev, change-log lines). A route moves WITH its count (apply_wave move_count: one route
-// less at the old time, one more at the new one, the day's total stays). Nothing else is changed.
+// less at the old time, one more at the new one, the day's total stays; a driver who was an extra
+// at the old time moves as an extra; a time the board has no wave at yet gets one). Nothing else is changed.
 //
 // checkMovesMsg() / planMoves() are pure (no DOM, no JAJB) so tests/roster_moves_test.mjs runs them.
 import { dayLabel, cellRole, allowedOrigins } from './roster-send.js';
@@ -51,7 +52,6 @@ export function planMoves(rep, iso, moves) {
   if (!day) return { error: `${dayLabel(iso)} isn't in this Live board week.`, steps: [] };
   if (day.open === false) return { error: `${dayLabel(iso)} is closed on the Live board.`, steps: [] };
   const drivers = (rep.drivers || []);
-  const waves = day.waves || {};
   const seen = new Set();
   const steps = moves.map((mv) => {
     const s = { name: mv.name, from: mv.from, to: mv.to };
@@ -68,7 +68,7 @@ export function planMoves(rep, iso, moves) {
       return s;
     }
     if (c.role !== 'route' || c.sched !== mv.from) { s.why = `the Live board changed — not at ${mv.from} any more`; return s; }
-    if (!Object.prototype.hasOwnProperty.call(waves, mv.to)) { s.why = `the Live board has no ${mv.to} wave on ${day.day}`; return s; }
+    // a start time the board has no wave at yet is fine: the engine adds it (Jose 2026-10-29)
     s.payload = { day: day.day, name: drv.name, wave: mv.to, move_count: true, note: NOTE };
     return s;
   });

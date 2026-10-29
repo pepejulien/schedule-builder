@@ -488,9 +488,12 @@ export function AddEditor({ name, onClose, onApplied, req = editRequest }) {
 // Sticky strip shown above the per-driver table while a move is in progress
 // in table view: says what's being moved and offers the escape hatches.
 // Modal for moving one driver's shift on one day into a DIFFERENT WAVE.
-// Route counts per wave are exact, so a route change is a time swap with a
-// driver already in the target wave; backups just relabel.
-export function WaveEditor({ day, name, onClose, onApplied, req = editRequest }) {
+// In the builder route counts per wave are exact, so a route change is a time
+// swap with a driver already in the target wave; backups just relabel.
+// free (the Live board, Jose 2026-10-29): a route can also just move, its
+// route count going with it (apply_wave move_count) — the day's waves change
+// every day and the counts from when the week was built shouldn't be fought.
+export function WaveEditor({ day, name, onClose, onApplied, req = editRequest, free = false }) {
   const [st, setSt] = useState({ loading: true, error: null, data: null });
   const [busy, setBusy] = useState(false);
 
@@ -507,20 +510,24 @@ export function WaveEditor({ day, name, onClose, onApplied, req = editRequest })
 
   async function apply(wave, swapName) {
     setBusy(true);
-    const m = await req('apply_wave', { day, name, wave, swap_name: swapName });
+    const m = await req('apply_wave', swapName === undefined
+      ? { day, name, wave, move_count: true }
+      : { day, name, wave, swap_name: swapName });
     setBusy(false);
     if (!m.ok) { setSt((s) => ({ ...s, error: m.error })); return; }
     onApplied(m);
   }
 
   const d = st.data;
+  const road = d && d.role === 'road', move = road && free;
   return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="edit-modal card">
       <h3>Change ${name}’s wave on ${day}</h3>
-      ${d ? html`<p class="hint">Now in the <b>${d.current}</b> wave (${d.role === 'road' ? 'route' : 'backup'}).
-        ${d.role === 'road'
-          ? 'Route counts per wave are exact, so pick who trades times with them.'
-          : 'Backups can move to any wave.'}</p>` : ''}
+      ${d ? html`<p class="hint">Now in the <b>${d.current}</b> wave (${road ? 'route' : 'backup'}).${' '}
+        ${!road ? 'Backups can move to any wave.'
+          : !free ? 'Route counts per wave are exact, so pick who trades times with them.'
+          : d.carry ? html`Their route count goes with them — the day’s total stays the same.`
+          : html`The ${d.current} wave had more drivers than routes (${d.filled} for ${d.count}), so they move as an extra route.`}</p>` : ''}
 
       ${st.error ? html`<${Banner} kind="err">
         ${st.error.message}
@@ -530,22 +537,29 @@ export function WaveEditor({ day, name, onClose, onApplied, req = editRequest })
       ${st.loading ? html`<p><${Spinner}/> Reading that day’s waves…</p>` : ''}
 
       ${d ? d.waves.map((w) => html`<div class="cand-group">
-        <h4 class="cand-h ok">${w.wave} wave</h4>
+        <h4 class="cand-h ok">${w.wave} wave${move ? html` <span class="muted">· ${w.filled} of ${w.count} routes filled</span>` : ''}</h4>
         ${w.swap_with === null
           ? html`<button class="slot-btn ok" disabled=${busy}
               onClick=${() => apply(w.wave, null)}>Move backup to ${w.wave}</button>`
-          : w.swap_with.length === 0
-          ? html`<p class="muted" style="margin:4px 0">Nobody is on a plain route in this wave that day.</p>`
-          : w.swap_with.map((c) => {
-            const meta = TIER_META[c.cls] || TIER_META.free;
-            return html`<div class="cand ok">
-              <button class="cand-pick" disabled=${busy}
-                onClick=${() => apply(w.wave, c.name)}>⇄ ${c.name}</button>
-              <span class="chip ${meta.chip}">${meta.short}</span>
-              <span class="cand-hours">${c.hours}h</span>
-              <span class="muted">takes the ${d.current} spot</span>
-            </div>`;
-          })}
+          : html`
+          ${move ? html`<button class="slot-btn ok" disabled=${busy}
+              onClick=${() => apply(w.wave)}>Move to ${w.wave}</button>
+            <span class="muted" style="margin-left:8px">${d.carry
+              ? `${d.current} ${d.count}→${d.count - 1} routes, ${w.wave} ${w.count}→${w.count + 1}`
+              : `${w.wave} becomes ${w.filled + 1} of ${w.count}`}</span>` : ''}
+          ${w.swap_with.length === 0
+            ? (move ? '' : html`<p class="muted" style="margin:4px 0">Nobody is on a plain route in this wave that day.</p>`)
+            : html`${move ? html`<div class="muted" style="margin:6px 0 2px">Or trade times with (counts stay):</div>` : ''}
+              ${w.swap_with.map((c) => {
+              const meta = TIER_META[c.cls] || TIER_META.free;
+              return html`<div class="cand ok">
+                <button class="cand-pick" disabled=${busy}
+                  onClick=${() => apply(w.wave, c.name)}>⇄ ${c.name}</button>
+                <span class="chip ${meta.chip}">${meta.short}</span>
+                <span class="cand-hours">${c.hours}h</span>
+                <span class="muted">takes the ${d.current} spot</span>
+              </div>`;
+            })}`}`}
       </div>`) : ''}
 
       <div class="row" style="margin-top:12px">

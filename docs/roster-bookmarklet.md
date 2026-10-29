@@ -101,6 +101,11 @@ counts get one less at the old time and one more at the new one, the day's total
 (`apply_wave {day, name, wave, move_count: true, note: "to match Amazon"}`), all of them in
 **one save** (expected rev, like any Live board change), one change-log line each:
 `Moved Tiamia Allen Schwalbe Sat 10:05 AM -> 10:25 AM to match Amazon (routes 10:05 AM 9->8, 10:25 AM 11->12)`.
+Since 2026-10-29 a count mismatch never stops a move: a driver who was an extra at the old time
+(that wave had more drivers than routes, e.g. a count of 0 — Fri 10-23 "has no 10:45 AM route count")
+moves as an extra and no count goes along (`... (an extra route - 10:25 AM is now 25/24)`), and a
+start time the board has no wave at yet gets one. The Live board's own "Change wave" pop-up
+has the same move ("Move to 10:25 AM") next to the old trade-times list.
 Nothing else changes. Not moved (with a plain why, and dispatch changes it by hand):
 - the driver isn't at the old time on the Live board any more ("the Live board changed — not
   at 10:05 AM any more"; a Live board saved since Amazon's page read it is read again and each
@@ -108,7 +113,7 @@ Nothing else changes. Not moved (with a plain why, and dispatch changes it by ha
 - a trainee / trainer: the engine never splits a training pair (training days change only
   by a rebuild), so it's refused ("in a training pair with X — the trainee and trainer can't
   be moved apart");
-- the new time isn't a wave on the Live board that day; not on the week; no engine saved.
+- not on the week; no engine saved.
 Like Amazon's own picks, this happens before dispatch presses Save on Amazon.
 
 **Hand-off contract (window.postMessage)**

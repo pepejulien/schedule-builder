@@ -449,7 +449,7 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
         <div class="dm-grid">
           <${Act} icon="⇄" title="Give it to someone else" sub=${`Pick who takes this ${role === 'road' ? 'route' : 'backup'}`} busy=${busy}
             onClick=${() => act('move', { day, role, fromName: d.name })} />
-          <${Act} icon="🕑" title="Change wave" sub="Move to another start time" busy=${busy}
+          <${Act} icon="🕑" title="Change wave" sub="Move to another start time — the route count goes along" busy=${busy}
             onClick=${() => act('wave', { day, name: d.name })} />
           ${role === 'road'
             ? html`<${Act} icon="↓" title="Make it a backup" sub="Same wave — the route stays open" busy=${busy}
@@ -1576,7 +1576,7 @@ function Board() {
     ${lefter && byName[lefter.name] ? html`<${LeftConfirm} d=${byName[lefter.name]} day=${lefter.day} view=${view} busy=${busy}
       onCancel=${() => setLefter(null)}
       onConfirm=${async (day, note) => { const m = await run('set_left', { name: lefter.name, day, note }); if (m.ok) setLefter(null); else toast(m.error.message, 'err'); }} />` : ''}
-    ${waver ? html`<${WaveEditor} day=${waver.day} name=${waver.name} req=${req}
+    ${waver ? html`<${WaveEditor} day=${waver.day} name=${waver.name} req=${req} free=${true}
       onClose=${() => setWaver(null)} onApplied=${() => setWaver(null)} />` : ''}
     ${adder && byName[adder.name] ? html`<${WeekShifts} d=${byName[adder.name]} view=${view} busy=${busy}
       opts=${opts && (opts.error || (opts.data && opts.data.name === adder.name)) ? opts : null}
