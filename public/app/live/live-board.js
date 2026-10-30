@@ -626,7 +626,7 @@ function Finder({ view, finder, setFinder, ready, rev, busy, onPick, picked, onU
 
   const open = info ? (finder.role === 'road' ? info.routes - info.routes_filled : info.backup - info.backup_filled) : 0;
   const list = (st && st.list) || [];
-  const groups = [['ok', 'Can work — no rule breaks'], ['warn', 'Can work — breaks a company policy (flagged)'],
+  const groups = [['ok', 'Can work — no rule breaks'], ['warn', 'Can work — goes past a soft limit (flagged)'],
     ['confirm', 'Overtime — can work after a pop-up'],
     ['confirm6', '6 days out of 7 — can work after a pop-up'],
     ['blocked', 'Can\'t — compliance rule (12h a day, 60h in 7 days, 7 days in 7, clashes)']];

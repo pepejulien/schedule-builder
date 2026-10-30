@@ -143,7 +143,7 @@ export function CoverageCard({ r, busy, onFind, onCounts }) {
 // ---- who can take a shift -----------------------------------------------------------
 const GROUPS = [
   ['ok', 'Safe — no rule breaks'],
-  ['warn', 'Allowed, but flagged — a company policy (day targets, Fair caps, backup rules)'],
+  ['warn', 'Allowed, but flagged — goes past a soft limit (day targets, Fair caps, backup rules)'],
   ['confirm', 'Overtime — allowed after a pop-up'],
   ['confirm6', '6 days out of 7 — allowed after a pop-up'],
   ['blocked', 'Locked — 12h a day, 60h in 7 days, 7 days in a row, or a clash'],

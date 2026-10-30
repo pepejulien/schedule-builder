@@ -279,7 +279,7 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
       <h3>${fromName
         ? `Move the ${day} ${what} — currently ${fromName}`
         : `Assign the open ${day} ${what}`}</h3>
-      <p class="hint">Pick who takes it. Green is safe. Yellow breaks a company policy (day targets, Fair caps)
+      <p class="hint">Pick who takes it. Green is safe. Yellow goes past a soft limit (day targets, Fair caps)
         — allowed, but logged. Orange is overtime and red is 6 days out of 7 — both allowed after a pop-up.
         “Unavailable” by a name: they asked for the day off — you'll have to confirm. Grey is locked (over 12h a day, over 60h in 7 days, 7 days in a row, a clash).</p>
 
