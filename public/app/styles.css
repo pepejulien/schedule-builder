@@ -349,10 +349,12 @@ tr.cand-row.src td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
    typed confirmation); grey/lock = compliance rule, never overridable ---- */
 button.danger { background: var(--err); color: #fff; border-color: var(--err); }
 button.danger:hover { filter: brightness(.92); }
-.cand-h.unavail { color: var(--err); }
-.cand.unavail { background: #fdf0ef; }
-.cand.unavail .cand-pick { border-color: #f0b8b3; background: #fde4e1; color: #8a231c; }
-.cand.unavail .cand-pick:hover { background: #fbd3ce; }
+.cand-h.unavail, .cand-h.six { color: var(--err); }
+.cand.unavail, .cand.six { background: #fdf0ef; }
+.cand.unavail .cand-pick, .cand.six .cand-pick { border-color: #f0b8b3; background: #fde4e1; color: #8a231c; }
+.cand.unavail .cand-pick:hover, .cand.six .cand-pick:hover { background: #fbd3ce; }
+/* asked for the day off: a tag by the name, in whichever group the rules put them (2026-10-29) */
+.chip.off-chip { background: #fde4e1; color: #8a231c; border: 1px solid #f0b8b3; font-weight: 600; }
 tr.cand-row.unavail td { background: #fdf0ef; }
 tr.cand-row.unavail td:first-child { box-shadow: inset 3px 0 0 var(--err); }
 .day-chip.add.unavail { background: #fde4e1; border-color: var(--err); color: #8a231c; }

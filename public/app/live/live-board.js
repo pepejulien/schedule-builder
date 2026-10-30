@@ -32,7 +32,7 @@ import {
 } from './live-model.js';
 import { parseISODate as pd, toISODate, addDays } from '../lib/weeks.js';
 import { FutureWeek } from './future-week.js';
-import { candGroup, groupClass } from '../lib/cand-groups.js';
+import { candGroup, groupClass, isOff } from '../lib/cand-groups.js';
 import { DayList, DayPills, firstDay } from './day-list.js';
 import { OffersStrip, OfferDayLine, OfferDot } from './offers.js';
 import { TradesStrip } from './trades.js';
@@ -629,7 +629,6 @@ function Finder({ view, finder, setFinder, ready, rev, busy, onPick, picked, onU
   const groups = [['ok', 'Can work — no rule breaks'], ['warn', 'Can work — breaks a company policy (flagged)'],
     ['confirm', 'Overtime — can work after a pop-up'],
     ['confirm6', '6 days out of 7 — can work after a pop-up'],
-    ['unavail', 'Asked for the day off — needs your confirmation'],
     ['blocked', 'Can\'t — compliance rule (12h a day, 60h in 7 days, 7 days in 7, clashes)']];
   const [showBlocked, setShowBlocked] = useState(false);
   return html`<div class="card" id="lv-finder">
@@ -658,9 +657,10 @@ function Finder({ view, finder, setFinder, ready, rev, busy, onPick, picked, onU
         <h4 class=${'cand-h ' + groupClass(status)}>${label} (${g.length})</h4>
         ${g.map((c) => {
           const meta = TIER_META[c.cls] || TIER_META.free;
-          return html`<div class=${'cand ' + c.status}>
+          return html`<div class=${'cand ' + groupClass(status)}>
             <button class="cand-pick" disabled=${busy || status === 'blocked'}
               onClick=${() => onPick(c, open > 0)}>${status === 'blocked' ? '🔒 ' : '+ '}${c.name}</button>
+            ${isOff(c) ? html`<span class="chip off-chip" title=${(c.reasons || [])[0] || ''}>Unavailable</span>` : ''}
             <span class="chip ${meta.chip}">${meta.short}</span>
             <span class="cand-hours"><b>${c.road_days.length + c.backup_days.length} days</b> · ${c.hours}h → ${c.new_hours}h</span>
             ${(c.reasons || []).length ? html`<div class="cand-why">${c.reasons.join('; ')}</div>` : ''}

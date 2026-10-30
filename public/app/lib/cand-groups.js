@@ -4,8 +4,26 @@
 // for both; only the lists group them apart.
 export const isSixDay = (c) => (c.limits || c.reasons || []).some((x) => /^6-day:/.test(x));
 
-// The list group a candidate goes in: its status, or 'confirm6' for a 6-day.
-export const candGroup = (c) => (c.status === 'confirm' && isSixDay(c) ? 'confirm6' : c.status);
+// What a driver who asked for the day off would be without it (Jose 2026-10-29: no
+// "day off" group at the bottom in red - they sit with everyone else, tagged
+// Unavailable). The engine's reasons for 'unavail' are the day-off line, then the
+// limits (overtime / 6-day), then the policy flags.
+const offBase = (c) => {
+  const rest = (c.reasons || []).slice(1);
+  if ((c.limits || []).length || rest.some((x) => /^(6-day|overtime):/.test(x))) return 'confirm';
+  return rest.length ? 'warn' : 'ok';
+};
 
-// The CSS colour class of a group header ('confirm6' is orange like 'confirm').
-export const groupClass = (g) => (g === 'confirm6' ? 'confirm' : g);
+// The list group a candidate goes in: its status, or 'confirm6' for a 6-day; a day
+// off goes where the rest of its rules put it (isOff() tags it).
+export const candGroup = (c) => {
+  const s = c.status === 'unavail' ? offBase(c) : c.status;
+  return s === 'confirm' && isSixDay(c) ? 'confirm6' : s;
+};
+
+// The driver asked for this day off: an "Unavailable" tag by the name, and the
+// pick still asks for the confirmation.
+export const isOff = (c) => c.status === 'unavail';
+
+// The CSS colour class of a group header and its rows ('six' is red: the bottom of the list).
+export const groupClass = (g) => (g === 'confirm6' ? 'six' : g);

@@ -13,7 +13,7 @@ import { editRequest } from '../solver-client.js';
 import { cellInfo, SHIFT_COLORS, WAVE_COLORS } from '../live/live-model.js';
 import { CountsEditor, waveMins, waveBg } from '../live/counts-editor.js';
 import { parseISODate } from '../lib/weeks.js';
-import { candGroup, groupClass } from '../lib/cand-groups.js';
+import { candGroup, groupClass, isOff } from '../lib/cand-groups.js';
 import { TIER_META, TIER_ORDER, ConfirmOverride, LimitConfirm, runConfirmed } from './step9-build.js';
 
 const DAY_IDX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
@@ -146,7 +146,6 @@ const GROUPS = [
   ['warn', 'Allowed, but flagged — a company policy (day targets, Fair caps, backup rules)'],
   ['confirm', 'Overtime — allowed after a pop-up'],
   ['confirm6', '6 days out of 7 — allowed after a pop-up'],
-  ['unavail', 'Asked for the day off — you confirm by typing their name'],
   ['blocked', 'Locked — 12h a day, 60h in 7 days, 7 days in a row, or a clash'],
 ];
 
@@ -157,8 +156,9 @@ function CandRow({ c, busy, onPick, extra }) {
     (c.road_days || []).length ? 'Route ' + c.road_days.slice().sort((a, b) => DAY_IDX[a] - DAY_IDX[b]).join(' ') : '',
     (c.backup_days || []).length ? 'Bk ' + c.backup_days.slice().sort((a, b) => DAY_IDX[a] - DAY_IDX[b]).join(' ') : '',
   ].filter(Boolean).join(' · ') || 'no days yet';
-  return html`<div class=${'cand ' + c.status}>
+  return html`<div class=${'cand ' + groupClass(candGroup(c))}>
     <button class="cand-pick" disabled=${busy || blocked} onClick=${() => !blocked && onPick(c)}>${blocked ? '🔒 ' : '+ '}${c.name}</button>
+    ${isOff(c) ? html`<span class="chip off-chip" title=${(c.reasons || [])[0] || ''}>Unavailable</span>` : ''}
     <span class="chip ${meta.chip}">${meta.short}</span>
     <span class="cand-hours"><b>${plural((c.road_days || []).length + (c.backup_days || []).length, 'day')}</b> · ${c.hours}h → ${c.new_hours}h</span>
     <span class="muted">${days}</span>${extra || ''}

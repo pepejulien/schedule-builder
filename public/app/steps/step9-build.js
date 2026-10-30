@@ -11,7 +11,7 @@ import { storeGet, loadTrainingHistory, saveTrainingWeek, canLive, liveWeek, liv
 import { saveWeek, actualList, prevISO, prevWorkedFrom } from '../live/live-model.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate as pd } from '../lib/weeks.js';
-import { candGroup, groupClass } from '../lib/cand-groups.js';
+import { candGroup, groupClass, isOff } from '../lib/cand-groups.js';
 import { waveBg } from '../live/counts-editor.js';
 import { GROUP_OPTIONS } from '../lib/config-assemble.js';
 import { AdvancedPanel } from './advanced-panel.js';
@@ -269,7 +269,6 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
     ['warn', 'Allowed, but will be flagged'],
     ['confirm', 'Overtime — allowed after a pop-up'],
     ['confirm6', '6 days out of 7 — allowed after a pop-up'],
-    ['unavail', 'Day off — needs a confirmed override'],
     ['blocked', 'Locked — compliance rule'],
   ];
   const byStatus = {};
@@ -281,8 +280,8 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
         ? `Move the ${day} ${what} — currently ${fromName}`
         : `Assign the open ${day} ${what}`}</h3>
       <p class="hint">Pick who takes it. Green is safe. Yellow breaks a company policy (day targets, Fair caps)
-        — allowed, but logged. Orange is a 6-day or overtime — allowed after a pop-up. Red asked for the day
-        off — you'll have to confirm. Grey is locked (over 12h a day, over 60h in 7 days, 7 days in a row, a clash).</p>
+        — allowed, but logged. Orange is overtime and red is 6 days out of 7 — both allowed after a pop-up.
+        “Unavailable” by a name: they asked for the day off — you'll have to confirm. Grey is locked (over 12h a day, over 60h in 7 days, 7 days in a row, a clash).</p>
 
       ${st.error ? html`<${Banner} kind="err">
         ${st.error.message}
@@ -304,9 +303,10 @@ export function SlotEditor({ editor, cands, busy, onPick, onClose, onTableView, 
               c.backup_days.length ? 'Bk: ' + wkJoin(c.backup_days) : '',
             ].filter(Boolean).join(' · ') || 'no days yet';
             const clickable = status !== 'blocked';
-            return html`<div class=${'cand ' + c.status}>
+            return html`<div class=${'cand ' + groupClass(status)}>
               <button class="cand-pick" disabled=${busy || !clickable}
                 onClick=${() => clickable && onPick(c.name)}>${status === 'blocked' ? '🔒 ' : ''}${c.name}</button>
+              ${isOff(c) ? html`<span class="chip off-chip" title=${(c.reasons || [])[0] || ''}>Unavailable</span>` : ''}
               <span class="chip ${meta.chip}">${meta.short}</span>
               <span class="cand-hours"><b>${nDays} day${nDays === 1 ? '' : 's'}</b> · ${c.hours}h → ${c.new_hours}h</span>
               <span class="muted">${days}</span>

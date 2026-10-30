@@ -7,7 +7,7 @@ import { normalizePortal, portalToSchedule, scheduleToPortal } from '../public/a
 import { norm, resolveFuzzy, matchName } from '../public/app/lib/names.js';
 import { deriveGroup, hasTierOverlap, assembleConfig, trainerRotation, AUTO_TRAINER } from '../public/app/lib/config-assemble.js';
 import { weekLabel, isSunday } from '../public/app/lib/weeks.js';
-import { candGroup, groupClass } from '../public/app/lib/cand-groups.js';
+import { candGroup, groupClass, isOff } from '../public/app/lib/cand-groups.js';
 import { driverCsv } from '../public/app/lib/driver-csv.js';
 import { readiness } from '../public/app/readiness.js';
 import { joinChunks } from '../public/app/lib/board-fetch.js';
@@ -720,7 +720,18 @@ const hm10 = (x) => `${((Math.floor(x / 60) + 11) % 12) + 1}:${String(x % 60).pa
   eq('candGroup 6-day', candGroup(six), 'confirm6');
   eq('candGroup 6-day + overtime', candGroup(both), 'confirm6');
   eq('candGroup other status', candGroup({ status: 'warn', reasons: ['6-day: x'] }), 'warn');
-  eq('groupClass confirm6', groupClass('confirm6'), 'confirm');
+  eq('groupClass confirm6 is red', groupClass('confirm6'), 'six');
+}
+
+// ---- 2026-10-29: a day off sits with the rest of its rules, tagged Unavailable ----
+{
+  const off = 'asked for this day off (Drivers page)';
+  eq('day off, nothing else -> ok', candGroup({ status: 'unavail', reasons: [off], limits: [] }), 'ok');
+  eq('day off + a policy flag -> warn', candGroup({ status: 'unavail', reasons: [off, 'Fair drivers normally max out at 4 total days'], limits: [] }), 'warn');
+  eq('day off + overtime -> confirm', candGroup({ status: 'unavail', reasons: [off, 'overtime: road hours go to 50h (over 40h)'], limits: ['overtime: road hours go to 50h (over 40h)'] }), 'confirm');
+  eq('day off + 6-day -> confirm6', candGroup({ status: 'unavail', reasons: [off, '6-day: a 6th worked day this week (usual max 5)'], limits: ['6-day: a 6th worked day this week (usual max 5)'] }), 'confirm6');
+  eq('day off, no limits field', candGroup({ status: 'unavail', reasons: [off, '6-day: x'] }), 'confirm6');
+  eq('isOff', [isOff({ status: 'unavail' }), isOff({ status: 'ok' })], [true, false]);
 }
 
 console.log(`\n${pass}/${pass + fail} passed`);
