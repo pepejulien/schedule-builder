@@ -53,9 +53,9 @@ const WEEK_HOWTO = 'Drag this button onto your bookmarks bar. Then on Amazon: Sc
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 // the discipline engine's driver key: first|last, letters only (attendance records use it)
 const nameKey = (s) => { const t = String(s || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean); return t.length ? t[0] + '|' + t[t.length - 1] : ''; };
-const MUT = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'set_role', 'set_duty', 'clear_duty', 'set_counts', 'set_left', 'clear_left']);
+const MUT = new Set(['apply', 'apply_add', 'apply_wave', 'undo', 'apply_mark', 'clear_mark', 'set_role', 'set_duty', 'set_pair', 'clear_duty', 'set_counts', 'set_left', 'clear_left']);
 const KIND = { apply: 'edit', apply_add: 'extra', apply_wave: 'wave', undo: 'undo', apply_mark: 'mark', clear_mark: 'mark',
-  set_role: 'edit', set_duty: 'duty', clear_duty: 'duty', set_counts: 'edit', set_left: 'mark', clear_left: 'mark' };
+  set_role: 'edit', set_duty: 'duty', set_pair: 'duty', clear_duty: 'duty', set_counts: 'edit', set_left: 'mark', clear_left: 'mark' };
 const MARKS = [
   ['callout', 'Called out', 'They called in and won\'t work.'],
   ['noshow', 'No-show', 'They didn\'t show up and didn\'t call.'],
@@ -405,12 +405,8 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
   const date = parseISODate(info.date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
   const lim = view.limits || {};
   const [mtime, setMtime] = useState('13:00');
-  const [rideWith, setRideWith] = useState('');
   const free = info.open && (kind === 'empty' || kind === 'off') && !gone;
   const duties = (opt && opt.duties) || {};
-  // who drives a plain route that day — a trainer rides along with one of them
-  const drivers = view.drivers.filter((x) => x.name !== d.name && cellInfo((x.cells || {})[day]).kind === 'road')
-    .map((x) => ({ name: x.name, wave: cellInfo(x.cells[day]).top })).sort((a, b) => a.name.localeCompare(b.name));
   const duty = (k, extra) => act('duty', { name: d.name, day, kind: k, st: duties[k], ...extra });
 
   return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -467,7 +463,17 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
             onClick=${() => act('mark', { name: d.name, day, kind: 'noshow' })} />
           <${Act} icon="−" title="Remove the shift" sub="Leave the slot open" tone="dm-danger" busy=${busy}
             onClick=${() => act('remove', { day, role, fromName: d.name })} />
+        </div>
+        <div class="dm-sec">Training</div>
+        <div class="dm-grid two">
+          <${Act} icon="🎓" title=${`${first} trains someone`} sub=${`Pick the trainee — this ${role === 'road' ? 'route' : 'backup'} becomes the ride-along`}
+            busy=${busy} onClick=${() => act('pair', { name: d.name, day, as: 'trainer' })} />
+          <${Act} icon="🎓" title=${`${first} is a trainee`} sub=${role === 'road' ? 'Pick the trainer — they ride along on this route' : 'Pick the trainer — the backup becomes their route'}
+            busy=${busy} onClick=${() => act('pair', { name: d.name, day, as: 'trainee' })} />
         </div>` : ''}
+      ${kind === 'trainer' && c.partner === 'ride-along' ? html`<div class="dm-grid one">
+        <${Act} icon="🎓" title="Pick the trainee" sub=${`Who ${first} rides along with`} busy=${busy}
+          onClick=${() => act('pair', { name: d.name, day, as: 'trainer' })} /></div>` : ''}
 
       ${kind === 'trainer' || kind === 'trainee' ? html`<div class="dm-grid">
         <${Act} icon="🕑" title="Change wave" sub=${c.partner && c.partner !== 'ride-along' ? `Moves with ${c.partner} — the route count goes along` : 'Move to another start time'} busy=${busy}
@@ -495,12 +501,14 @@ function CellMenu({ d, day, info, mark, busy, onClose, act, opt, fills, view, ri
           <div class="dm-duty">
             <span class="lv-sw" style=${`background:${SHIFT_COLORS.trainer}`}>Trainer</span>
             ${duties.trainer && duties.trainer.status === 'blocked' ? html`<${RuleNote} st=${duties.trainer} first=${first} />` : html`
-              <select value=${rideWith} onChange=${(e) => setRideWith(e.target.value)} aria-label="Ride along with">
-                <option value="">Rides along with…</option>
-                ${drivers.map((x) => html`<option value=${x.name}>${x.name} · ${x.wave}</option>`)}
-              </select>
-              <button class="small" disabled=${busy || !rideWith} onClick=${() => duty('trainer', { with_name: rideWith })}>Set trainer</button>
+              <button class="small" disabled=${busy} onClick=${() => act('pair', { name: d.name, day, as: 'trainer' })}>Pick the trainee…</button>
               <${RuleNote} st=${duties.trainer} first=${first} />`}
+          </div>
+          <div class="dm-duty">
+            <span class="lv-sw" style=${`background:${SHIFT_COLORS.trainer}`}>Trainee</span>
+            ${opt.road && opt.road.status === 'blocked' ? html`<${RuleNote} st=${opt.road} first=${first} />` : html`
+              <button class="small" disabled=${busy} onClick=${() => act('pair', { name: d.name, day, as: 'trainee' })}>Pick the trainer…</button>
+              <span class="muted">${first} drives, the trainer rides along</span>`}
           </div>
           <div class="dm-duty">
             <span class="lv-sw" style=${`background:${SHIFT_COLORS.meet}`}>Meeting</span>
@@ -554,6 +562,91 @@ function WeekShifts({ d, view, opts, busy, onClose, onPick }) {
       </div>
       <div class="row" style="margin-top:12px">
         <button disabled=${busy} onClick=${onClose}>Close</button>
+        ${busy ? html`<span><${Spinner}/> Saving…</span>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+// A training pair from either side (Jose 2026-10-29): req = {name, day, as: 'trainer' | 'trainee'}.
+// Anyone can be picked, on the schedule that day or not; whatever the two had that day turns
+// into the pair (the engine's set_pair). A pick with no route between them asks for the wave.
+const PAIR_GROUPS = [['ok', 'No rule breaks'], ['warn', 'Goes past a soft limit (flagged)'],
+  ['confirm', 'Overtime — after a pop-up'], ['confirm6', '6 days out of 7 — after a pop-up'],
+  ['blocked', 'Can\'t — compliance rule, or already in a pair']];
+function PairPicker({ req, info, busy, onClose, onPick }) {
+  const [st, setSt] = useState({ loading: true });
+  const [q, setQ] = useState('');
+  const [chosen, setChosen] = useState(null);       // a pick that still needs its wave
+  const [showBlocked, setShowBlocked] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    liveRequest('pair_options', { name: req.name, day: req.day, as: req.as }).then((m) => {
+      if (alive) setSt(m.ok ? { data: m.data } : { error: m.error.message });
+    });
+    return () => { alive = false; };
+  }, [req.name, req.day, req.as]);
+  const first = req.name.split(/\s+/)[0];
+  const pickWhat = req.as === 'trainer' ? 'trainee' : 'trainer';
+  const data = st.data, me = data && data.me;
+  const meBlocked = me && me.status === 'blocked';
+  const qf = fold(q.trim());
+  const list = data ? data.candidates.filter((c) => !qf || fold(c.name).includes(qf)) : [];
+  // what they have that day, and what the pair does with it
+  const now = (c) => (c.state === 'road' ? `${c.current} route` : c.current || 'Not scheduled');
+  const how = (c) => {
+    if (req.as === 'trainer') {
+      if (c.state === 'road') return 'keeps this route, drives it';
+      if (c.takes) return `takes ${first}'s route`;
+      return c.state === 'backup' ? 'the backup becomes their route' : 'gets a route';
+    }
+    if (c.state === 'road') return c.takes ? `${first} takes this route — ${c.name.split(/\s+/)[0]} rides along` : 'this route is left open — rides along';
+    return c.state === 'backup' ? 'the backup becomes the ride-along' : 'rides along';
+  };
+  const pick = (c) => (c.wave ? onPick(c, null, me) : setChosen(c));
+  return html`<div class="edit-overlay" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div class="edit-modal card pair-modal">
+      <h3>${req.as === 'trainer' ? `Who does ${first} train?` : `Who trains ${first}?`} <span class="muted">— ${req.day} ${shortDate(info.date)}</span></h3>
+      <p class="hint">${req.as === 'trainer'
+        ? html`Pick the trainee — anyone, scheduled that day or not. ${first} rides along with them${data && data.state === 'road' ? html`; ${first}'s route goes to the trainee (or opens up if the trainee already drives one)` : data && data.state === 'backup' ? html`; ${first}'s backup becomes the ride-along` : ''}.`
+        : html`Pick the trainer — anyone, scheduled that day or not. ${first} drives, the trainer rides along${data && data.state === 'backup' ? html`; ${first}'s backup becomes the route` : ''}. A trainer already working that day just switches over.`}</p>
+      ${st.loading ? html`<p class="muted"><${Spinner}/> Checking every driver…</p>` : ''}
+      ${st.error ? html`<${Banner} kind="err">${st.error}<//>` : ''}
+      ${meBlocked ? html`<div class="lv-lock">🔒 ${first} can't: ${me.reasons.join('; ')}</div>` : me ? html`<${RuleNote} st=${me} first=${first} />` : ''}
+      ${chosen ? html`<div class="pair-wave">
+        <b>Which wave does ${req.as === 'trainer' ? chosen.name : first} drive?</b>
+        <span class="muted"> Neither of them has a route on ${req.day} yet.</span>
+        <div class="lv-wavebtns compact" style="margin-top:8px">
+          ${dayWaves(info).map((w) => html`<button class="lv-wavebtn" disabled=${busy} style=${`background:${waveBg(w)}`}
+            onClick=${() => onPick(chosen, w, me)}><b>${w}</b></button>`)}
+        </div>
+        <button class="link" style="margin-top:6px" onClick=${() => setChosen(null)}>← pick someone else</button>
+      </div>` : data && !meBlocked ? html`
+        <input type="search" placeholder=${`Search for the ${pickWhat}…`} value=${q} onInput=${(e) => setQ(e.target.value)}
+          style="width:100%;margin-top:8px" />
+        ${PAIR_GROUPS.map(([status, label]) => {
+          const g = list.filter((c) => candGroup(c) === status);
+          if (!g.length) return '';
+          if (status === 'blocked' && !showBlocked && !qf) {
+            return html`<p class="muted"><button class="link" onClick=${() => setShowBlocked(true)}>Show the ${g.length} who can't (and why)</button></p>`;
+          }
+          return html`<div class="cand-group">
+            <h4 class=${'cand-h ' + groupClass(status)}>${label} (${g.length})</h4>
+            ${g.map((c) => {
+              const meta = TIER_META[c.cls] || TIER_META.free;
+              return html`<div class=${'cand ' + groupClass(status)}>
+                <button class="cand-pick" disabled=${busy || status === 'blocked'} onClick=${() => pick(c)}>${status === 'blocked' ? '🔒 ' : '+ '}${c.name}</button>
+                ${isOff(c) ? html`<span class="chip off-chip" title=${(c.reasons || [])[0] || ''}>Unavailable</span>` : ''}
+                <span class="chip ${meta.chip}">${meta.short}</span>
+                <span class="cand-now"><b>${now(c)}</b> · ${how(c)}</span>
+                ${(c.reasons || []).length ? html`<div class="cand-why">${c.reasons.join('; ')}</div>` : ''}
+              </div>`;
+            })}
+          </div>`;
+        })}
+        ${!list.length ? html`<p class="muted">${qf ? `Nobody matches “${q.trim()}”.` : 'Nobody to list.'}</p>` : ''}` : ''}
+      <div class="row" style="margin-top:12px">
+        <button disabled=${busy} onClick=${onClose}>Cancel</button>
         ${busy ? html`<span><${Spinner}/> Saving…</span>` : ''}
       </div>
     </div>
@@ -696,6 +789,7 @@ function Board() {
   const [mover, setMover] = useState(null);    // {day, role, fromName}
   const [moverCands, setMoverCands] = useState(null);
   const [marker, setMarker] = useState(null);  // {name, day, kind}
+  const [pairer, setPairer] = useState(null);  // {name, day, as}: the training-pair picker
   const [lefter, setLefter] = useState(null);  // {name, day}: the "left the company" dialog
   const [confirm, setConfirm] = useState(null);
   const [limit, setLimit] = useState(null);     // the overtime pop-up
@@ -1148,6 +1242,27 @@ function Board() {
       unavReasons: c.status === 'unavail' ? c.reasons : null, limits: c.limits }, setConfirm, setLimit, go);
   }
 
+  // A training pair from the picker (2026-10-29). The engine names whose pop-up it needs
+  // (error.who); each driver's day off / 6-day is OK'd on its own. Overtime alone is a yes.
+  function pairPick(c, wave, me) {
+    const p = pairer;
+    const trainer = p.as === 'trainer' ? p.name : c.name, trainee = p.as === 'trainer' ? c.name : p.name;
+    const go = async (flags) => {
+      const m = await run('set_pair', { trainer, trainee, day: p.day, ...(wave ? { wave } : {}), ...flags });
+      if (m.ok) { setPairer(null); return; }
+      const e = m.error, who = e.who, role = e.role === 'trainer' ? 'trainer' : 'road';
+      const add = (k) => ({ ...flags, [k]: [...(flags[k] || []), who] });
+      if (e.kind === 'needs_confirm' && who) {
+        const why = (who === c.name ? c.reasons : me && me.reasons) || [];
+        setConfirm({ name: who, day: p.day, role, reasons: why.length ? why : [e.message], run: () => go(add('ok_unav')) });
+      } else if (e.kind === 'needs_limits' && who) {
+        if (overtimeOnly(e.limits)) go(add('ok_limits'));
+        else setLimit({ name: who, day: p.day, role, limits: e.limits || [], run: () => go(add('ok_limits')) });
+      } else toast(e.message, 'err');
+    };
+    go({});
+  }
+
   // a pick from "Who can work extra?"
   function finderPick(c, hasOpen) {
     const { day, role } = finder;
@@ -1176,6 +1291,7 @@ function Board() {
     if (what === 'move') setMover(p);
     else if (what === 'wave') setWaver(p);
     else if (what === 'mark') setMarker(p);
+    else if (what === 'pair') setPairer(p);
     else if (what === 'left') setLefter(p);
     else if (what === 'unleft') {
       if (!window.confirm(`Put ${p.name} back on the schedule? Their old shifts aren't put back — give them shifts again.`)) return;
@@ -1571,6 +1687,9 @@ function Board() {
             catch (e) { toast('Marked, but "excused" could not be saved: ' + (e.message || e), 'warn'); }
         }
       }} />` : ''}
+    ${pairer && view.days.find((x) => x.day === pairer.day) ? html`<${PairPicker} req=${pairer}
+      info=${view.days.find((x) => x.day === pairer.day)} busy=${busy}
+      onClose=${() => setPairer(null)} onPick=${pairPick} />` : ''}
     ${mover ? html`<${SlotEditor} editor=${mover} cands=${moverCands} busy=${busy}
       onPick=${(n) => moveTo(n)} onClose=${() => setMover(null)}
       onRemove=${async () => { const m = await run('apply', { day: mover.day, role: mover.role, from_name: mover.fromName }); if (m.ok) setMover(null); }} />` : ''}

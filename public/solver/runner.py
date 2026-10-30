@@ -19,6 +19,8 @@ UI can change assignments without a rebuild:
     runner.apply_wave(json)       -> move a shift to another wave (roads swap; backups relabel)
     runner.trade_options(json)    -> which shifts a driver's shift could be traded for
     runner.apply_trade(json)      -> two drivers swap shifts (each side checked)
+    runner.pair_options(json)     -> who a driver could be paired with (trainer or trainee) that day
+    runner.set_pair(json)         -> pair a trainer and a trainee from whatever they had that day
     runner.undo_last(json)        -> restore the state before the most recent edit
 All take/return JSON strings. The rules mirrored here are the same invariants
 check_invariants() enforces -- after every edit the verifier reruns, so even a
@@ -1480,17 +1482,18 @@ def _held(res, i, dr, day):
 def _off(res, shifts):
     """Take shifts [(dr, day, role)] off for a rule check, then put the lists back
     exactly (_assess reads only the drivers' day lists)."""
-    keep = [(dr, list(dr["prim"]), list(dr["bk"])) for dr, _, _ in shifts]
+    keep = [(dr, list(dr["prim"]), list(dr["bk"]), list(dr["helper"])) for dr, _, _ in shifts]
     try:
         for dr, day, role in shifts:
-            lst = dr["prim"] if role == "road" else dr["bk"]
+            lst = dr["prim"] if role == "road" else dr["helper"] if role == "helper" else dr["bk"]
             if day in lst:
                 lst.remove(day)
         yield
     finally:
-        for dr, prim, bk in keep:
+        for dr, prim, bk, helper in keep:
             dr["prim"][:] = prim
             dr["bk"][:] = bk
+            dr["helper"][:] = helper
 
 
 def _trade_side(res, dr, day, role):
@@ -1720,6 +1723,196 @@ def clear_duty(payload_json):
             desc = f"Took {dr['name']} out of the {day} meeting"
         else:
             return json.dumps(dict(ok=False, kind="edit", message=f"{dr['name']} has no duty on {day}."))
+        _STATE["undo"].append(snap)
+        _STATE["edits"].append(desc)
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        return json.dumps(_report(cfg, res, chk), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+# ---- training pairs from either side (Jose 2026-10-29) ---------------------
+# Click the trainee and pick the trainer, or the trainer and pick the trainee -
+# anyone, scheduled that day or not. Whatever they had that day turns into the
+# pair: a trainer's route / backup becomes the ride-along (no delete + re-add),
+# a trainee's backup becomes their route, a free trainee gets one. The wave: the
+# trainee's route if they drive one; else the one asked for; else the trainer's
+# route (the trainee takes it over, the count doesn't move).
+def _pair_state(res, i, dr, day):
+    """What a driver holds on `day`, for pairing: 'road' | 'backup' | 'ridealong'
+    (a trainer with no trainee yet, e.g. copied from Amazon) | 'paired' | ''."""
+    lab = res.cell.get(day, {}).get(i, "")
+    if "TRAIN helper w/ ride-along" in lab:
+        return "ridealong"
+    if "TRAIN" in lab:
+        return "paired"
+    if day in dr["prim"]:
+        return "road"
+    if day in dr["bk"]:
+        return "backup"
+    return ""
+
+
+def _pair_wave(res, ti, ts, ni, ns, day, wave):
+    """The pair's wave, or None when one has to be picked."""
+    lab = lambda k: res.cell.get(day, {}).get(k, "")   # noqa: E731
+    if ns == "road":
+        return _cell_wave(lab(ni))
+    if wave:
+        return wave
+    if ts == "road":
+        return _cell_wave(lab(ti))
+    return _cell_wave(lab(ni)) or _cell_wave(lab(ti))
+
+
+_OFF_ROLE = {"road": "road", "backup": "backup", "ridealong": "helper"}
+
+
+def _pair_shifts(trn, ts, nee, ns, day):
+    """The shifts that come off before the pair is checked / put on."""
+    out = []
+    if ts in _OFF_ROLE:
+        out.append((trn, day, _OFF_ROLE[ts]))
+    if ns == "backup":
+        out.append((nee, day, "backup"))
+    return out
+
+
+def _pair_sides(res, trn, nee, ns, day):
+    """(trainer side, trainee side) rule checks, with their shifts already off."""
+    t = _trade_side(res, trn, day, "trainer")
+    n = (dict(status="ok", reasons=[], limits=[]) if ns == "road"
+         else _trade_side(res, nee, day, "road"))
+    return t, n
+
+
+def pair_options(payload_json):
+    """payload: {name, day, as: 'trainer'|'trainee'}. Everyone `name` could be
+    paired with on `day`: me = name's own side (the same for every pick), and per
+    driver {name, cls, hours, current, status, reasons, limits, wave, takes}.
+    wave None = one has to be picked; takes = the trainee takes the trainer's route."""
+    try:
+        p = json.loads(payload_json)
+        res = _STATE.get("res")
+        if res is None:
+            return _no_state()
+        _take_today(p)
+        day, as_ = p.get("day"), p.get("as")
+        i, me = _find(res, p.get("name") or "")
+        if me is None or day not in res.DAYS or as_ not in ("trainer", "trainee"):
+            return json.dumps(dict(ok=False, kind="edit", message="Bad request."))
+        ms = _pair_state(res, i, me, day)
+        if ms == "paired" or (ms == "ridealong" and as_ == "trainee"):
+            return json.dumps(dict(ok=False, kind="edit",
+                message=f"{me['name']} is already in a training pair on {day} - end that pair first."))
+        out, mine = [], None
+        for j, ot in enumerate(res.roster):
+            if j == i:
+                continue
+            os_ = _pair_state(res, j, ot, day)
+            (ti, trn, ts), (ni, nee, ns) = (((i, me, ms), (j, ot, os_)) if as_ == "trainer"
+                                            else ((j, ot, os_), (i, me, ms)))
+            if os_ == "paired" or (os_ == "ridealong" and as_ == "trainer"):
+                side = dict(status="blocked", reasons=["already in a training pair that day"], limits=[])
+            else:
+                with _off(res, _pair_shifts(trn, ts, nee, ns, day)):
+                    t, n = _pair_sides(res, trn, nee, ns, day)
+                if mine is None:
+                    mine = t if as_ == "trainer" else n
+                side = n if as_ == "trainer" else t
+            w = _pair_wave(res, ti, ts, ni, ns, day, None)
+            h = _hours(res, ot)
+            out.append(dict(name=ot["name"], cls=_classify(ot, res), hours=h,
+                            road_days=sorted(ot["prim"]), backup_days=sorted(ot["bk"]),
+                            current=res.cell.get(day, {}).get(j, ""), state=os_,
+                            status=side["status"], reasons=side["reasons"], limits=side["limits"],
+                            notes=[], wave=w, takes=(ts == "road" and ns != "road")))
+        if mine is None:
+            # nobody to check against: my side on its own
+            with _off(res, _pair_shifts(me, ms, me, "", day) if as_ == "trainer"
+                      else ([(me, day, "backup")] if ms == "backup" else [])):
+                mine = (_trade_side(res, me, day, "trainer") if as_ == "trainer"
+                        else dict(status="ok", reasons=[], limits=[]) if ms == "road"
+                        else _trade_side(res, me, day, "road"))
+        # the people already working that day first, then the rules, then the name
+        out.sort(key=lambda c: (_RANK[c["status"]] if c["status"] in _RANK else 9,
+                                c["state"] not in ("road", "backup"), norm(c["name"])))
+        return json.dumps(dict(ok=True, name=me["name"], day=day, role=as_, state=ms,
+                               current=res.cell.get(day, {}).get(i, ""), me=mine,
+                               waves=sorted(res.waves.get(day, {})), candidates=out))
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def set_pair(payload_json):
+    """payload: {trainer, trainee, day, wave?, ok_unav?: [names], ok_limits?: [names]}.
+    Pair them that day from whatever they had (see above). A day off / 6-day /
+    overtime is OK'd per driver; a needs_* refusal names who it's about (who)."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        day = p.get("day")
+        ti, trn = _find(res, p.get("trainer") or "")
+        ni, nee = _find(res, p.get("trainee") or "")
+        if trn is None or nee is None or ti == ni or day not in res.DAYS:
+            return json.dumps(dict(ok=False, kind="edit", message="Bad request."))
+        ts, ns = _pair_state(res, ti, trn, day), _pair_state(res, ni, nee, day)
+        for dr, s, ok in ((trn, ts, ("", "road", "backup", "ridealong")), (nee, ns, ("", "road", "backup"))):
+            if s not in ok:
+                return json.dumps(dict(ok=False, kind="edit",
+                    message=f"{dr['name']} is already in a training pair on {day} - end that pair first."))
+        w = _pair_wave(res, ti, ts, ni, ns, day, p.get("wave"))
+        if not w or not (w in res.waves[day] or _NEW_WAVE_RE.match(w)):
+            return json.dumps(dict(ok=False, kind="needs_wave",
+                message=f"Pick the wave {nee['name']} drives on {day}."))
+        tw = _cell_wave(res.cell[day].get(ti, ""))
+        snap = _snapshot(res)
+        for dr, dd, role in _pair_shifts(trn, ts, nee, ns, day):
+            dr["prim" if role == "road" else "helper" if role == "helper" else "bk"].remove(dd)
+            res.cell[dd].pop(ti if dr is trn else ni, None)
+        ok_unav = {norm(x) for x in p.get("ok_unav") or []}
+        ok_lim = {norm(x) for x in p.get("ok_limits") or []}
+        tags = {}
+        for dr, role in ((trn, "trainer"), (nee, "road")):
+            if dr is nee and ns == "road":
+                continue
+            n = norm(dr["name"])
+            err, st, why = _gate(res, dr, day, role,
+                                 {**p, "confirm_unavailable": n in ok_unav, "confirm_limits": n in ok_lim})
+            if err:
+                _restore(res, snap)
+                e = json.loads(err)
+                e.update(who=dr["name"], role=role)
+                return json.dumps(e)
+            tags[n] = _note_override(dr, day, st, why)
+        f_tr, f_ne = trn["name"].split()[0], nee["name"].split()[0]
+        took = ts == "road" and ns != "road" and tw == w
+        extra = ns != "road" and not took and _wave_filled(res, day, w) >= res.waves[day].get(w, 0)
+        res.waves[day].setdefault(w, 0)
+        trn["helper"].append(day)
+        res.cell[day][ti] = f"{w} (TRAIN helper w/ {_short(nee['name'])})"
+        if ns != "road":
+            nee["prim"].append(day)
+        res.cell[day][ni] = f"{w} (TRAIN drives w/ {_short(trn['name'])})"
+        res.PAIRLOG = list(res.PAIRLOG) + [(trn["name"], nee["name"], day)]
+        how = []
+        if took:
+            how.append(f"{f_ne} takes {f_tr}'s route")
+        elif ts == "road":
+            how.append(f"{f_tr}'s {tw or ''} route left open".replace("  ", " "))
+        if ts == "backup":
+            how.append(f"{f_tr} was a backup")
+        if ns == "backup":
+            how.append(f"{f_ne}'s backup made a route")
+        if extra:
+            how.append(f"an EXTRA route ({day} is now {_routes_filled(res, day)}/{res.routes[day]} routes)")
+        desc = (f"{trn['name']} trains {nee['name']} {day} {w} (rides along)"
+                + (f" - {', '.join(how)}" if how else "")
+                + tags.get(norm(trn["name"]), "") + tags.get(norm(nee["name"]), ""))
         _STATE["undo"].append(snap)
         _STATE["edits"].append(desc)
         chk = _verify(res)

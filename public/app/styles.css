@@ -618,6 +618,12 @@ table.lv-grid { font-size: 12.5px; }
 .daymodal .lv-dayshifts, .daymodal .dm-duties, .daymodal .lv-lock, .daymodal > .muted { margin: 0 24px; }
 .dm-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0 24px; }
 .dm-grid.one { grid-template-columns: 1fr; margin-top: 14px; }
+.dm-grid.two { grid-template-columns: repeat(2, 1fr); }
+/* the training-pair picker (2026-10-29): who's paired with whom, from either side */
+.pair-modal { width: 600px; }
+.pair-modal .cand-now { font-size: 12px; color: var(--muted); }
+.pair-modal .cand-now b { color: var(--ink); font-weight: 600; }
+.pair-modal .pair-wave { margin: 10px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
 .dm-act { display: flex; align-items: flex-start; gap: 10px; text-align: left; padding: 12px 13px; border-radius: 12px;
   border: 1px solid #e1e1e6; background: #fff; font-weight: 400; box-shadow: none; }
 .dm-act:hover { border-color: var(--navy); background: #f7f9fd; }
@@ -634,7 +640,7 @@ table.lv-grid { font-size: 12.5px; }
 .dm-duty .lv-note, .dm-duty .lv-lock { flex-basis: 100%; margin: 2px 0 0; }
 .lv-wavebtns.compact .lv-wavebtn { min-width: 96px; padding: 5px 9px; }
 @media (max-width: 700px) {
-  .dm-grid { grid-template-columns: 1fr; }
+  .dm-grid, .dm-grid.two { grid-template-columns: 1fr; }
   .daymodal .dm-head { flex-wrap: wrap; padding: 16px 16px 12px; }
   /* a phone (2026-10-11): the three numbers stay in one row, tighter edges */
   .dm-stats { gap: 6px; padding: 12px 16px 2px; }
