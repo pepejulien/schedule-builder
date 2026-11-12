@@ -9,7 +9,8 @@
  *
  * Amazon keeps nothing until the service's Save button is pressed, and this file NEVER clicks
  * Save, Cancel, SUBMIT, Auto Roster, Bulk Import or a red X. Rows that already have an associate
- * are never touched; Nursery Route, Hub Transport and other services are left alone (listed).
+ * are never touched; Nursery Route, Hub Transport, Standard Parcel Electric (EDV routes - only for
+ * EDV-certified drivers, Jose 2026-11-11) and other services are left alone (listed).
  * Dispatch checks the screen and presses Save themselves. On the new Dispatch page (Legacy view
  * off) it only says how to get to the legacy page.
  *
@@ -31,6 +32,8 @@
   const SEL = "select.selectAssociate";                        // the real Associate box (hidden behind Chosen)
   const CAPTION = "Select Associate To Roster";                // what an empty box shows
   const SP_RE = /^Standard Parcel\b/i;                         // the only services we fill
+  // ...but never "Standard Parcel Electric - Rivian MEDIUM": an EDV route needs an EDV-certified driver (2026-11-11)
+  const ELECTRIC_RE = /electric|rivian|\bEDV\b/i;
   // setTimeout when visible; MessageChannel yields when the tab is hidden (timers are throttled there)
   const tick = () => new Promise((r) => { const c = new MessageChannel(); c.port1.onmessage = () => r(); c.port2.postMessage(0); });
   async function sleep(ms) {
@@ -185,7 +188,7 @@
       .filter((el) => getComputedStyle(el).display !== "none")
       .map((el) => {
         const heading = one((el.querySelector(".rowHeader span") || {}).textContent);
-        return { el, heading, short: shortSvc(heading), sp: SP_RE.test(heading), rows: readRows(el) };
+        return { el, heading, short: shortSvc(heading), sp: SP_RE.test(heading) && !ELECTRIC_RE.test(heading), rows: readRows(el) };
       });
   }
   const shown = (row) => one((row.el.querySelector(".chosen-single span") || {}).textContent);
