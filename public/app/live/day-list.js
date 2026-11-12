@@ -40,7 +40,7 @@ export function DayList({ view, viewRT, day, match, searching, Block, subLine, r
   const date = parseISODate(dd.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   const g = { wave: {}, bk: [], trainer: [], other: [], rt: [], out: [], left: [], off: [], free: [] };
   for (const x of viewRT.drivers) {
-    if (!match(x.name)) continue;
+    if (!match(x.name, x)) continue;
     const v = (x.cells || {})[dd.day] || '';
     const c = cellInfo(v);
     const route = routeFor(x.name, dd.date);

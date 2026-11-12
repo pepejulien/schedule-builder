@@ -15,7 +15,8 @@ import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest, warmup } from '../solver-client.js';
 import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, saveLiveConfirm, watchLiveAttendance, watchLiveLate, saveLiveLate,
-  watchLiveSummary, canWatchSummary, canOffers, canTrades } from '../api.js';
+  watchLiveSummary, canWatchSummary, canOffers, canTrades, activeListOnce } from '../api.js';
+import { certIndex, canDrive, certLabel } from '../lib/van-certs.js';
 import { MissingCheck } from './missing.js';
 import { routeDays, backupDays, rtMismatches, rtBackupShown } from './limits.js';
 import { RtCheck } from './rt-check.js';
@@ -804,6 +805,8 @@ function Board() {
   const [dayF, setDayF] = useState([]);             // day filter: only drivers working every picked day
   const [postAt, setPostAt] = useState(null);       // the VET / VTO form's day while it's open at the top (null: closed)
   const [bkOnly, setBkOnly] = useState(false);      // "Backups only": on backup every picked day (no day: any day)
+  const [vanF, setVanF] = useState('');             // van certification filter (2026-11-11): '' | 'CDV' | 'EDV' (EDV covers CDV)
+  const [certOf, setCertOf] = useState(null);       // (name, tid) -> "EDV" | "CDV" | "" | null, from dispatch/lists.driverInfo
   const [mode, setMode] = useState(readMode);       // a phone: 'day' (one day's list) | 'week' (the grid)
   const [pday, setPday] = useState(null);           // the day the Day view shows (null: firstDay)
   const small = useSmall();
@@ -817,6 +820,13 @@ function Board() {
   // re-checked once a minute (2026-10-10): today's RTS lines (the 12-hour day's shows an hour before)
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => { const t = setInterval(() => setNowMs(Date.now()), 60000); return () => clearInterval(t); }, []);
+  // Amazon van certifications (2026-11-11): the cloud roster's, via dispatch/lists.driverInfo.cert
+  useEffect(() => {
+    let alive = true;
+    activeListOnce().then((x) => { if (alive && x && x.info && Object.values(x.info).some((d) => d && 'cert' in d)) setCertOf(() => certIndex(x.info)); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // async work reads the newest values through refs
   const R = useRef({});
@@ -1400,20 +1410,27 @@ function Board() {
   const byName = Object.fromEntries(view.drivers.map((x) => [x.name, x]));
   const markOf = (name, day) => (view.marks || []).find((x) => x.name === name && x.day === day);
   // search + sort: by tier (Top/Solid first, as the builder groups them) or A-Z
+  // van certification filter (2026-11-11): "CDV" = CDV or EDV certified, "EDV" = EDV certified
+  const certFor = (x) => (certOf ? certOf(x.name, x.tid) : null);
+  const vanOk = (x) => !vanF || canDrive(certFor(x) || '', vanF);
   const shown = view.drivers.filter((x) => (!q.trim() || fold(x.name).includes(fold(q.trim())))
+    && vanOk(x)
     && (!bkOnly ? dayF.every((day) => worksOn(x, day))
       : dayF.length ? dayF.every((day) => bkOn(x, day)) : view.days.some((y) => bkOn(x, y.day))));
-  const filtered = q.trim() || dayF.length || bkOnly;
-  const nobody = !bkOnly ? `${q.trim() ? `No driver matches “${q}”` : 'Nobody'}${dayF.length ? ` working ${dayF.join(' + ')}` : ''}.`
-    : !q.trim() && !dayF.length ? 'No backups this week.'
-    : `${q.trim() ? `No driver matches “${q}” on backup` : 'Nobody on backup'} ${dayF.length ? dayF.join(' + ') : 'this week'}.`;
+  const filtered = q.trim() || dayF.length || bkOnly || vanF;
+  const vanWords = vanF === 'EDV' ? ' EDV certified' : vanF === 'CDV' ? ' CDV certified' : '';
+  const nobody = !bkOnly ? `${q.trim() ? `No${vanWords} driver matches “${q}”` : `Nobody${vanWords}`}${dayF.length ? ` working ${dayF.join(' + ')}` : ''}.`
+    : !q.trim() && !dayF.length ? `No${vanWords} backups this week.`
+    : `${q.trim() ? `No${vanWords} driver matches “${q}” on backup` : `Nobody${vanWords} on backup`} ${dayF.length ? dayF.join(' + ') : 'this week'}.`;
   const toggleDay = (day) => setDayF((f) => (f.includes(day) ? f.filter((y) => y !== day)
     : view.days.map((y) => y.day).filter((y) => y === day || f.includes(y))));
   // who left the company this week goes first (2026-10-09), whatever the sort
   const goneRows = shown.filter((x) => x.left).sort((a, b) => a.name.localeCompare(b.name));
   const stay = shown.filter((x) => !x.left);
-  const noSched = dayF.length || bkOnly ? [] : viewRT.drivers.filter((x) => x.notScheduled
+  const noSched = dayF.length || bkOnly ? [] : viewRT.drivers.filter((x) => x.notScheduled && vanOk(x)
     && (!q.trim() || fold(x.name).includes(fold(q.trim())))).sort((a, b) => a.name.localeCompare(b.name));
+  const certChip = (x) => { const c = vanF && certFor(x); return c ? html` <span class="chip ${c === 'EDV' ? 'green' : 'blue'} tier-mini"
+    title=${c === 'EDV' ? 'EDV certified on Amazon — may drive EDV and CDV vans' : 'CDV certified on Amazon'}>${certLabel(c)}</span>` : ''; };
   const groups = [
     ...(goneRows.length ? [{ key: 'left', meta: { label: 'Left the company — shifts to cover', chip: 'gray' }, rows: goneRows }] : []),
     ...(sortBy === 'name'
@@ -1529,13 +1546,20 @@ function Board() {
           <button class=${sortBy === 'name' ? 'on' : ''} onClick=${() => { setSortBy('name'); saveSort('name'); }}>A–Z</button>
           <button class=${sortBy === 'tier' ? 'on' : ''} onClick=${() => { setSortBy('tier'); saveSort('tier'); }}>By tier</button>
         </div>`}
+        ${certOf ? html`<div class="seg" role="group" aria-label="Show only drivers certified for a van type">
+          <button class=${vanF ? '' : 'on'} aria-pressed=${!vanF} onClick=${() => setVanF('')} title="Every driver">All vans</button>
+          <button class=${vanF === 'CDV' ? 'on' : ''} aria-pressed=${vanF === 'CDV'} onClick=${() => setVanF(vanF === 'CDV' ? '' : 'CDV')}
+            title="Only drivers Amazon has certified for a CDV — EDV-certified drivers count too">CDV</button>
+          <button class=${vanF === 'EDV' ? 'on' : ''} aria-pressed=${vanF === 'EDV'} onClick=${() => setVanF(vanF === 'EDV' ? '' : 'EDV')}
+            title="Only drivers Amazon has certified for an EDV (they may drive a CDV too)">EDV</button>
+        </div>` : ''}
         ${filtered && !dayMode ? html`<span class="muted">${shown.length} of ${view.drivers.length} drivers</span>` : ''}
       </div>
       ${dayMode ? html`
       <${DayPills} view=${view} day=${vday} today=${today} onPick=${setPday}
         dot=${canOffers() ? (date) => html`<${OfferDot} date=${date} />` : null} />
-      <${DayList} view=${view} viewRT=${viewRT} day=${vday} searching=${!!q.trim()}
-        match=${(n) => !q.trim() || fold(n).includes(fold(q.trim()))}
+      <${DayList} view=${view} viewRT=${viewRT} day=${vday} searching=${!!q.trim() || !!vanF}
+        match=${(n, x) => (!q.trim() || fold(n).includes(fold(q.trim()))) && (!x || vanOk(x))}
         Block=${Block} subLine=${subLine} routeFor=${routeFor} bkFor=${bkFor} markOf=${markOf} notes=${notes} lates=${lates}
         risks=${risks} ready=${ready} busy=${busy} onCell=${(name, day) => setCell({ name, day })}
         onCounts=${setCounter} onFind=${goFind} strip=${html`${stripFor(vday)}${tradesFor(vday)}`}
@@ -1588,7 +1612,7 @@ function Board() {
                 <td class="lv-namecol">${x.notScheduled ? html`<b class="lv-name">${x.name}</b> <span class="chip gray" title="In Route Tracker, not on this week's schedule — hours checks only">not on the schedule</span>`
                   : html`<button class="link lv-name" title=${x.left ? `${x.name} left the company` : 'Give ' + x.name + ' a shift'}
                   onClick=${() => (x.left ? setCell({ name: x.name, day: x.left }) : setAdder({ name: x.name }))}>${x.name}</button>`}
-                  ${x.left ? html` <span class="chip gray" title="Left the company">Left ${x.left}</span>` : ''}
+                  ${x.left ? html` <span class="chip gray" title="Left the company">Left ${x.left}</span>` : ''}${certChip(x)}
                   ${sortBy === 'name' ? html` <span class="chip ${tm.chip} tier-mini">${tm.short}</span>` : ''}
                   ${(x.helper_days || []).length ? html` <span class="chip trainer-chip" title="Trains a new hire this week">Trainer</span>` : ''}
                   ${subLine(x)}
