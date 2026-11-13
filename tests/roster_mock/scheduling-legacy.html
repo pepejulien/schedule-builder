@@ -131,8 +131,17 @@
 
   // the day's services; [time, saved Transporter ID or ""] per row
   const rows = (spec) => spec.flatMap(([time, n, filled]) => Array.from({ length: n }, (_, i) => ({ time, saved: (filled || {})[i] || "" })));
+  // ?set=engine&rows=less|more|rerun (Jose 2026-11-12): Amazon has 3 routes (Live board 4: one goes to
+  // backup), 5 routes (one short: the backup Daniel Lynch gets a route), or the day was rostered
+  // before - Daniel Lynch (a backup on the Live board) is on a row and must be swapped out
+  const VARIANT = params.get("rows") || "";
+  const ENGINE_SP = { less: [["11:05 am", 2], ["11:25 am", 1]], more: [["11:05 am", 2], ["11:25 am", 3]],
+    rerun: [["11:05 am", 2, { 0: "A0010", 1: "A0001" }], ["11:25 am", 2, { 0: "A0006" }]],
+    // + Olga Pre (not on the Live board) on an 11:25 row and one more empty row: Skip the checklist,
+    // Fill -> Casey in Daniel's place, Grace in the empty row, Olga's row emptied
+    rerun2: [["11:05 am", 2, { 0: "A0010", 1: "A0001" }], ["11:25 am", 3, { 0: "A0006", 1: "A-OLGA" }]] }[VARIANT] || [["11:05 am", 2], ["11:25 am", 2]];
   const SVC = ENGINE ? [
-    { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours", rows: rows([["11:05 am", 2], ["11:25 am", 2]]) },
+    { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours", rows: rows(ENGINE_SP) },
   ] : [
     { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours",
       rows: rows([["10:25 am", 4, { 0: "A-OLGA" }], ["10:45 am", 9, { 2: "A-STEVE" }]]) },

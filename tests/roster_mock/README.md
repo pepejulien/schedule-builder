@@ -78,3 +78,19 @@ is saved and re-drawn after `?savems=900`, an Escape / outside click on an open 
 ticks), `?linger=1` (Amazon leaves the new shift's own menu open after a pick — the run closes it and
 goes on), `?savems=4500` (slow saves), `?stuck=1` (a shift's menu won't close — the run stops at
 Cara Amos — Mon and says to close the menu, then click the bookmark again).
+
+### Re-run + Live board checklist (Jose 2026-11-12)
+Seed with `seed-moves.js` (as above; re-paste it before each run - a run saves the week), then open
+`scheduling-legacy.html?frame=1&set=engine&rows=…` and **Run the bookmark (test)**:
+- `rows=less` (Amazon 3 routes, Live board 4): the checklist offers Casey Church -> backup (ticked).
+  **Change the Live board (1)**: the week is rev 2, Casey `10:45 AM Backup`, Sat 3 routes (10:45 AM 2) and
+  2 backups, change log "Made Casey Church's Sat 10:45 AM route a backup to match Amazon (Sat: 3 routes,
+  2 backups) …". Then **Fill 3 rows**: Alex, Colin (11:05), Grace (11:25).
+- `rows=more` (Amazon 5): Daniel Lynch backup -> route (ticked); after the change 5 rows filled, Colin and
+  Casey moved to 11:25 and the Live board follows ("Live board updated: …").
+- `rows=rerun` (rostered before: Alex + Daniel at 11:05, Colin at 11:25): no checklist ("Amazon and the
+  Live board both have 4 routes"); Casey goes in Daniel's place ("Swapped out: Daniel Lynch"), Grace in
+  the empty 11:25 row.
+- `rows=rerun2` (+ Olga Pre on an 11:25 row, one more row): **Skip — fill as it is**, then
+  **Fill 2 rows, take 1 off**: Casey in Daniel's place, Grace in the empty row, Olga's row emptied.
+`window.__mock.log` stays empty in all four.

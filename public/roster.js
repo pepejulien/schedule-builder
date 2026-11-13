@@ -7,9 +7,13 @@
  * (window.postMessage). Then it shows what it will do, and on "Fill" picks each driver in an
  * empty Associate box of the Standard Parcel service, wave by wave (start time), one row at a time.
  *
+ * Re-runs (Jose 2026-11-12): first the Live board is checked against Amazon's routes (a checklist:
+ * who goes to backup / gets a route, 6 days in 7 with no backup) and the ticked changes are saved
+ * there; then a Standard Parcel row holding someone who isn't on a route on the Live board any more
+ * gets a Live board driver instead, or is emptied. Rows with a Live board route driver are never touched.
+ *
  * Amazon keeps nothing until the service's Save button is pressed, and this file NEVER clicks
- * Save, Cancel, SUBMIT, Auto Roster, Bulk Import or a red X. Rows that already have an associate
- * are never touched; Nursery Route, Hub Transport, Standard Parcel Electric (EDV routes - only for
+ * Save, Cancel, SUBMIT, Auto Roster, Bulk Import or a red X. Nursery Route, Hub Transport, Standard Parcel Electric (EDV routes - only for
  * EDV-certified drivers, Jose 2026-11-11) and other services are left alone (listed).
  * Dispatch checks the screen and presses Save themselves. On the new Dispatch page (Legacy view
  * off) it only says how to get to the legacy page.
@@ -326,6 +330,7 @@
   async function run() {
     const my = ++runId;
     stopped = false; payload = null;
+    clearTimeout(ap.timer); Object.assign(ap, { my: 0, picks: null, res: null, note: "" });
     progress(null); clearBtns();
     const warn = checks();
     if (warn == null) return;
@@ -341,13 +346,14 @@
     // makes even a leftover "jajbRoster" window from before a page reload load fresh: the same
     // address would only change its #hash and not reload it
     const open = () => {
+      ask.asked = false;
       try { if (ask.win && !ask.win.closed) ask.win.close(); } catch (e) { /* gone */ }
       ask.win = window.open(APP + "?r=" + Date.now() + "#roster=" + date, "jajbRoster", "width=440,height=560");
       return ask.win;
     };
     const waiting = () => {
       clearBtns();
-      say(`${warn}<p>Getting ${label} from the Live board… (sign in there if it asks)</p>`);
+      say(`${warn}<p>Getting ${label} from the Live board and checking who should have a route… (sign in there if it asks — this can take a few seconds)</p>`);
       ask.timer = setTimeout(() => {
         if (my !== runId || payload) return;
         clearBtns();
@@ -363,12 +369,25 @@
     if (auto) { if (open()) waiting(); else blocked(); }
   }
 
+  // Amazon's associate rows for the day, every service (Standard Parcel, Electric, Nursery, Hub…):
+  // how many drivers on routes the Live board should have (Jose 2026-11-12). null when unreadable.
+  function amazonRows() {
+    const svcs = readServices();
+    return svcs.length ? svcs.reduce((n, s) => n + s.rows.length, 0) : null;
+  }
+
   function onMessage(e) {
     if (!APP_ORIGIN || e.origin !== APP_ORIGIN || !e.data || typeof e.data !== "object") return;
     const my = ask.my;
+    if (e.data.type === "jajb-roster-applied") { onApplied(e); return; }
     if (my !== runId || payload || !date) return;
     if (e.data.type === "jajb-roster-ready") {
-      try { e.source.postMessage({ type: "jajb-roster-request", date }, APP_ORIGIN); } catch (err) { /* window closed */ }
+      if (ask.asked) return;                                   // once: the app is working out the plan
+      ask.asked = true;
+      const src = e.source;
+      waitFor(() => readServices().length ? true : null, 4000).then(() => {
+        try { src.postMessage({ type: "jajb-roster-request", date, rows: amazonRows() }, APP_ORIGIN); } catch (err) { /* window closed */ }
+      });
       return;
     }
     if (e.data.type !== "jajb-roster") return;
@@ -385,9 +404,110 @@
       btn("Try again", retry);
       return;
     }
-    preview(my).catch((err) => stopWith("Something went wrong: " + esc(err && err.message || err)));
+    review(my);
   }
   window.addEventListener("message", onMessage);
+
+  /* ---------- Step 2b: the Live board vs Amazon's routes (Jose 2026-11-12) ----------
+   * The app sends payload.plan = {live, rows, diff, short, pairs, changes: [{id, kind, name, wave,
+   * why, checked, with?, with_wave?, with_why?}]} (engine roster_plan). kind backup: more drivers
+   * on routes than Amazon has rows -> this route becomes a backup; route: fewer -> this backup gets
+   * a route; six: 6 days in 7 with no backup day -> a backup, `with` takes the route. Dispatch
+   * ticks what to do; "Change the Live board" sends {type: "jajb-roster-apply", date, rev, picks}
+   * to the app window, which answers {type: "jajb-roster-applied", date, results, payload?, error?}
+   * (payload = the day again, fresh). Nothing on Amazon's page changes in this step. */
+  const ap = { my: 0, picks: null, timer: null, res: null };
+  const showPreview = (my) => preview(my).catch((err) => stopWith("Something went wrong: " + esc(err && err.message || err)));
+  const changeLine = (c) => {
+    const at = c.wave ? ` (${esc(c.wave)})` : "";
+    if (c.kind === "backup") return `<b>${esc(c.name)}</b>${at} → backup <span class="muted">— ${esc(c.why)}</span>`;
+    if (c.kind === "route") return `<b>${esc(c.name)}</b>${at} backup → route <span class="muted">— ${esc(c.why)}</span>`;
+    const w = c.with ? ` and <b>${esc(c.with)}</b>${c.with_wave ? ` (${esc(c.with_wave)})` : ""} takes the route <span class="muted">(${esc(c.with_why || "")})</span>`
+      : ' <span class="warn">— no backup left to take the route (it stays open)</span>';
+    return `<b>${esc(c.name)}</b>${at} → backup${w}<br><span class="muted">${esc(c.why)}</span>`;
+  };
+  function review(my) {
+    const pl = payload.plan;
+    let note = "";
+    if (payload.planError) note = `<p class="warn">Couldn't check the Live board against Amazon's routes (${esc(payload.planError)}) — filling as it is.</p>`;
+    else if (pl && pl.rows != null && !pl.diff) note = `<p class="muted">Amazon and the Live board both have ${plural(pl.rows, "route")}.</p>`;
+    ap.note = note;
+    if (!pl || !(pl.changes || []).length) {
+      if (pl && pl.short) ap.note += `<p class="bad">Amazon has ${plural(pl.short, "more route")} than the Live board can fill with backups. Add someone on the Live board ("Who can work extra?") or fill by hand.</p>`;
+      showPreview(my); return;
+    }
+    progress(null); clearBtns();
+    const groups = [
+      ["backup", pl.diff > 0 ? `Amazon has <b>${plural(pl.rows, "route")}</b> (every service), the Live board <b>${plural(pl.live, "driver")}</b> on routes — these go to backup:` : ""],
+      ["route", pl.diff < 0 ? `Amazon has <b>${plural(pl.rows, "route")}</b> (every service), the Live board <b>${plural(pl.live, "driver")}</b> on routes — these backups get a route:` : ""],
+      ["six", "6 days in 7 with no backup day — make them a backup? (only if you tick it)"],
+    ];
+    let h = ask.warn + `<p><b>${esc(dayLabel(date))}</b> — first, the Live board.</p>`;
+    for (const [kind, head] of groups) {
+      const cs = pl.changes.filter((c) => c.kind === kind);
+      if (!cs.length) continue;
+      h += `<div class="wave"><p style="margin:0 0 4px">${head}</p>` + cs.map((c) =>
+        `<label style="display:block;margin:3px 0;cursor:pointer"><input type="checkbox" data-id="${esc(c.id)}"${c.checked ? " checked" : ""} style="margin-right:6px">${changeLine(c)}</label>`).join("") + "</div>";
+    }
+    if (pl.short) h += `<p class="bad">Still ${plural(pl.short, "route")} short — not enough backups who can take a route. Add someone on the Live board ("Who can work extra?") or fill by hand.</p>`;
+    if (pl.pairs) h += `<p class="muted">Training pairs stay as they are.</p>`;
+    h += `<p>Ticked changes are made on the <b>Live board</b> (saved there, with a change-log line each). Then the rows here are filled from it. Nothing on Amazon's page changes yet.</p>`;
+    say(h);
+    const boxes = () => [...box.querySelectorAll('input[type="checkbox"][data-id]')];
+    const go = btn("Change the Live board", () => {
+      const ids = new Set(boxes().filter((b) => b.checked).map((b) => b.getAttribute("data-id")));
+      const picks = pl.changes.filter((c) => ids.has(c.id))
+        .map((c) => (c.kind === "six" ? { kind: c.kind, name: c.name, with: c.with || null } : { kind: c.kind, name: c.name }));
+      if (!picks.length) { showPreview(my); return; }
+      sendApply(my, picks);
+    });
+    const relabel = () => { const n = boxes().filter((b) => b.checked).length; go.textContent = n ? `Change the Live board (${n})` : "Nothing ticked — go on to fill"; };
+    boxes().forEach((b) => { b.onchange = relabel; });
+    relabel();
+    btn("Skip — fill as it is", () => {
+      try { if (ask.win && !ask.win.closed) ask.win.close(); } catch (err) { /* gone */ }
+      showPreview(my);
+    }, true);
+  }
+  function sendApply(my, picks) {
+    clearBtns();
+    Object.assign(ap, { my, picks, res: null });
+    if (!ask.win || ask.win.closed) {
+      stopWith("The Live board window was closed, so nothing was changed. Click the bookmark again.");
+      btn("Start over", run, true); return;
+    }
+    say(`<p>Changing the Live board (${plural(picks.length, "change")})…</p>`);
+    try { ask.win.postMessage({ type: "jajb-roster-apply", date, rev: payload.plan.rev != null ? payload.plan.rev : payload.rev, picks }, APP_ORIGIN); } catch (err) { /* closed */ }
+    clearTimeout(ap.timer);
+    ap.timer = setTimeout(() => {
+      if (ap.my !== runId || ap.res) return;
+      stopWith("No answer from the Live board window. Check the Live board, then click the bookmark again.");
+      btn("Start over", run, true);
+    }, 90000);
+  }
+  function onApplied(e) {
+    const d = e.data;
+    if (!ask.win || e.source !== ask.win || ap.my !== runId || !ap.picks || ap.res || d.date !== date) return;
+    clearTimeout(ap.timer);
+    ap.res = d;
+    const by = new Map((Array.isArray(d.results) ? d.results : []).filter((r) => r && typeof r === "object").map((r) => [r.name, r]));
+    const lines = [];
+    for (const pk of ap.picks) {
+      const r = by.get(pk.name);
+      if (r && r.ok) {
+        lines.push(`<li>${esc(pk.name)} → ${pk.kind === "route" ? "route" : "backup"}</li>`);
+        if (pk.with) lines.push(r.with_ok ? `<li>${esc(pk.with)} → route</li>`
+          : `<li class="bad">${esc(pk.with)} NOT given the route: ${esc(r.with_why || "no answer")}</li>`);
+      } else {
+        lines.push(`<li class="bad">${esc(pk.name)} NOT changed: ${esc((r && r.why) || d.error || "no answer")}</li>`);
+      }
+    }
+    ap.note = `<div class="wave"><b>Live board:</b><ul>${lines.join("")}</ul>${d.payload ? "" : '<p class="bad">Nothing was saved on the Live board — the rows are filled from it as it was.</p>'}</div>`;
+    if (d.payload && typeof d.payload === "object" && d.payload.type === "jajb-roster" && d.payload.date === date && !d.payload.error) {
+      payload = d.payload;                                     // the day again, after the changes
+    }
+    showPreview(ap.my);
+  }
 
   // Step 3: what will happen, before picking anything
   let plan = null;
@@ -411,8 +531,14 @@
     const sps = svcs.filter((s) => s.sp && s.rows.length);
     if (!sps.length) return { err: "There is no Standard Parcel service with routes on this day — nothing to fill." };
     // Amazon opens one service at a time: the open one with empty rows, else the first with empty rows
+    // A re-run (Jose 2026-11-12): a row holding someone who isn't on a route on the Live board any more
+    // ("stale") is a free row too - the Live board driver goes in their place, or it is emptied.
+    // Stale is only known once the associate list is read, so a service counts as "has room" here when
+    // it has an empty row or any filled one.
     const hasEmpty = (s) => s.rows.some(isEmpty);
-    const target = sps.find((s) => isOpen(s.el) && hasEmpty(s)) || sps.find(hasEmpty) || sps.find((s) => isOpen(s.el)) || sps[0];
+    const hasRoom = (s) => hasEmpty(s) || s.rows.some((r) => r.sel.value && !r.sel.disabled);
+    const target = sps.find((s) => isOpen(s.el) && hasEmpty(s)) || sps.find(hasEmpty) || sps.find((s) => isOpen(s.el) && hasRoom(s))
+      || sps.find(hasRoom) || sps.find((s) => isOpen(s.el)) || sps[0];
     const opened = !isOpen(target.el);
     if (!(await openService(target.el))) {
       return { errHtml: `Amazon didn't open <b>${esc(target.short)}</b> — it may be asking about unsaved changes. Answer it (or Save / Cancel the open service), then click the bookmark again.` };
@@ -422,10 +548,12 @@
     const taken = takenNow(svcs);
     // pre-match every driver locally: Transporter ID first (Amazon's option value), then the name
     const usedBy = new Map();
+    const keep = new Set();                                    // every option a Live board route driver could be
     const drivers = (payload.drivers || []).map((d) => {
       const r = { d, opt: null, status: null, why: "" };
       let cands = d.tid ? opts.filter((o) => o.value === d.tid) : [];
       if (!cands.length) cands = opts.filter((o) => sameDriver(d.name, o.name));
+      for (const c of cands) keep.add(c.value);
       if (cands.length > 1) { r.status = "ambiguous"; r.why = cands.map((c) => c.name).join(" / "); return r; }
       if (!cands.length) { r.status = "notfound"; return r; }
       const c = r.opt = cands[0];
@@ -448,14 +576,18 @@
       if (!s) { s = { key: k, label: one(r.d.portal), sched: r.d.sched, drivers: [] }; sched.push(s); }
       s.drivers.push(r);
     }
+    const isStale = (row) => !!row.sel.value && !row.sel.disabled && !keep.has(row.sel.value);
     const lines = [];                                          // per Amazon start time, page order
     for (const w of waves) {
       const s = sched.find((x) => x.key === w.key);
       const empty = w.rows.filter(isEmpty).length;
+      // stale rows: [{value, name}] - who's there now (re-run, Jose 2026-11-12)
+      const stale = w.rows.filter(isStale).map((row) => ({ value: row.sel.value, name: currentDA(row) }));
+      const free = empty + stale.length;
       const ds = s ? s.drivers : [];
       const fill = ds.filter((r) => r.status === "match");
-      fill.forEach((r, i) => { if (i >= empty) r.status = "leftover"; });
-      lines.push({ w, s, routes: w.rows.length, empty, ds, toFill: fill.filter((r) => r.status === "match") });
+      fill.forEach((r, i) => { if (i >= free) r.status = "leftover"; });
+      lines.push({ w, s, routes: w.rows.length, empty, stale, free, ds, toFill: fill.filter((r) => r.status === "match") });
     }
     const noWave = sched.filter((s) => !byKey.has(s.key));
     for (const s of noWave) for (const r of s.drivers) if (r.status === "match" || r.status === "leftover") r.status = "nowave";
@@ -463,7 +595,7 @@
     // (11 drivers at 10:25, Amazon 9 rows; 14 at 10:45, Amazon 15). A driver left over — or whose start
     // time Amazon doesn't have — goes into a spare empty row at the nearest other start time (a later one
     // on a tie) and the panel says so. Once their pick is in, the Live board follows (moves window below).
-    const spare = (l) => l.empty - l.toFill.length;
+    const spare = (l) => l.free - l.toFill.length;
     const loose = [];
     for (const l of lines) for (const r of l.ds) if (r.status === "leftover") loose.push({ r, from: l.w.label, mins: waveMins(l.w.key) });
     for (const s of noWave) for (const r of s.drivers) if (r.status === "nowave") loose.push({ r, from: s.label, mins: waveMins(s.key) });
@@ -477,11 +609,19 @@
       to.toFill.push(x.r);
       (to.moved || (to.moved = [])).push(x.r);
     }
+    // which stale rows get a Live board driver (the empty rows fill first) and which are emptied
+    for (const l of lines) {
+      const into = Math.max(0, l.toFill.length - l.empty);
+      l.swapOut = l.stale.slice(0, into);                      // someone else goes in their place
+      l.clear = l.stale.slice(into);                           // emptied: nobody left for that row
+    }
     const total = lines.reduce((n, l) => n + l.toFill.length, 0);
+    const clears = lines.reduce((n, l) => n + l.clear.length, 0);
     const others = svcs.filter((s) => s.el !== target.el)
       .map((s) => ({ short: s.short, sp: s.sp, rows: s.rows.length, empty: s.rows.filter(isEmpty).length }));
     const filtered = [...target.el.querySelectorAll(".DAFilter select")].some((x) => x.value);
-    return { target, opened, lines, noWave, drivers, total, others, filtered, anyEmpty: target.rows.some(isEmpty) };
+    return { target, opened, lines, noWave, drivers, total, clears, others, filtered, keep,
+      anyEmpty: target.rows.some(isEmpty) || lines.some((l) => l.stale.length) };
   }
 
   // where someone already is, when it isn't this start time of the service we fill
@@ -504,14 +644,20 @@
     const al = by("already"); if (al.length) out.push(`<li class="muted">Already on a row in Amazon (skipped, that's fine): ${al.map((r) => nameOf(r.d) + whereNote(r, l)).join(", ")}</li>`);
     const fa = by("failed"); if (fa.length) out.push(`<li class="bad">Couldn't place: ${fa.map((r) => `${nameOf(r.d)} — ${esc(r.why)}`).join("; ")}</li>`);
     const lo = by("leftover"); if (lo.length) out.push(`<li class="warn">More drivers than empty rows — left over: ${names(lo.map((r) => r.d))}</li>`);
+    const nm = (xs) => xs.map((x) => esc(x.name || "someone")).join(", ");
     if (final) {
       const ns = by("match"); if (ns.length) out.push(`<li class="warn">Not filled (stopped): ${names(ns.map((r) => r.d))}</li>`);
+      const sw = (l.swapped || []); if (sw.length) out.push(`<li class="warn">Swapped out (not on a route on the Live board): ${nm(sw)}</li>`);
+      const cl = (l.cleared || []); if (cl.length) out.push(`<li class="warn">Taken off (not on a route on the Live board): ${nm(cl)}</li>`);
+      const cf = (l.clearFailed || []); if (cf.length) out.push(`<li class="bad">Couldn't take off — do it by hand: ${nm(cf)}</li>`);
       const still = l.w.rows.filter(isEmpty).length;
       if (still) out.push(`<li class="warn">${plural(still, "empty row")} left empty</li>`);
       const flagged = l.w.rows.filter((r) => errMark(r));
       if (flagged.length) out.push(`<li class="bad">Amazon shows a red ! on ${plural(flagged.length, "row")} at this time — check them</li>`);
     } else {
-      const stay = l.empty - l.toFill.length;
+      if (l.swapOut.length) out.push(`<li class="warn">Not on a route on the Live board any more — a Live board driver goes in their place: ${nm(l.swapOut)}</li>`);
+      if (l.clear.length) out.push(`<li class="warn">Not on a route on the Live board any more — their row will be emptied: ${nm(l.clear)}</li>`);
+      const stay = l.free - l.toFill.length;
       if (stay > 0) out.push(`<li class="warn">${plural(stay, "empty row")} will stay empty</li>`);
     }
     if (!l.s) out.push(`<li class="warn">Nobody on the schedule for this start time</li>`);
@@ -546,37 +692,42 @@
     if (p.err || p.errHtml) { stopWith(p.errHtml || esc(p.err)); btn("Start over", run, true); return; }
     plan = p;
     const n = (payload.drivers || []).length;
-    let h = ask.warn + `<p><b>${esc(dayLabel(date))}</b> — ${plural(n, "driver")} on routes on the Live board.</p>`;
+    let h = ask.warn + (ap.note || "") + `<p><b>${esc(dayLabel(date))}</b> — ${plural(n, "driver")} on routes on the Live board.</p>`;
     h += `<p>Filling <b>${esc(p.target.short)}</b>${p.opened ? " (opened it for you)" : ""}.</p>`;
     if (p.filtered) h += '<p class="warn">⚠ Set the Filter (Start Time / Associate Name) back to All so every row shows.</p>';
-    if (!p.anyEmpty) h += '<p class="warn">Every row already has an associate — there is nothing to fill.</p>';
+    if (!p.anyEmpty) h += '<p class="warn">Every row already has the right associate — there is nothing to fill.</p>';
     h += p.lines.map((l) => waveHtml(l, false)).join("") + extraHtml(p);
     h += `<p><b>Nothing has been changed on Amazon's page yet.</b> Amazon keeps nothing until you press <b>Save</b> under the rows.</p>`;
     say(h);
-    if (p.total) btn(`Fill ${plural(p.total, "row")}`, () => fill(my));
+    const label = [p.total ? `Fill ${plural(p.total, "row")}` : "", p.clears ? `take ${p.clears} off` : ""].filter(Boolean).join(", ");
+    if (p.total || p.clears) btn(label.charAt(0).toUpperCase() + label.slice(1), () => fill(my));
     btn("Start over", run, true);
   }
 
   // Step 4: fill, one row at a time
-  async function placeOne(row, opt) {
+  // `was` (a re-run, Jose 2026-11-12): the row holds that associate now (not on a route on the Live
+  // board) and the driver goes in their place; if Amazon won't take it, they're put back.
+  async function placeOne(row, opt, was) {
     const { sel } = row;
     if (!sel.isConnected) return { ok: false, why: "that row is gone", rowBad: true };
-    if (currentDA(row)) return { ok: false, why: "that row already has " + currentDA(row), rowBad: true };
+    if (was ? sel.value !== was : currentDA(row)) return { ok: false, why: "that row now has " + (currentDA(row) || "someone else"), rowBad: true };
     if (sel.disabled) return { ok: false, why: "Amazon has that row locked", rowBad: true };
     const o = [...sel.options].find((x) => x.value === opt.value);
     if (!o) return { ok: false, why: "not in Amazon's list for that row" };
     const other = takenNow().get(opt.value);
     if (other) return { ok: false, why: `Amazon now shows them on ${other.where}` };
+    const back = was ? [...sel.options].find((x) => x.value === was) : null;
+    const undo = () => (back ? setRow(row, back.index, () => sel.value === was) : emptyRow(row));
     const want = one(o.textContent);
     if (!(await setRow(row, o.index, () => sel.value === opt.value && shown(row) === want))) {
-      const clean = !sel.value && shown(row) === CAPTION || await emptyRow(row);
+      const clean = (was ? sel.value === was : !sel.value && shown(row) === CAPTION) || await undo();
       return { ok: false, why: "Amazon's box didn't take it" + (clean ? "" : " — please check that row") };
     }
     await sleep(150);                                          // give Amazon a moment to show its red !
     const bad = errMark(row);
     if (bad) {
-      const cleared = await emptyRow(row) && !!(await waitFor(() => !errMark(row), 1000));
-      return { ok: false, why: `Amazon said “${bad}” — ${cleared ? "that row was emptied again" : "couldn't empty that row, please check it"}` };
+      const cleared = await undo() && !!(await waitFor(() => !errMark(row), 1000));
+      return { ok: false, why: `Amazon said “${bad}” — ${cleared ? (was ? "that row was put back" : "that row was emptied again") : "couldn't undo that row, please check it"}` };
     }
     return { ok: true };
   }
@@ -595,27 +746,48 @@
     stopped = false;
     clearBtns();
     btn("Stop", () => { stopped = true; }, true);
-    const total = plan.total;
+    const total = plan.total, steps = plan.total + plan.clears;
     let done = 0, placed = 0;
     progress(0);
-    const status = () => say(`<p>Filling ${Math.min(done + 1, total)} of ${total}…</p><p class="muted">Nothing is saved — you press Save at the end.</p>`);
+    const status = () => say(`<p>Filling ${Math.min(done + 1, steps)} of ${steps}…</p><p class="muted">Nothing is saved — you press Save at the end.</p>`);
     outer:
     for (const l of plan.lines) {
-      l.placed = 0;
+      l.placed = 0; l.swapped = []; l.cleared = []; l.clearFailed = [];
       const bad = new Set();                                   // row positions at this start time to skip
+      const left = new Map(l.stale.map((x) => [x.value, x]));  // stale associates still on a row here
+      const fresh = () => { const w = readWaves(plan.target.el).find((x) => x.key === l.w.key); if (w) l.w.rows = w.rows; return w; };
       for (const r of l.toFill) {
         if (stopped || my !== runId) break outer;
         if (!stillHere()) { stopped = true; plan.lost = true; break outer; }
         status();
-        const w = readWaves(plan.target.el).find((x) => x.key === l.w.key);   // fresh rows: the page may have re-drawn
-        if (w) l.w.rows = w.rows;
-        const idx = w ? w.rows.findIndex((row, i) => !bad.has(i) && isEmpty(row)) : -1;
-        if (idx < 0) { r.status = "leftover"; done++; progress(done / total); continue; }
+        const w = fresh();                                     // fresh rows: the page may have re-drawn
+        // an empty row first, else a row whose associate isn't on a route on the Live board (re-run)
+        let idx = w ? w.rows.findIndex((row, i) => !bad.has(i) && isEmpty(row)) : -1;
+        if (idx < 0 && w) idx = w.rows.findIndex((row, i) => !bad.has(i) && !row.sel.disabled && left.has(row.sel.value));
+        if (idx < 0) { r.status = "leftover"; done++; progress(done / steps); continue; }
+        const was = isEmpty(w.rows[idx]) ? null : w.rows[idx].sel.value;
         let res;
-        try { res = await placeOne(w.rows[idx], r.opt); } catch (err) { res = { ok: false, why: "error: " + (err && err.message || err) }; }
-        if (res.ok) { r.status = "placed"; placed++; l.placed++; } else { r.status = "failed"; r.why = res.why; if (res.rowBad) bad.add(idx); }
+        try { res = await placeOne(w.rows[idx], r.opt, was); } catch (err) { res = { ok: false, why: "error: " + (err && err.message || err) }; }
+        if (res.ok) {
+          r.status = "placed"; placed++; l.placed++;
+          if (was) { l.swapped.push(left.get(was)); left.delete(was); }
+        } else { r.status = "failed"; r.why = res.why; if (res.rowBad || was) bad.add(idx); }
         done++;
-        progress(done / total);
+        progress(done / steps);
+      }
+      // whoever is still on a row here but not on a route on the Live board: their row is emptied
+      for (const x of [...left.values()]) {
+        if (stopped || my !== runId) break outer;
+        if (!stillHere()) { stopped = true; plan.lost = true; break outer; }
+        status();
+        const w = fresh();
+        const row = w && w.rows.find((rw) => !rw.sel.disabled && rw.sel.value === x.value);
+        let ok = false;
+        if (row) { try { ok = await emptyRow(row); } catch (err) { ok = false; } }
+        (ok ? l.cleared : l.clearFailed).push(x);
+        left.delete(x.value);
+        done++;
+        progress(Math.min(1, done / steps));
       }
     }
     if (mv.my === my) sendMoves();                             // also when the panel was closed mid-fill
@@ -631,7 +803,7 @@
     const svcs = readServices();
     plan.others = svcs.filter((s) => s.el !== plan.target.el)
       .map((s) => ({ short: s.short, sp: s.sp, rows: s.rows.length, empty: s.rows.filter(isEmpty).length }));
-    let h = `<p><b>${stopped ? "Stopped. " : ""}Filled ${placed} of ${plural(total, "row")}.</b></p>`;
+    let h = (ap.note || "") + `<p><b>${stopped ? "Stopped. " : ""}Filled ${placed} of ${plural(total, "row")}.</b></p>`;
     if (plan.lost) h += '<p class="bad">The Standard Parcel rows were closed (or the day changed) during the fill.</p>';
     h += plan.lines.map((l) => waveHtml(l, true)).join("") + extraHtml(plan);
     if (mv.list && mv.list.length) h += '<div class="lvmoves"></div>';

@@ -16,6 +16,48 @@ Modeled on Morning Operations' `site/grab.js` (the "📦 Stops → Assigner" boo
 the bookmark only injects `<APP>/roster.js?<time>`, so fixing `roster.js` fixes every
 computer without re-adding the bookmark.
 
+## Re-running it, and the Live board vs Amazon's routes (Jose 2026-11-12)
+The bookmark can be clicked again on a day that was already rostered (and saved): it picks up
+whatever changed on the Live board since.
+
+**Step 1 — the Live board checklist.** Before filling, `roster.js` counts Amazon's associate
+rows for the day across **every** service (Standard Parcel, Electric, Nursery, Hub…) and sends
+that number with its request (`rows`). The app window loads the week's rules engine and runs
+`roster_plan` (runner.py). Route drivers = plain routes + trainees (a ride-along trainer needs
+no row). If the numbers differ, or someone works 6 days in 7 with no backup day, the panel shows
+a checklist before anything else:
+- **More route drivers than Amazon rows** → the worst-ranked route drivers become backups
+  (ticked).
+- **Fewer** → the best-ranked of that day's **backups** get a route (ticked). A backup for whom it
+  would be a 6th day is listed **unticked** ("only if you tick it"); a backup who asked for the day
+  off is never offered. If that still isn't enough: "Still N routes short — add someone on the
+  Live board or fill by hand".
+- **6 days in 7, no backup day** (a 7-day window holding that day with 6+ worked days, every one a
+  full shift — could go over 60 hours) → offered **unticked**: make them a backup, and the best
+  backup left takes their route.
+- Ranking (who keeps / gets a route), like "Who can work extra?": no rule breaks → goes past a
+  soft limit → overtime → 6 days in 7 (never picked by itself) → compliance; then the board tier
+  (Top performer, Solid, Fair, Unrated, Underperforming, Termination review; no board tier → the
+  build group); then fewer hours this week.
+- Training pairs are never touched (they change only by a rebuild).
+
+**Change the Live board** sends the ticked items (`jajb-roster-apply`) to the app window, which
+runs `roster_apply` — one undo step, one save (expected rev; a save someone beat is redone up to
+3 times), one change-log line each ("… to match Amazon (Sat: 30 routes, 9 backups)"). The counts
+follow: a route made a backup = one route less at its wave and one backup more; a backup made a
+route = one route more (when the wave is full) and one backup less. The app answers
+`jajb-roster-applied {date, results, payload}` with the day sent again, fresh, and the fill
+preview is built from that. **Skip — fill as it is** changes nothing on the Live board. If the
+engine can't load, the panel says so and fills as before.
+
+**Step 2 — the fill, with swaps.** A Standard Parcel row holding someone who isn't a route
+driver on the Live board any more ("stale" — matched the same way, Transporter ID then name; an
+ambiguous match counts as on the board) is a free row: empty rows fill first, then a stale row
+gets a Live board driver **in that person's place** ("Swapped out: …"); a stale row nobody is
+left for is **emptied** ("Taken off: …"). If Amazon won't take a swap (red ! etc.) the person is
+put back. Rows holding a Live board route driver are never touched; other services are never
+touched. Still nothing is saved until dispatch presses Save.
+
 ## Who goes in the Associate boxes
 - Every driver whose cell that day is a route (a wave time, e.g. `10:25 AM`).
 - Trainees: cell `10:25 AM (TRAIN drives w/ X)` → the trainee goes in a box (trainer rides along).
@@ -42,7 +84,7 @@ computer without re-adding the bookmark.
    `{type: "jajb-roster-ready"}` to `window.opener` with targetOrigin
    `"https://logistics.amazon.com"`.
 3. `roster.js` (checks `e.origin === APP_ORIGIN`) replies
-   `{type: "jajb-roster-request", date}`.
+   `{type: "jajb-roster-request", date, rows}` (rows = Amazon's associate rows, every service, or null — 2026-11-12).
 4. The app checks `e.origin === "https://logistics.amazon.com"` (never sends to any
    other origin) and answers:
    ```js
@@ -52,9 +94,13 @@ computer without re-adding the bookmark.
                   sched: "10:25 AM", portal: "10:45 AM", trainee: false,
                   trainer: null /* trainee → trainer's name */ } ],
      skipped: [ { name: "Cara Amos", why: "Trainer" | "Backup" } ],
-     error: null /* or plain-words text: "No Live board for that week" … */ }
+     error: null /* or plain-words text: "No Live board for that week" … */,
+     plan: { live, rows, diff, short, pairs, rev, changes: [ { id, kind: "backup"|"route"|"six",
+             name, wave, why, checked, with?, with_wave?, with_why? } ] } | null,
+     planError: null /* or why the engine couldn't check (2026-11-12) */ }
    ```
-   Then shows "Sent Saturday Oct 10 to Amazon — this window closes by itself" and
+   With changes in the plan the window stays open for `jajb-roster-apply` (see "Re-running it").
+   Otherwise it shows "Sent Saturday Oct 10 to Amazon — this window closes by itself" and
    closes after ~3 s.
 5. Errors (not signed in, no access, week not published, day closed) are sent as
    `{type:"jajb-roster", error:"…"}` and also shown in the app window.
@@ -68,7 +114,7 @@ computer without re-adding the bookmark.
   changes elsewhere), the bookmark stops and dispatch answers Amazon.
 - Rows are grouped by start time (`10:25 am`); each group gets the drivers whose `portal`
   is that time, in the payload's order, top row first.
-- Never touch a row that already has an associate. Never place a driver Amazon already
+- Never touch a row that already has a Live board route driver (a stale one is swapped / emptied — see "Re-running it" above). Never place a driver Amazon already
   shows on any row that day (any service).
 - Matching, all local (Amazon's search can't match our names): the payload `tid` against
   the option value (Amazon's value is the Transporter ID), then the name — normalized

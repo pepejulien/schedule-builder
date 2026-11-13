@@ -1,6 +1,6 @@
 // rosterForDay (public/app/roster-send.js): who goes in Amazon's DA boxes for a day.
 //   node tests/roster_send_test.mjs
-import { rosterForDay, rosterHashDate, dayLabel } from '../public/app/roster-send.js';
+import { rosterForDay, rosterHashDate, dayLabel, checkApplyMsg } from '../public/app/roster-send.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -60,6 +60,17 @@ eq('dayLabel', dayLabel('2026-10-10'), 'Saturday Oct 10');
 eq('hash date', rosterHashDate('#roster=2026-10-10'), '2026-10-10');
 eq('hash other', rosterHashDate('#foo'), null);
 eq('hash bad', rosterHashDate('#roster=2026-10-1'), null);
+
+// the ticked Live board changes from Amazon's page (Jose 2026-11-12)
+const A = (picks, date = '2026-10-10') => checkApplyMsg({ type: 'jajb-roster-apply', date, rev: 3, picks }, '2026-10-10');
+eq('apply: good', A([{ kind: 'backup', name: ' Ann Lee ' }, { kind: 'six', name: 'Bo Ray', with: 'Cy Dee' }, { kind: 'route', name: 'Di Eve', with: 'x' }]),
+  { picks: [{ kind: 'backup', name: 'Ann Lee' }, { kind: 'six', name: 'Bo Ray', with: 'Cy Dee' }, { kind: 'route', name: 'Di Eve' }], rev: 3 });
+eq('apply: six without a taker', A([{ kind: 'six', name: 'Bo Ray', with: null }]).picks, [{ kind: 'six', name: 'Bo Ray' }]);
+ok('apply: other day refused', !!A([{ kind: 'backup', name: 'Ann' }], '2026-10-11').error);
+ok('apply: unknown kind refused', !!A([{ kind: 'delete', name: 'Ann' }]).error);
+ok('apply: empty refused', !!A([]).error);
+ok('apply: blank name refused', !!A([{ kind: 'route', name: '  ' }]).error);
+ok('apply: wrong type refused', !!checkApplyMsg({ type: 'x', date: '2026-10-10', picks: [] }, '2026-10-10').error);
 
 console.log(`${pass}/${pass + fail} passed`);
 if (fail) { console.log(fails.join('\n')); process.exit(1); }

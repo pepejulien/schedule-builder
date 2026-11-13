@@ -1979,6 +1979,276 @@ def set_role(payload_json):
         return _crash()
 
 
+# ---- Roster to Amazon: match the Live board to Amazon's routes (Jose 2026-11-12) ----
+# The roster bookmark (public/roster.js) counts Amazon's associate rows for the day (every
+# service). roster_plan says who should hold the day's routes when the Live board has more or
+# fewer route drivers than that, and which route drivers work 6 days in 7 with no backup day
+# (risk of going over 60 hours). Dispatch ticks what to do in the bookmark's checklist;
+# roster_apply makes those changes. Training pairs are never touched (they need a rebuild).
+# Who keeps / gets a route: the "Who can work extra?" order - no rule breaks, soft limit,
+# overtime, 6 days in 7 (never picked by itself) - then the board tier, then fewer hours.
+_TIER_RANK = {"Top performer": 0, "Solid": 1, "Fair": 2, "Unrated": 3,
+              "Underperforming": 4, "Termination review": 5}
+_CLS_RANK = {"most": 1, "free": 2, "exact": 3, "reduced": 4}       # no board tier: the build group
+_RP_GROUP = ["no rule breaks", "goes past a soft limit", "overtime", "6 days out of 7",
+             "can't (compliance)"]
+_RP_NOTE = "to match Amazon"
+
+
+def _rp_tier(cfg, res, dr):
+    t = ((cfg or {}).get("driver_tiers") or {}).get(dr["name"])
+    if t in _TIER_RANK:
+        return t, _TIER_RANK[t]
+    return None, _CLS_RANK.get(_classify(dr, res), 3)
+
+
+def _rp_info(res, cfg, dr, day, wave):
+    """dr holding a route on `day` (their own route / backup that day set aside), sorted
+    like "Who can work extra?": rank 0 ok, 1 soft limit, 2 overtime, 3 6-day, 4 blocked."""
+    p0, b0 = list(dr["prim"]), list(dr["bk"])
+    try:
+        if day in dr["prim"]:
+            dr["prim"].remove(day)
+        if day in dr["bk"]:
+            dr["bk"].remove(day)
+        status, reasons, _, limits = _assess(res, dr, day, "road")
+    finally:
+        dr["prim"][:], dr["bk"][:] = p0, b0
+    off = status == "unavail"
+    if status == "blocked":
+        rank = 4
+    elif any(x.startswith("6-day:") for x in limits):
+        rank = 3
+    elif limits:
+        rank = 2
+    elif status == "warn" or (off and len(reasons) > 1 + len(limits)):
+        rank = 1
+    else:
+        rank = 0
+    tier, trank = _rp_tier(cfg, res, dr)
+    return dict(name=dr["name"], wave=wave, rank=rank, tier=tier, trank=trank,
+                hours=_hours(res, dr), off=off,
+                limits=[x for x in reasons if not off or x != reasons[0]][:2])
+
+
+def _rp_key(x):
+    return (x["rank"], x["trank"], x["hours"], norm(x["name"]))
+
+
+def _rp_why(x):
+    s = _RP_GROUP[x["rank"]]
+    if x["tier"]:
+        s += f"; {x['tier']}"
+    s += f"; {_num(x['hours'])}h this week"
+    if x["limits"]:
+        s += f" ({x['limits'][0]})"
+    return s
+
+
+def _six_risk(res, dr, day):
+    """A 7-day window holding `day` with 6+ worked days and not one backup day in it
+    (every day a full shift: could go over 60 hours) -> {days, span, hours}, else None."""
+    s = _all_worked(res, dr)
+    dt = res.DATEALL[day]
+    if dt not in s:
+        return None
+    hrs = _day_hours(res, dr)
+    for k in range(6, -1, -1):
+        a = dt - k * ONE
+        wk = [a + j * ONE for j in range(7) if a + j * ONE in s]
+        if len(wk) <= _max7d(res):
+            continue
+        if any(0 < hrs.get(x, 0) <= res.BH for x in wk):
+            continue
+        return dict(days=len(wk), span=f"{a:%a %m/%d}-{a + 6 * ONE:%a %m/%d}",
+                    hours=_num(sum(hrs.get(x, 0) for x in wk)))
+    return None
+
+
+def roster_plan(payload_json):
+    """payload: {day, rows: Amazon's associate rows that day (every service) | null}.
+    Read-only. Returns {live, rows, diff, short, pairs, changes: [{id, kind, name, wave, why,
+    checked, with?, with_wave?, with_why?}]}:
+      kind 'backup' - more route drivers than Amazon rows: this route becomes a backup (ticked);
+      kind 'route'  - fewer: this backup gets a route (ticked; a 6th day is listed unticked);
+      kind 'six'    - 6 days in 7 with no backup day: make it a backup (unticked), and `with`
+                      (the best backup left) takes the route."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        _take_today(p)
+        day = p.get("day")
+        if day not in res.DAYS:
+            return json.dumps(dict(ok=False, kind="edit", message=f"{day} is closed on the Live board."))
+        rows = p.get("rows")
+        rows = rows if isinstance(rows, int) and not isinstance(rows, bool) and rows >= 0 else None
+        marks = _STATE["marks"].get(day, {})
+        route, backs, pairs = [], [], 0
+        for i, label in sorted(res.cell[day].items()):
+            dr = res.roster[i]
+            if norm(dr["name"]) in marks or "TRAIN helper" in label:
+                continue
+            w = _cell_wave(label)
+            if "TRAIN drives" in label:
+                pairs += 1
+            elif "Backup" in label:
+                if day in dr["bk"]:
+                    backs.append(_rp_info(res, cfg, dr, day, w))
+            elif w and day in dr["prim"]:
+                route.append(_rp_info(res, cfg, dr, day, w))
+        live = len(route) + pairs
+        diff = live - rows if rows is not None else 0
+        changes, used = [], set()
+
+        def ch(kind, x, checked, why):
+            used.add(x["name"])
+            c = dict(id=f"{kind}:{x['name']}", kind=kind, name=x["name"], wave=x["wave"],
+                     why=why, checked=checked)
+            changes.append(c)
+            return c
+
+        short = 0
+        if diff > 0:
+            for x in sorted(route, key=_rp_key, reverse=True)[:diff]:
+                ch("backup", x, True, _rp_why(x))
+        elif diff < 0:
+            need = -diff
+            pool = sorted([b for b in backs if not b["off"] and b["rank"] <= 2], key=_rp_key)
+            for x in pool[:need]:
+                ch("route", x, True, _rp_why(x))
+            need -= min(need, len(pool))
+            for x in sorted([b for b in backs if not b["off"] and b["rank"] == 3], key=_rp_key)[:need]:
+                ch("route", x, False, _rp_why(x) + " - only if you tick it")
+                need -= 1
+            short = need
+        spare = [b for b in sorted(backs, key=_rp_key) if not b["off"] and b["rank"] <= 2]
+        for x in sorted(route, key=_rp_key):
+            if x["name"] in used:
+                continue
+            _, dr = _find(res, x["name"])
+            r = _six_risk(res, dr, day)
+            if not r:
+                continue
+            c = ch("six", x, False, f"{r['days']} days in 7 ({r['span']}), no backup day - "
+                                    f"could go over 60 hours ({r['hours']}h)")
+            w = next((b for b in spare if b["name"] not in used), None)
+            if w:
+                used.add(w["name"])
+                c.update({"with": w["name"], "with_wave": w["wave"], "with_why": _rp_why(w)})
+        return json.dumps(dict(ok=True, day=day, live=live, rows=rows, diff=diff, short=short,
+                               pairs=pairs, changes=changes), default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
+def _ra_to_backup(res, day, name):
+    """A route -> a backup, one route less and one backup more that day. Change-log text or raises ValueError."""
+    i, dr = _find(res, name)
+    if dr is None:
+        raise ValueError("not on the Live board week any more")
+    label = res.cell[day].get(i, "")
+    if "TRAIN" in label:
+        raise ValueError("in a training pair - training days change only with a rebuild")
+    if day not in dr["prim"]:
+        raise ValueError("has no route that day any more")
+    st, why = _swap_assess(res, dr, label)
+    wave = _cell_wave(label)
+    dr["prim"].remove(day)
+    dr["bk"].append(day)
+    res.cell[day][i] = (wave + " Backup") if wave else "Backup"
+    if wave in res.waves[day] and res.waves[day][wave] > 0:
+        res.waves[day][wave] -= 1
+        res.routes[day] = sum(res.waves[day].values())
+    res.backup[day] = res.backup.get(day, 0) + 1
+    if st == "warn":
+        _STATE["ovr_policy"].add(norm(dr["name"]))
+    desc = (f"Made {dr['name']}'s {day} {wave or ''} route a backup {_RP_NOTE} "
+            f"({day}: {res.routes[day]} routes, {res.backup[day]} backups)").replace("  ", " ")
+    return desc + (f"  [flagged: {'; '.join(why)}]" if st == "warn" else "")
+
+
+def _ra_to_route(res, day, name, p):
+    """A backup -> a route in its wave (checked like a new route; the checklist tick is the
+    overtime / 6-day pop-up's yes), one route more and one backup less. Raises ValueError."""
+    i, dr = _find(res, name)
+    if dr is None:
+        raise ValueError("not on the Live board week any more")
+    if day not in dr["bk"]:
+        raise ValueError("isn't a backup that day any more")
+    label = res.cell[day].get(i, "")
+    wave = _cell_wave(label)
+    dr["bk"].remove(day)
+    res.cell[day].pop(i, None)
+    err, st, why = _gate(res, dr, day, "road", dict(p, confirm_limits=True))
+    if err:
+        dr["bk"].append(day)
+        res.cell[day][i] = label
+        e = json.loads(err)
+        raise ValueError("asked for the day off" if e.get("kind") == "needs_confirm"
+                         else e.get("message") or "the rules said no")
+    w = wave if wave in res.waves[day] else _fill_label(res, day, "road")
+    _put_route(res, i, dr, day, w)
+    if _wave_filled(res, day, w) > res.waves[day].get(w, 0):
+        res.waves[day][w] = res.waves[day].get(w, 0) + 1
+        res.routes[day] = sum(res.waves[day].values())
+    res.backup[day] = max(0, res.backup.get(day, 0) - 1)
+    return (f"Made {dr['name']}'s {day} backup a {w} route {_RP_NOTE} "
+            f"({day}: {res.routes[day]} routes, {res.backup[day]} backups)") + _note_override(dr, day, st, why)
+
+
+def roster_apply(payload_json):
+    """payload: {day, picks: [{kind: backup|route|six, name, with?}]} - the roster_plan
+    changes dispatch ticked. One undo step for all of them; each pick's result in
+    report['roster_results'] = [{name, kind, ok, why?, with?, with_ok?, with_why?}]."""
+    try:
+        p = json.loads(payload_json)
+        res, cfg = _STATE.get("res"), _STATE.get("cfg")
+        if res is None:
+            return _no_state()
+        _take_today(p)
+        day, picks = p.get("day"), p.get("picks")
+        if day not in res.DAYS or not isinstance(picks, list) or len(picks) > 100:
+            return json.dumps(dict(ok=False, kind="edit", message="Bad request."))
+        snap = _snapshot(res)
+        out, any_ok = [], False
+        for pk in picks:
+            kind, name = (pk or {}).get("kind"), str((pk or {}).get("name") or "")
+            r = dict(name=name, kind=kind, ok=False)
+            try:
+                if kind in ("backup", "six"):
+                    _STATE["edits"].append(_ra_to_backup(res, day, name))
+                elif kind == "route":
+                    _STATE["edits"].append(_ra_to_route(res, day, name, p))
+                else:
+                    raise ValueError("unknown change")
+                r["ok"] = any_ok = True
+            except ValueError as e:
+                r["why"] = str(e)
+            other = (pk or {}).get("with")
+            if kind == "six" and r["ok"] and other:
+                r["with"] = other
+                try:
+                    _STATE["edits"].append(_ra_to_route(res, day, str(other), p))
+                    r["with_ok"] = True
+                except ValueError as e:
+                    r["with_ok"], r["with_why"] = False, str(e)
+            out.append(r)
+        if any_ok:
+            _STATE["undo"].append(snap)
+        else:
+            _restore(res, snap)
+        chk = _verify(res)
+        res.infeasible = _recount_short(res, chk)
+        _save_out(res)
+        rep = _report(cfg, res, chk)
+        rep["roster_results"] = out
+        return json.dumps(rep, default=str)
+    except Exception:  # noqa: BLE001
+        return _crash()
+
+
 def _cell_wave(v):
     m = _WAVE_RE.match(str(v or ""))
     return m.group(1) if m else None
