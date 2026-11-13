@@ -84,11 +84,11 @@ ok(all(kinds(cell[c['name']]) == 'route' for c in bk), 'only plain route drivers
 print('   ', [(c['name'], c['why']) for c in bk])
 
 # the worst-ranked go: recompute the rank order and check the 3 are the 3 at the bottom
-ranked = sorted([runner._rp_info(runner._STATE['res'], runner._STATE['cfg'], dr, D, None)
+ranked = runner._rp_order([runner._rp_info(runner._STATE['res'], runner._STATE['cfg'], dr, D, None)
                  for i, dr in enumerate(runner._STATE['res'].roster)
                  if kinds(runner._STATE['res'].cell[D].get(i)) == 'route'
-                 and runner.norm(dr['name']) not in runner._STATE['marks'].get(D, {})], key=runner._rp_key)
-ok({c['name'] for c in bk} == {x['name'] for x in ranked[-3:]}, 'the 3 at the bottom of the ranking go')
+                 and runner.norm(dr['name']) not in runner._STATE['marks'].get(D, {})])
+ok({c['name'] for c in bk} == {x['name'] for x in ranked[::-1][:3]}, 'the 3 at the bottom of the ranking go')
 
 r = J(runner.roster_apply, {'day': D, 'picks': [{'kind': c['kind'], 'name': c['name']} for c in bk], 'today': TODAY})
 ok(r.get('ok') and all(x['ok'] for x in r['roster_results']), 'applied the 3')
@@ -152,6 +152,33 @@ if six:
         ok(x['ok'] and x.get('with_ok'), f'6-day: made a backup and {c["with"]} took the route')
         d1 = next(d for d in r['days'] if d['day'] == D)
         ok(d1['routes'] == day['routes'], 'route count unchanged by a swap')
+
+# overtime is money (Jose 2026-11-12): 3h+ less overtime beats tier; closer, tier wins
+def X(name, trank, ot, rank=2):
+    return dict(name=name, rank=rank, trank=trank, ot=ot, est=40 + ot)
+
+
+top, fair = X('Hayden Top', 0, 6.0), X('Shawn Fair', 2, 3.5)
+ok(runner._rp_order([top, fair])[0]['name'] == 'Hayden Top', 'OT 6h vs 3.5h (2.5h saved): the Top performer wins')
+fair2 = X('Shawn Fair', 2, 1.0)
+ok(runner._rp_order([top, fair2])[0]['name'] == 'Shawn Fair', 'OT 6h vs 1h (5h saved): the cheaper driver wins')
+ok(runner._rp_order([X('A', 2, 0.0, rank=0), top])[0]['name'] == 'A', 'no overtime beats overtime')
+ok(runner._rp_order([X('A', 1, 2.0), X('B', 1, 2.0)])[0]['name'] == 'A', 'same tier, same overtime: by name')
+
+# each driver's own day length: long real days push the estimate up
+res = runner._STATE['res']
+D2 = res.DAYS[-1]
+dr = next(d for d in res.roster if not d['prim'] and not d['bk'] and not d['helper'] and not d['extra'] and not d['meet'])
+old = (dict(dr.get('h_act') or {}), dict(dr.get('h_prev') or {}))
+first = res.DATEALL[res.DAYS[0]]
+dr['h_prev'] = {first - 7 * runner.ONE: 11.5, first - 6 * runner.ONE: 11.5}
+dr['h_act'] = {}
+ok(abs(runner._rp_avg_day(res, dr) - 11.5) < 0.01, 'usual day length from real clock-outs (11.5h)')
+est, avg = runner._rp_est(res, dr, D2)
+ok(abs(est - 11.5) < 0.01, f'one route day planned at their own 11.5h ({est})')
+dr['h_prev'] = {first - 7 * runner.ONE: 11.5}
+ok(runner._rp_avg_day(res, dr) == res.PH, 'fewer than 2 real days: the planned 10h')
+dr['h_act'], dr['h_prev'] = old
 
 print('\nFAILED: ' + '; '.join(fails) if fails else '\nall ok')
 sys.exit(1 if fails else 0)

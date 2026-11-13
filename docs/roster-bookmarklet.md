@@ -38,7 +38,14 @@ a checklist before anything else:
 - Ranking (who keeps / gets a route), like "Who can work extra?": no rule breaks → goes past a
   soft limit → overtime → 6 days in 7 (never picked by itself) → compliance; then the board tier
   (Top performer, Solid, Fair, Unrated, Underperforming, Termination review; no board tier → the
-  build group); then fewer hours this week.
+  build group); then less overtime.
+- **Overtime is money (Jose 2026-11-12).** Each driver's week is estimated in real clock hours:
+  days already over at their real hours (Route Tracker), the rest at that driver's **own** usual
+  day length (average of their last 10 real days over 4h, this week and last; 10h with fewer than
+  2). Anyone that estimate puts over 40h is in the overtime group, even if the rules' 10h plan
+  says not. Inside the overtime group the driver with less overtime wins only when it saves
+  **3 hours or more** (`OT_SAVE_H` in runner.py); closer than that, the better tier wins. The
+  checklist shows it: "about 46h this week with this route (days run ~11.4h), ~6h overtime".
 - Training pairs are never touched (they change only by a rebuild).
 
 **Change the Live board** sends the ticked items (`jajb-roster-apply`) to the app window, which

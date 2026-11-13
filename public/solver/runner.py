@@ -1986,7 +1986,8 @@ def set_role(payload_json):
 # (risk of going over 60 hours). Dispatch ticks what to do in the bookmark's checklist;
 # roster_apply makes those changes. Training pairs are never touched (they need a rebuild).
 # Who keeps / gets a route: the "Who can work extra?" order - no rule breaks, soft limit,
-# overtime, 6 days in 7 (never picked by itself) - then the board tier, then fewer hours.
+# overtime, 6 days in 7 (never picked by itself) - then the board tier, then less overtime
+# (2026-11-12: within overtime, OT_SAVE_H or more hours less overtime beats tier).
 _TIER_RANK = {"Top performer": 0, "Solid": 1, "Fair": 2, "Unrated": 3,
               "Underperforming": 4, "Termination review": 5}
 _CLS_RANK = {"most": 1, "free": 2, "exact": 3, "reduced": 4}       # no board tier: the build group
@@ -2026,21 +2027,87 @@ def _rp_info(res, cfg, dr, day, wave):
     else:
         rank = 0
     tier, trank = _rp_tier(cfg, res, dr)
+    est, avg = _rp_est(res, dr, day)
+    ot = max(0.0, est - (res.HCAP or 40))
+    if rank < 2 and ot > 0:
+        rank = 2          # long real days: the rules' 10h plan says no overtime, the clock says yes
     return dict(name=dr["name"], wave=wave, rank=rank, tier=tier, trank=trank,
-                hours=_hours(res, dr), off=off,
+                hours=_hours(res, dr), off=off, est=est, avg=avg, ot=ot,
                 limits=[x for x in reasons if not off or x != reasons[0]][:2])
 
 
-def _rp_key(x):
-    return (x["rank"], x["trank"], x["hours"], norm(x["name"]))
+# Overtime is money (Jose 2026-11-12): among drivers who'd all go into overtime, the one with
+# less overtime wins only when it saves this many hours or more; closer than that, tier wins
+# (a Fair driver never beats a Top performer to save 1 hour, but does to save 5).
+OT_SAVE_H = 3
+
+
+def _rp_avg_day(res, dr):
+    """How long this driver's road days really run: the average real clock-out of their last
+    10 full days (Route Tracker, this week and last; > 4h, so backups don't count), or the
+    planned PH with fewer than 2 such days."""
+    today = _today()
+    days = dict(dr.get("h_prev") or {})
+    days.update({d: h for d, h in (dr.get("h_act") or {}).items() if d < today})
+    full = [h for _, h in sorted(days.items()) if h and h > 2 * res.BH][-10:]
+    return sum(full) / len(full) if len(full) >= 2 else res.PH
+
+
+def _rp_est(res, dr, day):
+    """(this week's clock hours if dr drives a route on `day`, their usual day length): days
+    already over at their real hours, the rest planned with the driver's own day length for a
+    route / training day, BH for a backup or meeting, 12h for dispatch."""
+    avg = _rp_avg_day(res, dr)
+    act, today = dr.get("h_act") or {}, _today()
+    plan = {}
+    for k, h in (("prim", avg), ("helper", avg), ("bk", res.BH), ("meet", res.BH), ("extra", DISPATCH_H)):
+        for d in dr[k]:
+            if d in res.DATEALL and d != day:
+                plan[res.DATEALL[d]] = plan.get(res.DATEALL[d], 0) + h
+    dt0 = res.DATEALL[day]
+    plan[dt0] = avg
+    tot = 0.0
+    for d in ALL_DAYS:
+        dt = res.DATEALL[d]
+        if dt in act and dt < today:
+            tot += act[dt]
+        elif dt in act:
+            tot += max(act[dt], plan.get(dt, 0))
+        else:
+            tot += plan.get(dt, 0)
+    return round(tot, 2), round(avg, 2)
+
+
+def _rp_better(a, b):
+    """Should `a` get a route before `b`?"""
+    if a["rank"] != b["rank"]:
+        return a["rank"] < b["rank"]
+    if a["rank"] == 2 and abs(a["ot"] - b["ot"]) >= OT_SAVE_H:
+        return a["ot"] < b["ot"]
+    return (a["trank"], a["ot"], a["est"], norm(a["name"])) < (b["trank"], b["ot"], b["est"], norm(b["name"]))
+
+
+def _rp_order(xs):
+    """Best first: who gets / keeps a route (picked one at a time with _rp_better)."""
+    left, out = list(xs), []
+    while left:
+        best = left[0]
+        for c in left[1:]:
+            if _rp_better(c, best):
+                best = c
+        out.append(best)
+        left.remove(best)
+    return out
 
 
 def _rp_why(x):
     s = _RP_GROUP[x["rank"]]
     if x["tier"]:
         s += f"; {x['tier']}"
-    s += f"; {_num(x['hours'])}h this week"
-    if x["limits"]:
+    s += f"; about {_num(round(x['est']))}h this week with this route (days run ~{_num(round(x['avg'], 1))}h)"
+    if x["ot"] > 0:
+        s += f", ~{_num(round(x['ot'], 1))}h overtime"
+    if x["limits"] and x["rank"] != 2:
         s += f" ({x['limits'][0]})"
     return s
 
@@ -2111,20 +2178,20 @@ def roster_plan(payload_json):
 
         short = 0
         if diff > 0:
-            for x in sorted(route, key=_rp_key, reverse=True)[:diff]:
+            for x in _rp_order(route)[::-1][:diff]:
                 ch("backup", x, True, _rp_why(x))
         elif diff < 0:
             need = -diff
-            pool = sorted([b for b in backs if not b["off"] and b["rank"] <= 2], key=_rp_key)
+            pool = _rp_order([b for b in backs if not b["off"] and b["rank"] <= 2])
             for x in pool[:need]:
                 ch("route", x, True, _rp_why(x))
             need -= min(need, len(pool))
-            for x in sorted([b for b in backs if not b["off"] and b["rank"] == 3], key=_rp_key)[:need]:
+            for x in _rp_order([b for b in backs if not b["off"] and b["rank"] == 3])[:need]:
                 ch("route", x, False, _rp_why(x) + " - only if you tick it")
                 need -= 1
             short = need
-        spare = [b for b in sorted(backs, key=_rp_key) if not b["off"] and b["rank"] <= 2]
-        for x in sorted(route, key=_rp_key):
+        spare = [b for b in _rp_order(backs) if not b["off"] and b["rank"] <= 2]
+        for x in _rp_order(route):
             if x["name"] in used:
                 continue
             _, dr = _find(res, x["name"])
