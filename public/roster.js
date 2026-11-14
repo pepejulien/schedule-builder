@@ -438,8 +438,8 @@
     }
     progress(null); clearBtns();
     const groups = [
-      ["backup", pl.diff > 0 ? `Amazon has <b>${plural(pl.rows, "route")}</b> (every service), the Live board <b>${plural(pl.live, "driver")}</b> on routes — these go to backup:` : ""],
-      ["route", pl.diff < 0 ? `Amazon has <b>${plural(pl.rows, "route")}</b> (every service), the Live board <b>${plural(pl.live, "driver")}</b> on routes — these backups get a route:` : ""],
+      ["backup", pl.diff > 0 ? `Amazon has <b>${plural(pl.rows, "route")}</b> (all services) but the Live board has <b>${plural(pl.live, "driver")}</b> on routes. To match, these drivers go to backup:` : ""],
+      ["route", pl.diff < 0 ? `Amazon has <b>${plural(pl.rows, "route")}</b> (all services) but the Live board has only <b>${plural(pl.live, "driver")}</b> on routes. To match, these backups get a route:` : ""],
       ["six", "6 days in 7 with no backup day — make them a backup? (only if you tick it)"],
     ];
     let h = ask.warn + `<p><b>${esc(dayLabel(date))}</b> — first, the Live board.</p>`;
@@ -633,37 +633,46 @@
     const ds = [...l.ds.filter((r) => !r.movedTo), ...(l.moved || [])];
     const by = (st) => ds.filter((r) => r.status === st);
     const out = [];
+    // moves read one way (Jose 2026-11-14): the sending time says "more drivers than rows - these go to X",
+    // the receiving time says "more rows than drivers - these come from Y"; it's the same people, once
     const gone = l.ds.filter((r) => r.movedTo);
     for (const to of [...new Set(gone.map((r) => r.movedTo))]) {
-      out.push(`<li class="warn">Moved to ${esc(to)} (not enough rows here): ${names(gone.filter((r) => r.movedTo === to).map((r) => r.d))}</li>`);
+      const g = gone.filter((r) => r.movedTo === to);
+      out.push(`<li class="warn">${plural(g.length, "more driver")} than Amazon has rows here, so ${g.length === 1 ? "this driver goes" : "these drivers go"} to <b>${esc(to)}</b> instead: ${names(g.map((r) => r.d))}</li>`);
     }
-    if ((l.moved || []).length) out.push(`<li class="warn">Moved here from ${esc([...new Set(l.moved.map((r) => r.movedFrom))].join(" / "))}: ${names(l.moved.map((r) => r.d))}</li>`);
+    if ((l.moved || []).length) {
+      const from = [...new Set(l.moved.map((r) => r.movedFrom))].join(" / ");
+      out.push(`<li class="warn">Amazon has ${plural(l.moved.length, "more row")} here than drivers, so ${l.moved.length === 1 ? "this driver comes" : "these drivers come"} over from <b>${esc(from)}</b>: ${names(l.moved.map((r) => r.d))}</li>`);
+    }
     const nf = by("notfound"); if (nf.length) out.push(`<li class="bad">Not in Amazon's associate list: ${names(nf.map((r) => r.d))}</li>`);
     const am = by("ambiguous"); if (am.length) out.push(`<li class="bad">More than one match in Amazon's list — not placed: ${am.map((r) => `${nameOf(r.d)} (${esc(r.why)})`).join(", ")}</li>`);
     const gr = by("group"); if (gr.length) out.push(`<li class="bad">Amazon lists them as ${esc(gr[0].why)} — not placed: ${names(gr.map((r) => r.d))}</li>`);
-    const al = by("already"); if (al.length) out.push(`<li class="muted">Already on a row in Amazon (skipped, that's fine): ${al.map((r) => nameOf(r.d) + whereNote(r, l)).join(", ")}</li>`);
+    const al = by("already"); if (al.length) out.push(`<li class="muted">Already on Amazon — nothing to do: ${al.map((r) => nameOf(r.d) + whereNote(r, l)).join(", ")}</li>`);
     const fa = by("failed"); if (fa.length) out.push(`<li class="bad">Couldn't place: ${fa.map((r) => `${nameOf(r.d)} — ${esc(r.why)}`).join("; ")}</li>`);
-    const lo = by("leftover"); if (lo.length) out.push(`<li class="warn">More drivers than empty rows — left over: ${names(lo.map((r) => r.d))}</li>`);
+    const lo = by("leftover"); if (lo.length) out.push(`<li class="bad">No empty row for them at any start time — not put on Amazon: ${names(lo.map((r) => r.d))}</li>`);
     const nm = (xs) => xs.map((x) => esc(x.name || "someone")).join(", ");
     if (final) {
       const ns = by("match"); if (ns.length) out.push(`<li class="warn">Not filled (stopped): ${names(ns.map((r) => r.d))}</li>`);
-      const sw = (l.swapped || []); if (sw.length) out.push(`<li class="warn">Swapped out (not on a route on the Live board): ${nm(sw)}</li>`);
-      const cl = (l.cleared || []); if (cl.length) out.push(`<li class="warn">Taken off (not on a route on the Live board): ${nm(cl)}</li>`);
+      const sw = (l.swapped || []); if (sw.length) out.push(`<li class="warn">Replaced (no longer on a route on the Live board): ${nm(sw)}</li>`);
+      const cl = (l.cleared || []); if (cl.length) out.push(`<li class="warn">Taken off, row left empty (no longer on a route on the Live board): ${nm(cl)}</li>`);
       const cf = (l.clearFailed || []); if (cf.length) out.push(`<li class="bad">Couldn't take off — do it by hand: ${nm(cf)}</li>`);
       const still = l.w.rows.filter(isEmpty).length;
-      if (still) out.push(`<li class="warn">${plural(still, "empty row")} left empty</li>`);
+      if (still) out.push(`<li class="warn">${plural(still, "row")} still empty</li>`);
       const flagged = l.w.rows.filter((r) => errMark(r));
       if (flagged.length) out.push(`<li class="bad">Amazon shows a red ! on ${plural(flagged.length, "row")} at this time — check them</li>`);
     } else {
-      if (l.swapOut.length) out.push(`<li class="warn">Not on a route on the Live board any more — a Live board driver goes in their place: ${nm(l.swapOut)}</li>`);
-      if (l.clear.length) out.push(`<li class="warn">Not on a route on the Live board any more — their row will be emptied: ${nm(l.clear)}</li>`);
+      if (l.swapOut.length) out.push(`<li class="warn">On Amazon but no longer on a route on the Live board — someone from the Live board takes their row: ${nm(l.swapOut)}</li>`);
+      if (l.clear.length) out.push(`<li class="warn">On Amazon but no longer on a route on the Live board — their row will be emptied: ${nm(l.clear)}</li>`);
       const stay = l.free - l.toFill.length;
-      if (stay > 0) out.push(`<li class="warn">${plural(stay, "empty row")} will stay empty</li>`);
+      if (stay > 0) out.push(`<li class="bad">${plural(stay, "row")} will still be empty after the fill — not enough drivers</li>`);
     }
-    if (!l.s) out.push(`<li class="warn">Nobody on the schedule for this start time</li>`);
+    if (!l.s) out.push(`<li class="warn">Nobody on the Live board at this start time</li>`);
+    // the header compares Amazon's rows with the Live board's drivers at this time (Jose 2026-11-14:
+    // "18 empty rows" read as 18 short when it was 6) - rows already holding someone are named apart
+    const had = l.routes - l.empty;
     const head = final
-      ? `<b>${esc(l.w.label)}</b> — ${plural(l.routes, "row")} · ${plural(l.ds.length, "driver")} · ${l.placed || 0} filled`
-      : `<b>${esc(l.w.label)}</b> — ${plural(l.routes, "row")} · ${plural(l.ds.length, "driver")} · ${plural(l.empty, "empty row")}`;
+      ? `<b>${esc(l.w.label)}</b> — Amazon: ${plural(l.routes, "row")} · ${l.placed || 0} filled just now`
+      : `<b>${esc(l.w.label)}</b> — Amazon: ${plural(l.routes, "row")}${had ? ` (${had} already ${had === 1 ? "has" : "have"} someone)` : ""} · Live board: ${plural(l.ds.length, "driver")}`;
     const who = !final && l.toFill.length
       ? `<details><summary>Who goes in (${l.toFill.length})</summary><ol>${l.toFill.map((r) => `<li>${nameOf(r.d)}</li>`).join("")}</ol></details>` : "";
     return `<div class="wave">${head}${out.length ? `<ul>${out.join("")}</ul>` : ""}${who}</div>`;
@@ -672,10 +681,10 @@
     let h = "";
     for (const s of p.noWave) {
       const left = s.drivers.filter((r) => !r.movedTo);
-      if (left.length) h += `<div class="wave"><span class="bad">No <b>${esc(s.label)}</b> rows in ${esc(p.target.short)} (schedule ${esc(s.sched)}) — not placed: ${names(left.map((r) => r.d))}</span></div>`;
+      if (left.length) h += `<div class="wave"><span class="bad">Amazon has no <b>${esc(s.label)}</b> rows in ${esc(p.target.short)} (Live board time ${esc(s.sched)}) — not placed:${names(left.map((r) => r.d))}</span></div>`;
     }
     const sk = payload.skipped || [];
-    if (sk.length) h += `<p class="muted">Not rostered: ${sk.map((s) => `${esc(s.name)} (${esc(String(s.why || "").toLowerCase())})`).join(", ")}</p>`;
+    if (sk.length) h += `<p class="muted">Not put on Amazon: ${sk.map((s) => `${esc(s.name)} (${esc(String(s.why || "").toLowerCase())})`).join(", ")}</p>`;
     for (const o of p.others.filter((x) => x.sp && x.empty)) {
       h += `<p class="warn">Also ${esc(o.short)}: ${plural(o.empty, "empty row")}. Save this one first, then open that one with its + and click the bookmark again.</p>`;
     }
@@ -865,14 +874,16 @@
   function renderMoves() {
     const slot = box.querySelector(".lvmoves");
     if (!slot || !mv.list || !mv.list.length) return;
-    const to = (m) => `${esc(m.name)} → ${esc(m.to)}`;
+    // the Live board's time can differ from Amazon's for the same wave (Jose 2026-11-14) - say both
+    const amz = (m) => ((plan ? movedOf(plan) : []).find((r) => r.d.name === m.name) || {}).movedTo;
+    const to = (m) => { const a = amz(m); return `${esc(m.name)} → ${esc(m.to)}${a && a !== m.to ? ` (Amazon's ${esc(a)})` : ""}`; };
     if (!mv.res) { slot.innerHTML = `<p class="muted">Updating the Live board to match: ${mv.list.map(to).join(", ")}…</p>`; return; }
     const by = new Map(mv.res.results.filter((r) => r && typeof r === "object").map((r) => [r.name, r]));
     const good = mv.list.filter((m) => by.has(m.name) && by.get(m.name).ok === true);
     let h = good.length ? `<p><b>Live board updated:</b> ${good.map(to).join(", ")}</p>` : "";
     for (const m of mv.list.filter((x) => !good.includes(x))) {
       const why = String((by.get(m.name) || {}).why || mv.res.error || "no answer from the Live board window").replace(/\.\s*$/, "");
-      h += `<p class="bad">Live board NOT updated for ${esc(m.name)}: ${esc(why)} — change it there by hand (to ${esc(m.to)}).</p>`;
+      h += `<p class="bad">Live board NOT updated for ${esc(m.name)}: ${esc(why)} — change it there by hand (to ${esc(m.to)} on the Live board).</p>`;
     }
     slot.innerHTML = h;
   }

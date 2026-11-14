@@ -89,7 +89,7 @@ Seed with `seed-moves.js` (as above; re-paste it before each run - a run saves t
 - `rows=more` (Amazon 5): Daniel Lynch backup -> route (ticked); after the change 5 rows filled, Colin and
   Casey moved to 11:25 and the Live board follows ("Live board updated: …").
 - `rows=rerun` (rostered before: Alex + Daniel at 11:05, Colin at 11:25): no checklist ("Amazon and the
-  Live board both have 4 routes"); Casey goes in Daniel's place ("Swapped out: Daniel Lynch"), Grace in
+  Live board both have 4 routes"); Casey goes in Daniel's place ("Replaced: Daniel Lynch"), Grace in
   the empty 11:25 row.
 - `rows=rerun2` (+ Olga Pre on an 11:25 row, one more row): **Skip — fill as it is**, then
   **Fill 2 rows, take 1 off**: Casey in Daniel's place, Grace in the empty row, Olga's row emptied.

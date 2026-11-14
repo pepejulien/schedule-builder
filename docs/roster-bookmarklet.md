@@ -60,7 +60,7 @@ engine can't load, the panel says so and fills as before.
 **Step 2 — the fill, with swaps.** A Standard Parcel row holding someone who isn't a route
 driver on the Live board any more ("stale" — matched the same way, Transporter ID then name; an
 ambiguous match counts as on the board) is a free row: empty rows fill first, then a stale row
-gets a Live board driver **in that person's place** ("Swapped out: …"); a stale row nobody is
+gets a Live board driver **in that person's place** ("Replaced: …"); a stale row nobody is
 left for is **emptied** ("Taken off: …"). If Amazon won't take a swap (red ! etc.) the person is
 put back. Rows holding a Live board route driver are never touched; other services are never
 touched. Still nothing is saved until dispatch presses Save.
@@ -133,7 +133,11 @@ touched. Still nothing is saved until dispatch presses Save.
 - Another start time (Jose 2026-10-23): Amazon's wave split often differs from the
   schedule's. A driver left over at their start time, or whose start time has no rows on
   Amazon, goes into a spare empty row at the nearest other start time (later one on a tie).
-  The panel says "Moved to 10:45 AM" / "Moved here from 10:25 AM". Once their pick is in,
+  The panel names the same people once on each side (one move, never a swap; Jose 2026-11-14):
+  the sending time "6 more drivers than Amazon has rows here, so these drivers go to **10:25 AM**
+  instead: …", the receiving time "Amazon has 6 more rows here than drivers, so these drivers come
+  over from **10:45 AM**: …". Each start time's header is "Amazon: 18 rows (N already have someone)
+  · Live board: 12 drivers" - not "18 empty rows", which read as 18 short. Once their pick is in,
   the Live board is moved to match (next section).
 - Report in the panel: filled N of M; not in Amazon's list; more than one match;
   already on a row; left over (fewer empty rows than drivers); empty rows left; start
