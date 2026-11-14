@@ -158,12 +158,16 @@ export function startRosterPage(root, iso) {
   let eng = null;                                     // a promise of {d, rep}, started once the day is read
 
   // the plan for Amazon's row count -> {plan, planError}
+  // The drivers come from the SAME read as the engine (Jose 2026-11-14): the first summary snapshot
+  // can be an older cached copy, and the checklist said "both have 27" while the fill list had 28.
   async function planFor(rows, dayName) {
     try {
       const ctx = await eng;
       const m = await liveRequest('roster_plan', { day: dayName, rows });
       if (!m.ok) return { plan: null, planError: m.error.message };
-      return { plan: { ...m.data, rev: ctx.d.meta.rev }, planError: null };
+      const day = dayPayload(JSON.parse(ctx.d.summary), ctx.d.meta.rev);
+      return { ...(day.error ? {} : { drivers: day.drivers, skipped: day.skipped, rev: day.rev }),
+        plan: { ...m.data, rev: ctx.d.meta.rev }, planError: null };
     } catch (e) { return { plan: null, planError: e.message || String(e) }; }
   }
 

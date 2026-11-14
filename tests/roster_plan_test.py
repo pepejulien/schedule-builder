@@ -103,6 +103,23 @@ u = J(runner.undo_last)
 d2 = next(d for d in u['days'] if d['day'] == D)
 ok(d2['routes'] == day['routes'] and d2['backup'] == day['backup'], 'one undo puts all 3 back')
 
+# an EXTRA route made a backup again leaves the counts as they were (Jose 2026-11-14: Enoch's
+# extra route made a backup took Sun from 27 routes to 26 and gave it a 6th backup slot)
+bkd = next(x['name'] for x in r0['drivers'] if kinds(x['cells'].get(D)) == 'backup')
+r = J(runner.set_role, {'day': D, 'name': bkd, 'to': 'road', 'confirm_limits': True, 'confirm_unavailable': True, 'today': TODAY})
+if r.get('ok'):
+    dx = next(d for d in r['days'] if d['day'] == D)
+    ok(dx['routes'] == day['routes'], f'{bkd}: backup -> extra route, count stays {day["routes"]}')
+    r = J(runner.roster_apply, {'day': D, 'picks': [{'kind': 'backup', 'name': bkd}], 'today': TODAY})
+    ok(r.get('ok') and r['roster_results'][0]['ok'], 'extra route -> backup applied')
+    dx = next(d for d in r['days'] if d['day'] == D)
+    ok(dx['routes'] == day['routes'] and dx['waves'] == day['waves'], f'route counts unchanged ({dx["routes"]}, {dx["waves"]})')
+    ok(dx['backup'] == day['backup'], f'no extra backup slot ({dx["backup"]} == {day["backup"]})')
+    J(runner.undo_last)
+    J(runner.undo_last)
+else:
+    ok(False, f'set_role to road refused: {r}')
+
 # 2 too few: 2 backups get a route, best first
 p = J(runner.roster_plan, {'day': D, 'rows': live + 2, 'today': TODAY})
 rt = [c for c in p['changes'] if c['kind'] == 'route']

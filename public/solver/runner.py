@@ -2222,13 +2222,19 @@ def _ra_to_backup(res, day, name):
         raise ValueError("has no route that day any more")
     st, why = _swap_assess(res, dr, label)
     wave = _cell_wave(label)
+    # an EXTRA route (the wave already over its count) leaves the counts alone, and a backup slot
+    # someone left open is filled before a new one is made (Jose 2026-11-14: Enoch's extra route
+    # made a backup took Sun from 27 routes to 26 and gave it a 6th backup slot)
+    over = wave is not None and _wave_filled(res, day, wave) > res.waves[day].get(wave, 0)
+    bk_open = res.backup.get(day, 0) - sum(1 for v in res.cell[day].values() if "Backup" in v)
     dr["prim"].remove(day)
     dr["bk"].append(day)
     res.cell[day][i] = (wave + " Backup") if wave else "Backup"
-    if wave in res.waves[day] and res.waves[day][wave] > 0:
+    if not over and wave in res.waves[day] and res.waves[day][wave] > 0:
         res.waves[day][wave] -= 1
         res.routes[day] = sum(res.waves[day].values())
-    res.backup[day] = res.backup.get(day, 0) + 1
+    if bk_open <= 0:
+        res.backup[day] = res.backup.get(day, 0) + 1
     if st == "warn":
         _STATE["ovr_policy"].add(norm(dr["name"]))
     desc = (f"Made {dr['name']}'s {day} {wave or ''} route a backup {_RP_NOTE} "
