@@ -429,7 +429,12 @@
   function review(my) {
     const pl = payload.plan;
     let note = "";
+    // the checklist (rules engine) and the fill list (the Live board's saved day) must count the same
+    // drivers; Jose 2026-11-14 saw "both have 27" with 28 in the fill list (one left with no row)
+    const sent = (payload.drivers || []).length;
+    const odd = pl && pl.live != null && pl.live !== sent;
     if (payload.planError) note = `<p class="warn">Couldn't check the Live board against Amazon's routes (${esc(payload.planError)}) — filling as it is.</p>`;
+    else if (odd) note = `<p class="bad">The checklist counted ${plural(pl.live, "driver")} on routes, but the Live board sent ${sent}. It may have changed in the middle. Click <b>Start over</b> before filling.</p>`;
     else if (pl && pl.rows != null && !pl.diff) note = `<p class="muted">Amazon and the Live board both have ${plural(pl.rows, "route")}.</p>`;
     ap.note = note;
     if (!pl || !(pl.changes || []).length) {
@@ -649,7 +654,7 @@
     const gr = by("group"); if (gr.length) out.push(`<li class="bad">Amazon lists them as ${esc(gr[0].why)} — not placed: ${names(gr.map((r) => r.d))}</li>`);
     const al = by("already"); if (al.length) out.push(`<li class="muted">Already on Amazon — nothing to do: ${al.map((r) => nameOf(r.d) + whereNote(r, l)).join(", ")}</li>`);
     const fa = by("failed"); if (fa.length) out.push(`<li class="bad">Couldn't place: ${fa.map((r) => `${nameOf(r.d)} — ${esc(r.why)}`).join("; ")}</li>`);
-    const lo = by("leftover"); if (lo.length) out.push(`<li class="bad">No empty row for them at any start time — not put on Amazon: ${names(lo.map((r) => r.d))}</li>`);
+    const lo = by("leftover"); if (lo.length) out.push(`<li class="bad">Amazon has no row left for ${lo.length === 1 ? "this driver" : "these drivers"}, so they stay off Amazon but still on a route on the Live board: ${names(lo.map((r) => r.d))}. Make them a backup on the Live board, or add a row on Amazon.</li>`);
     const nm = (xs) => xs.map((x) => esc(x.name || "someone")).join(", ");
     if (final) {
       const ns = by("match"); if (ns.length) out.push(`<li class="warn">Not filled (stopped): ${names(ns.map((r) => r.d))}</li>`);
@@ -684,7 +689,7 @@
       if (left.length) h += `<div class="wave"><span class="bad">Amazon has no <b>${esc(s.label)}</b> rows in ${esc(p.target.short)} (Live board time ${esc(s.sched)}) — not placed:${names(left.map((r) => r.d))}</span></div>`;
     }
     const sk = payload.skipped || [];
-    if (sk.length) h += `<p class="muted">Not put on Amazon: ${sk.map((s) => `${esc(s.name)} (${esc(String(s.why || "").toLowerCase())})`).join(", ")}</p>`;
+    if (sk.length) h += `<p class="muted">Backups and trainers don't get an Amazon row: ${sk.map((s) => `${esc(s.name)} (${esc(String(s.why || "").toLowerCase())})`).join(", ")}</p>`;
     for (const o of p.others.filter((x) => x.sp && x.empty)) {
       h += `<p class="warn">Also ${esc(o.short)}: ${plural(o.empty, "empty row")}. Save this one first, then open that one with its + and click the bookmark again.</p>`;
     }
