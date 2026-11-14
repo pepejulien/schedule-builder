@@ -234,7 +234,7 @@ const offerDone = (o, c) => o.status === 'closed' || o.status === 'filled' || (c
 // the rules refuse it, the server closes pending ones on publish; the page offers only "Close it" (= deny with
 // CALL_OFF_WHY, the same words the server uses).
 
-const REFUSED = { full: 'the day was full', closed: 'requests were closed for that week' };
+const REFUSED = { full: 'the day was full', closed: 'requests were closed for that week', weekend: 'it would be a 2nd full weekend off that month' };
 export const refusedText = (r) => REFUSED[r && r.refused] || 'the app said no';
 
 // what the driver reads when a review is closed because its week is published (= hub schedule_reviews.BLOCK_WHY)
