@@ -7,6 +7,7 @@ one undo step. Training pairs are never touched.
 
 Run:  python tests/gen_fixtures.py   (once)  then  python tests/roster_plan_test.py
 """
+import copy
 import json
 import os
 import sys
@@ -77,10 +78,15 @@ ok(p.get('ok') and p['rows'] is None and p['diff'] == 0, 'no count: diff 0')
 
 # 3 too many: 3 route drivers to backup, ticked, never a trainee
 p = J(runner.roster_plan, {'day': D, 'rows': live - 3, 'today': TODAY})
-bk = [c for c in p['changes'] if c['kind'] == 'backup']
+bk = [c for c in p['changes'] if c['kind'] == 'backup' and not c.get('alt')]
 ok(len(bk) == 3 and all(c['checked'] for c in bk), '3 too many: 3 ticked moves to backup')
+# someone else instead (Jose 2026-11-15): the next in line, unticked
+alt = [c for c in p['changes'] if c['kind'] == 'backup' and c.get('alt')]
+ok(0 < len(alt) <= runner.ALT_BACKUPS and not any(c['checked'] for c in alt), f'{len(alt)} next-in-line offered, unticked')
+ok(not {c['name'] for c in alt} & {c['name'] for c in bk}, 'offers are other drivers')
 cell = {x['name']: x['cells'].get(D) for x in r0['drivers']}
 ok(all(kinds(cell[c['name']]) == 'route' for c in bk), 'only plain route drivers go to backup')
+ok(all(kinds(cell[c['name']]) == 'route' for c in alt), 'offers are route drivers')
 print('   ', [(c['name'], c['why']) for c in bk])
 
 # the worst-ranked go: recompute the rank order and check the 3 are the 3 at the bottom
@@ -89,6 +95,7 @@ ranked = runner._rp_order([runner._rp_info(runner._STATE['res'], runner._STATE['
                  if kinds(runner._STATE['res'].cell[D].get(i)) == 'route'
                  and runner.norm(dr['name']) not in runner._STATE['marks'].get(D, {})])
 ok({c['name'] for c in bk} == {x['name'] for x in ranked[::-1][:3]}, 'the 3 at the bottom of the ranking go')
+ok([c['name'] for c in alt] == [x['name'] for x in ranked[::-1][3:3 + len(alt)]], 'offers in order: next at the bottom first')
 
 r = J(runner.roster_apply, {'day': D, 'picks': [{'kind': c['kind'], 'name': c['name']} for c in bk], 'today': TODAY})
 ok(r.get('ok') and all(x['ok'] for x in r['roster_results']), 'applied the 3')
@@ -162,7 +169,7 @@ if six:
     ok(rk is not None and rk['days'] >= 6, f'{six["name"]}: 6+ days in 7 with no backup is a risk ({rk})')
     p = J(runner.roster_plan, {'day': D, 'rows': live, 'today': TODAY})
     c = next((c for c in p['changes'] if c['kind'] == 'six' and c['name'] == six['name']), None)
-    ok(c is not None and not c['checked'] and '60 hours' in c['why'], '6-day offered, unticked, says 60 hours')
+    ok(c is not None and not c['checked'] and '54h' in c['why'], f'6-day offered, unticked, says over 54h ({c and c["why"]})')
     if c and c.get('with'):
         r = J(runner.roster_apply, {'day': D, 'picks': [{'kind': 'six', 'name': c['name'], 'with': c['with']}], 'today': TODAY})
         x = r['roster_results'][0]
@@ -196,6 +203,30 @@ ok(abs(est - 11.5) < 0.01, f'one route day planned at their own 11.5h ({est})')
 dr['h_prev'] = {first - 7 * runner.ONE: 11.5}
 ok(runner._rp_avg_day(res, dr) == res.PH, 'fewer than 2 real days: the planned 10h')
 dr['h_act'], dr['h_prev'] = old
+
+# 6 days in 7 under 54 hours ranks like anyone (Jose 2026-11-15: Owen, ~53h in 7 days)
+res = runner._STATE['res']
+D3 = res.DAYS[0]
+first = res.DATEALL[res.DAYS[0]]
+dr = next(d for i, d in enumerate(res.roster) if kinds(res.cell[D3].get(i)) == 'route' and not d['bk']
+          and not d['helper'] and not d['extra'] and not d['meet'] and not d.get('unav'))
+keep = {k: copy.deepcopy(dr.get(k)) for k in ('prim', 'w_prev', 'h_prev', 'h_act')}
+others = [d for d in res.DAYS if d != D3][:5]
+dr['prim'][:] = [D3] + others                 # 6 days in the week
+dr['w_prev'], dr['h_act'] = [], {}
+for hlen, want_six in ((8.0, False), (11.0, True)):
+    dr['h_prev'] = {first - 14 * runner.ONE: hlen, first - 13 * runner.ONE: hlen}   # usual day length
+    x = runner._rp_info(res, runner._STATE['cfg'], dr, D3, None)
+    print('   ', hlen, x['rank'], x['h7'], x['six_ok'], runner._rp_why(x))
+    if want_six:
+        ok(x['rank'] == 3 and x['h7'] > runner.SIX_SAFE_H, f'{hlen}h days: 6 in 7 at {x["h7"]}h -> first in line for backup')
+        ok(runner._six_risk(res, dr, D3) is not None, f'{hlen}h days: 6-day risk offered')
+    else:
+        ok(x['rank'] < 3 and x['six_ok'] and x['h7'] <= runner.SIX_SAFE_H, f'{hlen}h days: 6 in 7 at {x["h7"]}h -> ranks like anyone (rank {x["rank"]})')
+        ok('under 54h' in runner._rp_why(x), 'says why: under 54h')
+        ok(runner._six_risk(res, dr, D3) is None, f'{hlen}h days: no 6-day risk')
+for k, v in keep.items():
+    dr[k] = v
 
 print('\nFAILED: ' + '; '.join(fails) if fails else '\nall ok')
 sys.exit(1 if fails else 0)

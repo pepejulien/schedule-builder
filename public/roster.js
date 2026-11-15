@@ -412,7 +412,8 @@
    * The app sends payload.plan = {live, rows, diff, short, pairs, changes: [{id, kind, name, wave,
    * why, checked, with?, with_wave?, with_why?}]} (engine roster_plan). kind backup: more drivers
    * on routes than Amazon has rows -> this route becomes a backup; route: fewer -> this backup gets
-   * a route; six: 6 days in 7 with no backup day -> a backup, `with` takes the route. Dispatch
+   * a route (backup changes with alt: next in line, unticked - pick someone else, Jose 2026-11-15);
+   * six: 6 days in 7 over 54h -> a backup, `with` takes the route. Dispatch
    * ticks what to do; "Change the Live board" sends {type: "jajb-roster-apply", date, rev, picks}
    * to the app window, which answers {type: "jajb-roster-applied", date, results, payload?, error?}
    * (payload = the day again, fresh). Nothing on Amazon's page changes in this step. */
@@ -445,14 +446,19 @@
     const groups = [
       ["backup", pl.diff > 0 ? `Amazon has <b>${plural(pl.rows, "route")}</b> (all services) but the Live board has <b>${plural(pl.live, "driver")}</b> on routes. To match, these drivers go to backup:` : ""],
       ["route", pl.diff < 0 ? `Amazon has <b>${plural(pl.rows, "route")}</b> (all services) but the Live board has only <b>${plural(pl.live, "driver")}</b> on routes. To match, these backups get a route:` : ""],
-      ["six", "6 days in 7 with no backup day — make them a backup? (only if you tick it)"],
+      ["six", "6 days in 7 and could go over 54 hours — make them a backup? (only if you tick it)"],
     ];
     let h = ask.warn + `<p><b>${esc(dayLabel(date))}</b> — first, the Live board.</p>`;
     for (const [kind, head] of groups) {
-      const cs = pl.changes.filter((c) => c.kind === kind);
-      if (!cs.length) continue;
-      h += `<div class="wave"><p style="margin:0 0 4px">${head}</p>` + cs.map((c) =>
-        `<label style="display:block;margin:3px 0;cursor:pointer"><input type="checkbox" data-id="${esc(c.id)}"${c.checked ? " checked" : ""} style="margin-right:6px">${changeLine(c)}</label>`).join("") + "</div>";
+      const cs = pl.changes.filter((c) => c.kind === kind && !c.alt);
+      const alts = pl.changes.filter((c) => c.kind === kind && c.alt);
+      if (!cs.length && !alts.length) continue;
+      const line = (c) => `<label style="display:block;margin:3px 0;cursor:pointer"><input type="checkbox" data-id="${esc(c.id)}" data-kind="${esc(c.kind)}"${c.checked ? " checked" : ""} style="margin-right:6px">${changeLine(c)}</label>`;
+      h += `<div class="wave"><p style="margin:0 0 4px">${head}</p>` + cs.map(line).join("");
+      // someone else instead (Jose 2026-11-15): untick a pick above, tick one of these
+      if (alts.length) h += `<p class="muted" style="margin:8px 0 4px">Or someone else instead — next in line for backup (untick one above, tick one here):</p>` + alts.map(line).join("");
+      if (kind === "backup" && pl.diff > 0) h += `<p class="bk-count" style="margin:6px 0 0"></p>`;
+      h += "</div>";
     }
     if (pl.short) h += `<p class="bad">Still ${plural(pl.short, "route")} short — not enough backups who can take a route. Add someone on the Live board ("Who can work extra?") or fill by hand.</p>`;
     if (pl.pairs) h += `<p class="muted">Training pairs stay as they are.</p>`;
@@ -466,7 +472,20 @@
       if (!picks.length) { showPreview(my); return; }
       sendApply(my, picks);
     });
-    const relabel = () => { const n = boxes().filter((b) => b.checked).length; go.textContent = n ? `Change the Live board (${n})` : "Nothing ticked — go on to fill"; };
+    const relabel = () => {
+      const n = boxes().filter((b) => b.checked).length;
+      go.textContent = n ? `Change the Live board (${n})` : "Nothing ticked — go on to fill";
+      // how many are ticked for backup vs how many Amazon needs
+      const cnt = box.querySelector(".bk-count");
+      if (cnt) {
+        const k = boxes().filter((b) => b.checked && b.getAttribute("data-kind") === "backup").length;
+        const left = pl.diff - k;
+        cnt.className = "bk-count " + (left ? "warn" : "muted");
+        cnt.innerHTML = `Ticked for backup: <b>${k} of ${pl.diff}</b>` + (left > 0
+          ? ` — tick ${plural(left, "more driver")}, or ${left === 1 ? "one driver" : "some drivers"} won't get an Amazon row`
+          : left < 0 ? ` — that's ${-left} more than Amazon needs; they'll be backups and ${left === -1 ? "a row stays" : "rows stay"} empty` : "");
+      }
+    };
     boxes().forEach((b) => { b.onchange = relabel; });
     relabel();
     btn("Skip — fill as it is", () => {

@@ -212,7 +212,7 @@ export function startRosterPage(root, iso) {
       }
       opener.postMessage(p, origin);                     // that origin only
       if (p.error) { say('err', p.error + ' (sent to Amazon)'); return; }
-      const n = ((p.plan && p.plan.changes) || []).length;
+      const n = ((p.plan && p.plan.changes) || []).filter((c) => !c.alt).length;   // not the next-in-line offers
       if (n) { say('info', `Sent ${dayLabel(iso)} to Amazon. Keep this window open — Amazon's page lists ${n} Live board change${n === 1 ? '' : 's'} to tick.`); return; }
       say('ok', `Sent ${dayLabel(iso)} to Amazon — this window closes by itself.`);
       setTimeout(() => window.close(), 3000);

@@ -1982,11 +1982,12 @@ def set_role(payload_json):
 # ---- Roster to Amazon: match the Live board to Amazon's routes (Jose 2026-11-12) ----
 # The roster bookmark (public/roster.js) counts Amazon's associate rows for the day (every
 # service). roster_plan says who should hold the day's routes when the Live board has more or
-# fewer route drivers than that, and which route drivers work 6 days in 7 with no backup day
+# fewer route drivers than that, and which route drivers work 6 days in 7 over SIX_SAFE_H hours
 # (risk of going over 60 hours). Dispatch ticks what to do in the bookmark's checklist;
 # roster_apply makes those changes. Training pairs are never touched (they need a rebuild).
 # Who keeps / gets a route: the "Who can work extra?" order - no rule breaks, soft limit,
-# overtime, 6 days in 7 (never picked by itself) - then the board tier, then less overtime
+# overtime, 6 days in 7 over SIX_SAFE_H hours (never picked by itself) - then the board tier,
+# then less overtime
 # (2026-11-12: within overtime, OT_SAVE_H or more hours less overtime beats tier).
 _TIER_RANK = {"Top performer": 0, "Solid": 1, "Fair": 2, "Unrated": 3,
               "Underperforming": 4, "Termination review": 5}
@@ -2003,6 +2004,42 @@ def _rp_tier(cfg, res, dr):
     return None, _CLS_RANK.get(_classify(dr, res), 3)
 
 
+# 6 days in 7 is only a real risk when those 7 days could go over this many hours on the clock
+# (Jose 2026-11-15: "the maximum amount of hours does not exceed 54"). At or under it the
+# driver ranks like anyone else; once a backup day has passed, the real hours bring it down.
+SIX_SAFE_H = 54
+
+
+def _proj_hours(res, dr, day, avg):
+    """{date: hours on the clock} if dr drives a route on `day`: real hours for days already
+    over (Route Tracker, last week too), the driver's own day length `avg` for route days to
+    come, 2h for a backup."""
+    hrs = _day_hours(res, dr)
+    act = dr.get("h_act") or {}
+    for k in ("prim", "helper"):
+        for d in dr[k]:
+            if d in res.DATEALL and d != day and res.DATEALL[d] not in act:
+                dt = res.DATEALL[d]
+                hrs[dt] = hrs.get(dt, 0) - res.PH + avg
+    dt0 = res.DATEALL[day]
+    hrs[dt0] = max(act.get(dt0, 0), avg)
+    return hrs
+
+
+def _six_hours(res, dr, day, avg):
+    """(most hours on the clock in any 7 days in a row holding `day` if dr drives a route that
+    day, first day of that window) - see _proj_hours."""
+    hrs = _proj_hours(res, dr, day, avg)
+    dt0 = res.DATEALL[day]
+    best, start = -1.0, dt0
+    for k in range(7):
+        a = dt0 - k * ONE
+        tot = sum(hrs.get(a + j * ONE, 0) for j in range(7))
+        if tot > best:
+            best, start = tot, a
+    return round(best, 1), start
+
+
 def _rp_info(res, cfg, dr, day, wave):
     """dr holding a route on `day` (their own route / backup that day set aside), sorted
     like "Who can work extra?": rank 0 ok, 1 soft limit, 2 overtime, 3 6-day, 4 blocked."""
@@ -2013,27 +2050,36 @@ def _rp_info(res, cfg, dr, day, wave):
         if day in dr["bk"]:
             dr["bk"].remove(day)
         status, reasons, _, limits = _assess(res, dr, day, "road")
+        est, avg = _rp_est(res, dr, day)
+        h7, a7 = _six_hours(res, dr, day, avg)
     finally:
         dr["prim"][:], dr["bk"][:] = p0, b0
     off = status == "unavail"
+    # a 6th day in 7 only puts a driver first in line for backup when those 7 days could go
+    # over SIX_SAFE_H on the clock (Jose 2026-11-15: Owen, 6 days in 7 but ~53h, 3 days this
+    # week - kept off a route he could drive with no overtime). Under it he ranks like anyone.
+    six = [x for x in limits if x.startswith("6-day:")]
+    six_ok = bool(six) and h7 <= SIX_SAFE_H
+    other = [x for x in limits if not x.startswith("6-day:")] if six_ok else limits
     if status == "blocked":
         rank = 4
-    elif any(x.startswith("6-day:") for x in limits):
+    elif six and not six_ok:
         rank = 3
-    elif limits:
+    elif other:
         rank = 2
     elif status == "warn" or (off and len(reasons) > 1 + len(limits)):
         rank = 1
     else:
         rank = 0
     tier, trank = _rp_tier(cfg, res, dr)
-    est, avg = _rp_est(res, dr, day)
     ot = max(0.0, est - (res.HCAP or 40))
     if rank < 2 and ot > 0:
         rank = 2          # long real days: the rules' 10h plan says no overtime, the clock says yes
     return dict(name=dr["name"], wave=wave, rank=rank, tier=tier, trank=trank,
                 hours=_hours(res, dr), off=off, est=est, avg=avg, ot=ot,
-                limits=[x for x in reasons if not off or x != reasons[0]][:2])
+                h7=h7, six_ok=six_ok,
+                limits=[x for x in reasons if (not off or x != reasons[0])
+                        and not (six_ok and x.startswith("6-day:"))][:2])
 
 
 # Overtime is money (Jose 2026-11-12): among drivers who'd all go into overtime, the one with
@@ -2109,27 +2155,35 @@ def _rp_why(x):
         s += f", ~{_num(round(x['ot'], 1))}h overtime"
     if x["limits"] and x["rank"] != 2:
         s += f" ({x['limits'][0]})"
+    if x.get("six_ok"):
+        s += f" (6 days in 7, but about {_num(round(x['h7']))}h in those 7 days - under {SIX_SAFE_H}h)"
+    elif x["rank"] == 3 and x.get("h7") is not None:
+        s += f" (about {_num(round(x['h7']))}h in those 7 days - over {SIX_SAFE_H}h)"
     return s
 
 
 def _six_risk(res, dr, day):
-    """A 7-day window holding `day` with 6+ worked days and not one backup day in it
-    (every day a full shift: could go over 60 hours) -> {days, span, hours}, else None."""
+    """A 7-day window holding `day` with 6+ worked days whose hours on the clock could go over
+    SIX_SAFE_H (real hours for days over, the driver's own day length for days to come;
+    Jose 2026-11-15, was "no backup day in it") -> {days, span, hours}, else None."""
     s = _all_worked(res, dr)
     dt = res.DATEALL[day]
     if dt not in s:
         return None
-    hrs = _day_hours(res, dr)
+    hrs = _proj_hours(res, dr, day, _rp_avg_day(res, dr))
     for k in range(6, -1, -1):
         a = dt - k * ONE
         wk = [a + j * ONE for j in range(7) if a + j * ONE in s]
         if len(wk) <= _max7d(res):
             continue
-        if any(0 < hrs.get(x, 0) <= res.BH for x in wk):
+        h = sum(hrs.get(a + j * ONE, 0) for j in range(7))
+        if h <= SIX_SAFE_H:
             continue
-        return dict(days=len(wk), span=f"{a:%a %m/%d}-{a + 6 * ONE:%a %m/%d}",
-                    hours=_num(sum(hrs.get(x, 0) for x in wk)))
+        return dict(days=len(wk), span=f"{a:%a %m/%d}-{a + 6 * ONE:%a %m/%d}", hours=_num(round(h)))
     return None
+
+
+ALT_BACKUPS = 10      # other drivers offered (unticked) when some route drivers must go to backup
 
 
 def roster_plan(payload_json):
@@ -2137,8 +2191,10 @@ def roster_plan(payload_json):
     Read-only. Returns {live, rows, diff, short, pairs, changes: [{id, kind, name, wave, why,
     checked, with?, with_wave?, with_why?}]}:
       kind 'backup' - more route drivers than Amazon rows: this route becomes a backup (ticked);
+                      then up to ALT_BACKUPS more, next in line, unticked with alt=True, so
+                      dispatch can untick one and tick someone else (Jose 2026-11-15);
       kind 'route'  - fewer: this backup gets a route (ticked; a 6th day is listed unticked);
-      kind 'six'    - 6 days in 7 with no backup day: make it a backup (unticked), and `with`
+      kind 'six'    - 6 days in 7 over SIX_SAFE_H hours: make it a backup (unticked), and `with`
                       (the best backup left) takes the route."""
     try:
         p = json.loads(payload_json)
@@ -2198,12 +2254,16 @@ def roster_plan(payload_json):
             r = _six_risk(res, dr, day)
             if not r:
                 continue
-            c = ch("six", x, False, f"{r['days']} days in 7 ({r['span']}), no backup day - "
-                                    f"could go over 60 hours ({r['hours']}h)")
+            c = ch("six", x, False, f"{r['days']} days in 7 ({r['span']}) - "
+                                    f"about {r['hours']}h in those 7 days (over {SIX_SAFE_H}h)")
             w = next((b for b in spare if b["name"] not in used), None)
             if w:
                 used.add(w["name"])
                 c.update({"with": w["name"], "with_wave": w["wave"], "with_why": _rp_why(w)})
+        if diff > 0:
+            # next in line for backup, unticked: untick a pick, tick one of these instead
+            for x in [x for x in _rp_order(route)[::-1] if x["name"] not in used][:ALT_BACKUPS]:
+                ch("backup", x, False, _rp_why(x))["alt"] = True
         return json.dumps(dict(ok=True, day=day, live=live, rows=rows, diff=diff, short=short,
                                pairs=pairs, changes=changes), default=str)
     except Exception:  # noqa: BLE001
