@@ -42,7 +42,14 @@ function rateFields(dr, m, w, inWin) {
     if (ev.track === 'dsb' && inWin(ev.d, w)) dsb += (ev.mag || 1);
   });
   m.dsb = dsb;
-  const sp = 1.5 * m.low + 4 * m.high + 1.5 * m.stuck + m.oodt / 25 + (m.rescpk || 0) / 25;
+  // Delivery completion counts 2x (Driver Board CW_COMP, Jose 2026-11-18): OODT + uncoded RTS packages
+  // and the packages a rescue took.
+  const CW_COMP = 2;
+  let osub = 0;
+  (dr.events || []).forEach((ev) => {
+    if (ev.track === 'oodt' && inWin(ev.d, w)) { const b = ev.bd || {}; osub += (b['OUT OF DRIVING TIME'] || 0) + (b['NO RTS CODE SELECTED'] || 0); }
+  });
+  const sp = 1.5 * m.low + 4 * m.high + 1.5 * m.stuck + m.oodt / 25 + (CW_COMP - 1) * osub / 25 + CW_COMP * (m.rescpk || 0) / 25;
   const vp = 3 * m.cdf + 15 * dsb;
   m.rateScore = -(Math.round((sp / (m.routes + KR) * 100 + vp / (m.pkgs + KP) * 1000) * 10) / 10);
   m.enough = m.routes >= 1;
