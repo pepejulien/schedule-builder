@@ -20,7 +20,20 @@ export const TIER_ORDER = [
 function makeInWin(asofDate) {
   // rounded: across a DST change the gap is n days +/- 1 hour (2026-10-26, as the board)
   const days = (iso) => Math.round((asofDate - new Date(iso + 'T00:00:00')) / 86400000);
-  return (iso, w) => (w === 0 ? true : days(iso) <= (w - 1));
+  const inWin = (iso, w) => (w === 0 ? true : days(iso) <= (w - 1));
+  inWin.days = days;
+  return inWin;
+}
+
+// The Driver Board's route window (Jose 2026-11-18): Rate covers the window or the driver's last RW_MIN
+// routes, whichever reaches further back; under RW_TIER routes no Solid / Top performer (Unrated).
+const RW_MIN = 15, RW_TIER = 10;
+function rwWin(dr, w, inWin) {
+  if (!(w >= 30) || !inWin.days) return w;
+  const ex = (dr.exp || []).map((x) => [inWin.days(x[0]), x[1]]).filter((x) => x[0] >= 0).sort((a, b) => a[0] - b[0]);
+  let acc = 0;
+  for (const x of ex) { acc += x[1]; if (acc >= RW_MIN) return Math.max(w, x[0] + 1); }
+  return ex.length ? 100000 : w;
 }
 
 function expInWin(dr, w, inWin) {
@@ -60,6 +73,7 @@ function tier(m) {
   if (m.ncns >= 2 || m.high >= 2 || m.strikes >= 3) return 'Termination review';
   if (!m.enough) return 'Unrated';
   const r = m.rateScore;
+  if (m.routes < RW_TIER && r >= -10) return 'Unrated';
   if (r >= -3.5) return 'Top performer';
   if (r >= -10) return 'Solid';
   if (r >= -25) return 'Fair';
@@ -68,6 +82,7 @@ function tier(m) {
 }
 
 function metrics(dr, w, PEN, MPR, inWin) {
+  w = rwWin(dr, w, inWin);
   const m = { low: 0, high: 0, ncns: 0, callout: 0, oodt: 0, cdf: 0, cdfbeh: 0, rg: 0, resc: 0, rescpk: 0, stuck: 0 };
   (dr.events || []).forEach((e) => {
     if (!inWin(e.d, w)) return;
