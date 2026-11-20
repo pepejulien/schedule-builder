@@ -19,6 +19,9 @@ export function assembleFromWizard(w) {
     weekTimeoff: w.weekTimeoffISO && w.weekTimeoffISO === w.week.startISO ? (w.weekTimeoff || null) : null,
     driverPrefsFailed: !!w.driverPrefsFailed,
     timeoffFailed: !!w.timeoffFailed && w.weekTimeoffISO === w.week.startISO,
+    // locked days (2026-11-20), same rule: only the ones read for this week
+    weekLocks: w.weekLocksISO && w.weekLocksISO === w.week.startISO ? (w.weekLocks || null) : null,
+    locksFailed: !!w.locksFailed && w.weekLocksISO === w.week.startISO,
     nameAliases: w.nameAliases || {},
   };
   const out = assembleConfig(state);

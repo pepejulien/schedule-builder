@@ -101,9 +101,12 @@ export function Step8Review() {
       </p>
 
       ${config.training_pairs.length || config.auto_training.length ? html`<h3>Training pairs</h3>
-        <p>${[...config.training_pairs.map((p) => `${p.trainer} → ${p.trainee}`),
-          ...config.auto_training.map((p) => `Auto (next up: ${p.pool.slice(0, 3).join(', ') || 'no trainers marked'}) → ${p.trainee}`)]
+        <p>${[...config.training_pairs.map((p) => `${p.trainer} → ${p.trainee}${p.day ? ` (🔒 ${p.day})` : ''}`),
+          ...config.auto_training.map((p) => `Auto (next up: ${p.pool.slice(0, 3).join(', ') || 'no trainers marked'}) → ${p.trainee}${p.day ? ` (🔒 ${p.day})` : ''}`)]
           .join('; ')}</p>` : ''}
+      ${(config.locked_days || []).length ? html`<h3>Locked days</h3>
+        <p>${config.locked_days.map((l) => `🔒 ${l.name} ${l.day}${l.training ? ` (training${l.trainer ? ' with ' + l.trainer : ''})` : ''}`).join('; ')}</p>
+        <p class="hint">Placed before anyone else and never moved. Set or removed on the Live board, under this week.</p>` : ''}
       ${warnings.map((w) => html`<${Banner} kind="warn">${w}<//>`)}
       ${Object.keys(config.extra_worked_days).length ? html`<h3>Dispatch duty</h3>
         <p>${Object.entries(config.extra_worked_days).map(([n, d]) => `${n}: ${d.join('/')}`).join('; ')}</p>` : ''}

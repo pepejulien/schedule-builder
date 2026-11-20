@@ -6,8 +6,11 @@ import { html } from '../preact-setup.js';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { setState, toast } from '../store.js';
 import { Spinner } from '../ui.js';
-import { canTimeoff, watchTimeoff, saveTimeoff, clearTimeoff } from '../api.js';
+import { canTimeoff, watchTimeoff, saveTimeoff, clearTimeoff, canEditLocks, watchLocks, saveLock, clearLock,
+  canReviews, watchReviews, storeGet } from '../api.js';
 import { loadDriverPrefs, loadDriverRoster, saveDriverPref, weekUnavailable, WHY_LABEL, prefSummary, prefHasLimit } from '../lib/driver-prefs.js';
+import { lockOf, lockConflicts, conflictLine, conflictQuestion } from '../lib/locks.js';
+import { LockMark } from './lock-mark.js';
 import { DAYS } from '../lib/waves.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
 import { SHIFT_COLORS, todayISO } from './live-model.js';
@@ -33,15 +36,70 @@ function rosterOnce() {
   return rosterCache.p;
 }
 
+// What a lock on (name, date) clashes with — the driver's own time off, and a picked trainer's — as warning lines.
+function clashes(name, date, trainer, src) {
+  const own = lockConflicts(name, date, src);
+  const tr = trainer ? lockConflicts(trainer, date, src).map((c) => ({ ...c, who: `Trainer ${trainer}` })) : [];
+  return [...own, ...tr];
+}
+
+// "Lock: working this day" (2026-11-20, lib/locks.js): the note, the optional training day and its trainer;
+// a clash with time off asks first and keeps the time-off record as it is.
+function LockForm({ week, name, date, dayTxt, trainers, src, onDone, onCancel }) {
+  const first = name.split(/\s+/)[0];
+  const [note, setNote] = useState('');
+  const [training, setTraining] = useState(false);
+  const [trainer, setTrainer] = useState('');
+  const [ask, setAsk] = useState('');               // the time-off question, '' = not asking
+  const [saving, setSaving] = useState(false);
+  const pick = (trainers || []).filter((t) => nkey(t) !== nkey(name));
+  const save = async (sure) => {
+    if (saving) return;
+    const q = conflictQuestion(clashes(name, date, training ? trainer : '', src), date);
+    if (q && !sure) { setAsk(q); return; }
+    setSaving(true);
+    try {
+      await saveLock(week, { driverKey: name, date, note: note.trim().slice(0, 300), training, trainer: training ? trainer : '' });
+      toast(`🔒 ${first} locked in on ${dayTxt}${training ? ' (training)' : ''}`);
+      onDone();
+    } catch { toast(SAVE_ERR, 'err'); setSaving(false); }
+  };
+  if (ask) {
+    return html`<div class="fw-menu-form">
+      <p class="lk-ask" role="alert">⚠ ${ask}</p>
+      <p class="muted" style="margin:0 0 8px">The time off stays on file as it is.</p>
+      <div class="row">
+        <button class="small primary" disabled=${saving} onClick=${() => save(true)}>${saving ? 'Saving…' : 'Lock anyway'}</button>
+        <button class="small ghost" disabled=${saving} onClick=${onCancel}>Cancel</button>
+      </div></div>`;
+  }
+  return html`<div class="fw-menu-form">
+    <div class="fw-menu-title">🔒 Lock ${first} working ${dayTxt}</div>
+    <input type="text" maxlength="300" placeholder="Note (optional)" value=${note} disabled=${saving}
+      aria-label="Note (optional)" onInput=${(e) => setNote(e.target.value)} />
+    <label class="lk-check"><input type="checkbox" checked=${training} disabled=${saving}
+      onChange=${(e) => setTraining(e.target.checked)} /> Training day</label>
+    ${training ? html`<select class="lk-trainer" value=${trainer} disabled=${saving} aria-label="Trainer"
+        onChange=${(e) => setTrainer(e.target.value)}>
+        <option value="">Trainer: the builder picks</option>
+        ${pick.map((t) => html`<option value=${t}>${t}</option>`)}
+      </select>` : ''}
+    <div class="row">
+      <button class="small primary" disabled=${saving} onClick=${() => save(false)}>${saving ? 'Saving…' : 'Lock'}</button>
+      <button class="link" disabled=${saving} onClick=${onCancel}>Cancel</button>
+    </div></div>`;
+}
+
 // The card anchored under a clicked day.
-function DayMenu({ week, m, canEdit, prefs, onPrefs, onClose }) {
+function DayMenu({ week, m, canEdit, prefs, onPrefs, onClose, lock, canLock, trainers, src }) {
   const { name, day, date, rec, why } = m;
   const first = name.split(/\s+/)[0];
   const dayTxt = `${day} ${shortDate(date)}`;
-  const [form, setForm] = useState(!why);        // the note box + save button
+  const [form, setForm] = useState(!why && !lock);  // the note box + save button
   const [note, setNote] = useState(rec && rec.note ? rec.note : '');
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState(false);  // "won't be scheduled on any Wednesday" check
+  const [locking, setLocking] = useState(false);  // the lock form
   const alive = useRef(true);
   const inp = useRef(null);
   useEffect(() => () => { alive.current = false; }, []);
@@ -87,16 +145,35 @@ function DayMenu({ week, m, canEdit, prefs, onPrefs, onClose }) {
     setDays(DAYS.filter((d) => d === day || base.includes(d)), `${first} can work ${full}s again`, null);
   };
   const repeatBtn = html`<button class="small" disabled=${saving} onClick=${() => setConfirm(true)}>Repeat every ${day}</button>`;
+  const head = html`<div class="fw-menu-head"><b>${name}</b> <span class="muted">${dayTxt}</span>
+    <button class="dm-x fw-x" aria-label="Close" onClick=${onClose}>×</button></div>`;
+  if (locking) {
+    return html`<div class="fw-menu" role="dialog" aria-label=${`${name}, ${dayTxt}`} style=${m.style}>${head}
+      <${LockForm} week=${week} name=${name} date=${date} dayTxt=${dayTxt} trainers=${trainers} src=${src}
+        onDone=${onClose} onCancel=${() => setLocking(false)} /></div>`;
+  }
+  // a locked day (2026-11-20): who, when, the training, a clash with time off; Unlock for a manager
+  const unlock = () => go(() => clearLock(week, lock.driverKey, date), `${first} unlocked on ${dayTxt}`);
+  const lockClash = lock ? clashes(name, date, lock.training ? lock.trainer : '', src) : [];
 
   return html`<div class="fw-menu" role="dialog" aria-label=${`${name}, ${dayTxt}`} style=${m.style}>
-    <div class="fw-menu-head"><b>${name}</b> <span class="muted">${dayTxt}</span>
-      <button class="dm-x fw-x" aria-label="Close" onClick=${onClose}>×</button></div>
+    ${head}
+    ${lock ? html`<div class="fw-menu-info lk-info">
+      <div><b>🔒 ${lock.training ? 'Locked training day' : 'Locked: working this day'}</b>
+        <span class="muted"> · by ${lock.by || '—'}, ${when(lock.at)}</span></div>
+      ${lock.training ? html`<div>Trainer: ${lock.trainer || 'the builder picks'}</div>` : ''}
+      ${lock.note ? html`<div class="fw-menu-note">“${lock.note}”</div>` : ''}
+      ${lockClash.map((c) => html`<div class="lk-ask">⚠ ${conflictLine(c, date, c.who)} — still on file</div>`)}
+      ${canLock ? html`<div class="row fw-menu-acts"><button class="small" disabled=${saving} onClick=${unlock}>${saving ? 'Saving…' : 'Unlock'}</button></div>`
+        : html`<p class="muted" style="margin:4px 0 0">Only a manager can change a lock.</p>`}
+    </div>` : ''}
     ${why === 'timeoff' ? html`<div class="fw-menu-info">
       <div><b>${WHY_LABEL.timeoff}</b> <span class="muted">· by ${(rec && rec.by) || '—'}, ${when(rec && rec.at)}</span></div>
       ${rec && rec.note ? html`<div class="fw-menu-note">“${rec.note}”</div>` : ''}</div>` : ''}
     ${why === 'days' || why === 'weekend' ? html`<div class="fw-menu-info">
       <b>${WHY_LABEL[why]}</b> — from their preferences</div>` : ''}
-    ${!canEdit ? html`<p class="muted" style="margin:6px 0 0">Days off are entered on the JAJB site.</p>`
+    ${lock && !why ? ''
+      : !canEdit ? html`<p class="muted" style="margin:6px 0 0">Days off are entered on the JAJB site.</p>`
       : confirm ? html`<div class="fw-menu-form">
         <p style="margin:6px 0 8px">${first} won't be scheduled on any ${full} from now on — same as unticking ${day} on Driver preferences.</p>
         <div class="row">
@@ -121,6 +198,8 @@ function DayMenu({ week, m, canEdit, prefs, onPrefs, onClose }) {
         ${why === 'days' ? html`<button class="small" disabled=${saving} onClick=${canAgain}>${saving ? 'Saving…' : `Can work ${full}s again`}</button>` : ''}
         <button class="small" disabled=${saving} onClick=${() => openDriver(name)}>Edit preferences</button>
         <button class="small" disabled=${saving} onClick=${() => setForm(true)}>Mark day off anyway</button></div>`}
+    ${!lock && canLock && !confirm ? html`<div class="row fw-menu-acts lk-acts">
+      <button class="small" disabled=${saving} onClick=${() => setLocking(true)}>🔒 Lock: working this day</button></div>` : ''}
   </div>`;
 }
 
@@ -131,6 +210,11 @@ export function FutureWeek({ week, label }) {
   const [q, setQ] = useState('');
   const [only, setOnly] = useState(false);       // only drivers with a day off this week
   const [menu, setMenu] = useState(null);        // {name, day, date, top, left}
+  const [locks, setLocks] = useState(null);      // locked days (2026-11-20): {"<ISO>|<name>": lock} | null = loading
+  const [lockErr, setLockErr] = useState(false); // the locks couldn't be read
+  const [reviews, setReviews] = useState([]);    // the Driver app's day-off reviews this week (a lock's clash check)
+  const [trainers, setTrainers] = useState([]);  // the marked trainers (Trainers & settings), for a training lock
+  const [unlocking, setUnlocking] = useState(false);
   const wrap = useRef(null);
   const menuEl = useRef(null);
 
@@ -138,15 +222,19 @@ export function FutureWeek({ week, label }) {
     let alive = true;
     rosterOnce().then((r) => { if (alive) setRoster(r || []); }, () => { if (alive) setRoster([]); });
     loadDriverPrefs().then((p) => { if (alive) setPrefs(p); }, () => { if (alive) setPrefs({ v: 1, drivers: {} }); });
+    storeGet('standing/config.json').then((c) => { if (alive && c && Array.isArray(c.trainers)) setTrainers(c.trainers); }, () => {});
     return () => { alive = false; };
   }, []);
 
   // live: another dispatcher's day off shows up at once. A week change starts clean.
   useEffect(() => {
     let alive = true;
-    setTimeoff(null); setMenu(null);
+    setTimeoff(null); setMenu(null); setLocks(null); setLockErr(false); setReviews([]);
+    const end = toISODate(addDays(parseISODate(week), 6));
     const un = watchTimeoff(week, (t) => { if (alive) setTimeoff(t || {}); });
-    return () => { alive = false; if (typeof un === 'function') un(); };
+    const unL = watchLocks(week, (l) => { if (alive) { setLocks(l || {}); setLockErr(!l); } });
+    const unR = canReviews() ? watchReviews(week, end, (r) => { if (alive) setReviews(r || []); }) : null;
+    return () => { alive = false; for (const f of [un, unL, unR]) if (typeof f === 'function') f(); };
   }, [week]);
 
   // the card closes on a click outside it, Escape, or the grid scrolling under it
@@ -159,7 +247,7 @@ export function FutureWeek({ week, label }) {
     return () => { document.removeEventListener('pointerdown', down); document.removeEventListener('keydown', key); };
   }, [!!menu]);
 
-  if (!roster || !prefs || !timeoff) {
+  if (!roster || !prefs || !timeoff || !locks) {
     return html`<div class="card"><${Spinner}/> Loading the drivers and their days off…</div>`;
   }
 
@@ -178,6 +266,8 @@ export function FutureWeek({ week, label }) {
   for (const r of roster) if (r.active !== false) names.set(nkey(r.name), r.name);
   for (const n of Object.keys(prefs.drivers || {})) if (!names.has(nkey(n)) && !gone.has(nkey(n))) names.set(nkey(n), n.trim());
   for (const t of weekOff) if (!names.has(nkey(t.name))) names.set(nkey(t.name), String(t.name).trim());
+  const weekLocks = Object.values(locks).filter((l) => l && l.driverKey && l.date >= week && l.date <= end);
+  for (const l of weekLocks) if (!names.has(nkey(l.driverKey))) names.set(nkey(l.driverKey), String(l.driverKey).trim());
   const all = [...names.values()].sort((a, b) => a.localeCompare(b));
   const rows = all.filter((n) => (!q.trim() || fold(n).includes(fold(q.trim())))
     && (!only || Object.keys(unav[nkey(n)] || {}).length));
@@ -186,8 +276,17 @@ export function FutureWeek({ week, label }) {
   // note alone, not someone who left (2026-10-19)
   const limited = all.filter((n) => prefHasLimit(prefOf[nkey(n)])).length;
   const canEdit = canTimeoff();
+  const canLock = canEditLocks();
+  const src = { timeoff, reviews };
+  const unlock = async (lk) => {
+    if (unlocking) return;
+    setUnlocking(true);
+    try { await clearLock(week, lk.driverKey, lk.date); toast(`${String(lk.driverKey).split(/\s+/)[0]} unlocked on ${shortDate(lk.date)}`); }
+    catch { toast(SAVE_ERR, 'err'); }
+    finally { setUnlocking(false); }
+  };
 
-  const recOf = (name, date) => weekOff.find((t) => t.day === date && nkey(t.name) === nkey(name)) || null;
+  const recOf =(name, date) => weekOff.find((t) => t.day === date && nkey(t.name) === nkey(name)) || null;
   const open = (e, name, d) => {
     const b = e.currentTarget.getBoundingClientRect();
     const box = wrap.current ? wrap.current.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth };
@@ -205,8 +304,11 @@ export function FutureWeek({ week, label }) {
 
   return html`<div class="card">
     <h2 style="margin-bottom:4px">${label} <span class="chip blue fw-badge">Not built yet</span></h2>
-    <p class="hint" style="margin:0">Click a day to mark it off. When you build this week, these days go in as Unavailable.</p>
-    <p class="muted" style="margin:4px 0 0">${plural(asked, 'day off asked', 'days off asked')} · ${plural(limited, 'driver with limits', 'drivers with limits')}</p>
+    <p class="hint" style="margin:0">Click a day to mark it off${canLock ? ' or lock the driver in to work it' : ''}. When you build this week,
+      days off go in as Unavailable${weekLocks.length || canLock ? ' and 🔒 locked days are placed first and kept' : ''}.</p>
+    <p class="muted" style="margin:4px 0 0">${plural(asked, 'day off asked', 'days off asked')} · ${plural(limited, 'driver with limits', 'drivers with limits')}${
+      weekLocks.length ? ` · ${plural(weekLocks.length, 'locked day', 'locked days')}` : ''}</p>
+    ${lockErr ? html`<p class="muted lk-ask" style="margin:4px 0 0">Couldn't read the locked days — check the connection.</p>` : ''}
 
     <div class="row lv-tools">
       <input type="search" placeholder="Search a driver…" value=${q} onInput=${(e) => setQ(e.target.value)}
@@ -239,10 +341,19 @@ export function FutureWeek({ week, label }) {
                 const x = u[d.day];
                 const past = d.date < today;
                 const off = x && x.why === 'timeoff';
-                const tip = past ? 'This day is over' : off ? `${WHY_LABEL.timeoff}${x.note ? ' — ' + x.note : ''}`
-                  : x ? `${WHY_LABEL[x.why]} — from their preferences` : 'Click to mark a day off';
-                return html`<td class=${'lv-cell fw-cell k-' + (off ? 'off' : 'empty') + (d.date === today ? ' today' : '') + (past ? ' fw-past' : '')}
-                  title=${tip} onClick=${past ? undefined : (e) => open(e, name, d)}>${off
+                const lk = lockOf(weekLocks, name, d.date);
+                const clash = lk ? clashes(name, d.date, lk.training ? lk.trainer : '', src) : [];
+                const warn = clash.map((c) => conflictLine(c, d.date, c.who)).join('. ');
+                const tip = (lk ? `🔒 ${lk.training ? `Locked training day${lk.trainer ? ' with ' + lk.trainer : ''}` : 'Locked: working this day'}${
+                  lk.note ? ' — ' + lk.note : ''}${warn ? '\n⚠ ' + warn : ''}\n` : '')
+                  + (past ? 'This day is over' : off ? `${WHY_LABEL.timeoff}${x.note ? ' — ' + x.note : ''}`
+                    : x ? `${WHY_LABEL[x.why]} — from their preferences` : lk ? 'Click for the lock' : 'Click to mark a day off');
+                return html`<td class=${'lv-cell fw-cell k-' + (lk ? 'lock' : off ? 'off' : 'empty') + (d.date === today ? ' today' : '') + (past ? ' fw-past' : '')}
+                  title=${tip} onClick=${past ? undefined : (e) => open(e, name, d)}>${lk
+                    ? html`<div class="lv-blk b-lock"><span>${lk.training ? 'Training' : 'Working'}</span><${LockMark}
+                      st=${{ kind: 'ok', text: lk.training ? 'Locked training day' : 'Locked: working this day' }} warn=${warn}
+                      busy=${unlocking} onUnlock=${canLock && !past ? () => unlock(lk) : undefined} /></div>`
+                    : off
                     ? html`<div class="lv-blk b-off" style=${`background:${SHIFT_COLORS.off}`}><span>${WHY_LABEL.timeoff}</span></div>${
                       x.note ? html`<span class="lv-notedot" aria-label="Has a note">💬</span>` : ''}`
                     : x ? html`<span class="fw-pref">${WHY_LABEL[x.why]}</span>` : ''}</td>`;
@@ -251,12 +362,18 @@ export function FutureWeek({ week, label }) {
           })}
         </tbody>
       </table></div>
-      ${live ? html`<div ref=${menuEl}><${DayMenu} key=${live.name + '|' + live.date + '|' + (live.why || '')} week=${week} m=${live}
-        canEdit=${canEdit} prefs=${prefs} onPrefs=${setPrefs} onClose=${() => setMenu(null)} /></div>` : ''}
+      ${live ? (() => {
+        const lk = lockOf(weekLocks, live.name, live.date);
+        return html`<div ref=${menuEl}><${DayMenu} key=${live.name + '|' + live.date + '|' + (live.why || '') + (lk ? '|L' : '')} week=${week} m=${live}
+          canEdit=${canEdit} prefs=${prefs} onPrefs=${setPrefs} onClose=${() => setMenu(null)}
+          lock=${lk} canLock=${canLock} trainers=${trainers} src=${src} /></div>`;
+      })() : ''}
     </div>
     <div class="lv-legend">
       <span class="lv-sw" style=${`background:${SHIFT_COLORS.off}`}>${WHY_LABEL.timeoff}</span>
       <span class="fw-pref">${WHY_LABEL.days} / ${WHY_LABEL.weekend} — from their preferences</span>
+      <span class="lv-sw b-lock">🔒 Locked: working</span>
+      <span class="muted">⚠ = clashes with time off</span>
     </div>
   </div>`;
 }

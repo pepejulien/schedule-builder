@@ -15,6 +15,8 @@ import { CountsEditor, waveMins, waveBg } from '../live/counts-editor.js';
 import { parseISODate } from '../lib/weeks.js';
 import { candGroup, groupClass, isOff } from '../lib/cand-groups.js';
 import { TIER_META, TIER_ORDER, ConfirmOverride, LimitConfirm, runConfirmed } from './step9-build.js';
+import { lockState } from '../lib/locks.js';
+import { LockMark } from '../live/lock-mark.js';
 
 const DAY_IDX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 const shortDate = (iso) => { const d = parseISODate(iso); return `${d.getMonth() + 1}/${d.getDate()}`; };
@@ -456,6 +458,9 @@ export function WeekGrid({ r, cov, busy, moving, cands, onCell, onName, onTake, 
   const candMap = moving && cands && cands.list ? new Map(cands.list.map((c) => [c.name, c])) : null;
   const covBy = Object.fromEntries((cov.days || []).map((x) => [x.day, x]));
   const nCols = days.length + 4;
+  // locked days (2026-11-20): 🔒 on the cell; one the build couldn't place says why, right on the cell
+  const lockAt = {};
+  for (const l of r.locks || []) (lockAt[l.name] = lockAt[l.name] || {})[l.day] = l;
 
   return html`<div>
     <div class="row lv-tools" style="margin:6px 0 8px; flex-wrap:wrap">
@@ -515,9 +520,12 @@ export function WeekGrid({ r, cov, busy, moving, cands, onCell, onName, onTake, 
                       : html`<span class="be-lock" title=${(c.reasons || []).join('; ')}>🔒 ${(c.reasons || [])[0] || ''}</span>`}
                     ${k !== 'empty' ? html`<div class="be-under"><${Block} v=${v} /></div>` : ''}</td>`;
                 }
+                const lk = (lockAt[d.name] || {})[x.day];
+                const ls = lk ? lockState(lk) : null;
                 return html`<td class=${'lv-cell k-' + k + (x.open ? '' : ' closed') + (isSrc && moving.day === x.day ? ' be-src' : '')}
-                  title=${v ? (k === 'off' && why ? `${v} — ${why}` : v) : x.open ? 'Not scheduled — click for options' : 'Closed'}
-                  onClick=${x.open && !moving ? () => onCell(d.name, x.day) : undefined}><${Block} v=${v} /></td>`;
+                  title=${(ls ? `🔒 ${ls.text}${lk.note ? ' — ' + lk.note : ''}\n` : '') + (v ? (k === 'off' && why ? `${v} — ${why}` : v) : x.open ? 'Not scheduled — click for options' : 'Closed')}
+                  onClick=${x.open && !moving ? () => onCell(d.name, x.day) : undefined}><${Block} v=${v} />${
+                    ls ? html`<${LockMark} st=${ls} />` : ''}</td>`;
               })}
               <td class=${'lv-stat' + (nd > (lim.max_worked_days || 5) ? ' lv-warn' : '')}>${nd}</td>
               <td class=${'lv-stat' + (d.hours > (lim.weekly_hours_cap || 40) ? ' lv-warn' : '')}>${d.hours}h</td>
@@ -530,6 +538,7 @@ export function WeekGrid({ r, cov, busy, moving, cands, onCell, onName, onTake, 
       ${Object.entries(WAVE_COLORS).map(([w, bg]) => html`<span class="lv-sw" style=${`background:${bg}`}>${w}</span>`)}
       <span class="lv-sw" style=${`background:${SHIFT_COLORS.trainer}`}>Trainer</span>
       <span class="lv-sw" style=${`background:${SHIFT_COLORS.off}`}>Unavailable</span>
+      ${(r.locks || []).length ? html`<span class="muted">🔒 locked day (set on the Live board)</span>` : ''}
       <span class="muted">Click any day to change it · click a name to give that driver a shift</span>
     </div>
   </div>`;

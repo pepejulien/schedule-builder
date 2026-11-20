@@ -318,6 +318,34 @@ export function timeoffOnce(weekISO, ms = 6000) {
   });
 }
 
+// Locked days (Jose 2026-11-20, card #1360): a driver pinned to work a date in a week not published yet; the
+// weekly build places them first and never moves them (lib/locks.js). Firestore schedule_locks/{weekStart}/days/{id}
+// through jajb.js, kept apart from the built week so a rebuild never loses them:
+//   watchScheduleLocks(week, cb) -> cb({"<ISO day>|<driverKey>": {driverKey, date, note, training, trainer, by, at}})
+//                                   | cb(null) when the read failed
+//   saveScheduleLock(week, {driverKey, date, note, training, trainer})   (driverKey = the driver's name, as the
+//                                   builder matches it; trainer '' = the builder picks; signed + timed by jajb.js)
+//   deleteScheduleLock(week, driverKey, date)
+// Set / removed only while the week isn't published (the Live board then shows them read-only). Who may: the
+// same logins that publish and edit a week. An older jajb.js has none: canLocks() is false, no lock buttons,
+// and the build runs without locks.
+export const canLocks = () => onFirebase() && typeof window.JAJB.watchScheduleLocks === 'function';
+export const canEditLocks = () => canLocks() && typeof window.JAJB.saveScheduleLock === 'function'
+  && typeof window.JAJB.deleteScheduleLock === 'function';
+export const watchLocks = (weekISO, cb) => (canLocks() ? window.JAJB.watchScheduleLocks(weekISO, cb) : (cb({}), () => {}));
+export const saveLock = (weekISO, lock) => window.JAJB.saveScheduleLock(weekISO, lock);
+export const clearLock = (weekISO, driverKey, dayISO) => window.JAJB.deleteScheduleLock(weekISO, driverKey, dayISO);
+// Once, like timeoffOnce: {} = really no locks, null = the read failed / no answer in time.
+export function locksOnce(weekISO, ms = 6000) {
+  if (!canLocks()) return Promise.resolve({});
+  return new Promise((resolve) => {
+    let done = false, un = null;
+    const finish = (d) => { if (done) return; done = true; clearTimeout(t); setTimeout(() => un && un(), 0); resolve(d && typeof d === 'object' ? d : null); };
+    const t = setTimeout(() => finish(null), ms);
+    un = window.JAJB.watchScheduleLocks(weekISO, finish);
+  });
+}
+
 // Day-off reviews (Driver App SPEC-v4, 2026-10-19): Firestore timeoff_reviews/{TID_YYYY-MM-DD} — a day off the
 // Driver app refused (full / closed / published) that the driver sent for review. Answered on the Requests page
 // (approve / deny with a reason); the hub's timeoff_review_apply then puts an approved day on the schedule and

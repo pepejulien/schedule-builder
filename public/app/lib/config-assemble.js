@@ -3,10 +3,12 @@
 import { portalToSchedule } from './waves.js';
 import { preflightNames, resolveFuzzy, matchName } from './names.js';
 import { normPref, weekUnavailable, onWeekendDays } from './driver-prefs.js';
+import { locksForBuild, lockList } from './locks.js';
 
 export const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 export const PREFS_FAILED_MSG = "Couldn't read driver preferences — this build doesn't use them.";
 export const TIMEOFF_FAILED_MSG = "Couldn't read the days off asked for this week — check the connection, then build again.";
+export const LOCKS_FAILED_MSG = "Couldn't read this week's locked days — check the connection, then build again.";
 
 const DISCIPLINE = new Set(['Underperforming', 'Termination review']);
 const MOST = new Set(['Top performer', 'Solid']);
@@ -105,6 +107,7 @@ function dayWaves(rows) {
 //   weekTimeoff:{"<ISO>|<name>": {name, day, note}} | null, this week's requested days off
 //   driverPrefsFailed:bool,                                 the prefs read failed: build without them
 //   timeoffFailed:bool,                                     the time-off read failed: build without it
+//   weekLocks:{"<ISO>|<name>": lock} | null, locksFailed:bool  this week's locked days (lib/locks.js)
 //   nameAliases:{ [normName]: rosterName },                 confirmed name matches (optional)
 // }
 export function assembleConfig(state) {
@@ -174,6 +177,29 @@ export function assembleConfig(state) {
   const auto_training = pairsIn
     .filter((p) => p.trainer === AUTO_TRAINER && canon(p.trainee))
     .map((p) => ({ trainee: canon(p.trainee), pool: pool.filter((n) => n !== canon(p.trainee)) }));
+  // Locked days (2026-11-20): placed first by the solver, never moved. A locked training day fixes the pair's
+  // day: with a trainer the manager picked it replaces any pair for that trainee (picked 'manual'); without one
+  // the trainee's pair here (or a new Auto one) trains on that date. "Copy Amazon's schedule exactly" takes
+  // Amazon's sheet as is, so it builds without them.
+  const lk = locksForBuild(exactUsed ? {} : state.weekLocks, state.week?.startISO, roster, state.nameAliases || {});
+  if (state.locksFailed) warnings.push(LOCKS_FAILED_MSG);
+  if (exactUsed && lockList(state.weekLocks, state.week?.startISO).length) {
+    warnings.push(`"Copy Amazon's schedule exactly" is on — this week's locked days aren't used.`);
+  }
+  if (lk.unmatched.length) warnings.push(`Locked, but not on this week's roster: ${[...new Set(lk.unmatched)].join(', ')}.`);
+  const notTrainee = (n) => (p) => p.trainee !== n;
+  for (const p of lk.pairs) {
+    for (const list of [trainingPairs, auto_training]) {
+      const keep = list.filter(notTrainee(p.trainee));
+      list.splice(0, list.length, ...keep);
+    }
+    trainingPairs.push(p);
+  }
+  for (const a of lk.autos) {
+    const had = trainingPairs.find((p) => p.trainee === a.trainee) || auto_training.find((p) => p.trainee === a.trainee);
+    if (had) had.day = a.day;
+    else auto_training.push({ trainee: a.trainee, pool: pool.filter((n) => n !== a.trainee), day: a.day });
+  }
   for (const a of auto_training) {
     if (!a.pool.length) warnings.push(`No trainers are marked for this week's roster — ${a.trainee} won't get a training day. Mark trainers in Trainers & settings.`);
   }
@@ -306,6 +332,7 @@ export function assembleConfig(state) {
   }
   if (prefs.keep_together.length) config.keep_together = prefs.keep_together;
   if (prefs.prefer_ot.length) config.prefer_ot = prefs.prefer_ot;   // soft (2026-10-19)
+  if (lk.locked_days.length) config.locked_days = lk.locked_days;     // locked days (2026-11-20)
 
   // --- name pre-flight (mirror the solver's strict_names) ---
   const allNames = [

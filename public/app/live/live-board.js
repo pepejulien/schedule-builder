@@ -15,7 +15,8 @@ import { setState, setWizard, toast } from '../store.js';
 import { Banner, Spinner, Icon, download } from '../ui.js';
 import { liveRequest, warmup } from '../solver-client.js';
 import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualHours, watchLiveNotes, saveLiveNote, watchLiveConfirms, saveLiveConfirm, watchLiveAttendance, watchLiveLate, saveLiveLate,
-  watchLiveSummary, canWatchSummary, canOffers, canTrades, activeListOnce } from '../api.js';
+  watchLiveSummary, canWatchSummary, canOffers, canTrades, activeListOnce, watchLocks } from '../api.js';
+import { lockOf, lockTip } from '../lib/locks.js';
 import { certIndex, canDrive, certLabel } from '../lib/van-certs.js';
 import { MissingCheck } from './missing.js';
 import { routeDays, backupDays, rtMismatches, rtBackupShown } from './limits.js';
@@ -816,6 +817,7 @@ function Board() {
   const [actDocs, setActDocs] = useState({});       // Route Tracker's actual_hours docs {cur, prev}
   const [att, setAtt] = useState([]);               // attendance records of the week (call-offs / no-shows)
   const [lates, setLates] = useState({});           // late arrivals: {"<ISO day>|<name>": {time, by, at}}
+  const [locks, setLocks] = useState({});           // locked days (2026-11-20): read-only once the week is published
   const autoTried = useRef(new Set());              // dispatch's records already marked (or tried) here
   // re-checked once a minute (2026-10-10): today's RTS lines (the 12-hour day's shows an hour before)
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -1021,7 +1023,7 @@ function Board() {
     engGen.current++; engJson.current = null; smLive.current = null; pendingSync.current = false; toasted.current = 0;
     clearTimeout(lateT.current);
     // a week not built yet: no week to read, no engine, no watches (future-week.js has its own)
-    if (isFuture(sel)) { setNotes({}); setConfirms({}); setActDocs({}); setAtt([]); setLates({}); return undefined; }
+    if (isFuture(sel)) { setNotes({}); setConfirms({}); setActDocs({}); setAtt([]); setLates({}); setLocks({}); return undefined; }
     openWeek(sel);
     const un1 = watchLiveWeek(sel, (m) => { R.current.metaLive = m; setMetaLive(m); });
     // another dispatcher's save: its summary goes on the grid the moment it lands
@@ -1040,10 +1042,11 @@ function Board() {
       if (seen && seen.prevRev !== prevTailRev(pw)) needSync(sel);
     });
     const un2 = watchLiveLog(sel, (l) => setLog(l));
-    setNotes({}); setConfirms({}); setActDocs({}); setAtt([]); setLates({});
+    setNotes({}); setConfirms({}); setActDocs({}); setAtt([]); setLates({}); setLocks({});
     const unAtt = watchLiveAttendance(sel, (l) => setAtt(l || []));
     const unLate = watchLiveLate(sel, (l) => setLates(l || {}));
     const unNotes = watchLiveNotes(sel, (n) => setNotes(n || {}));
+    const unLocks = watchLocks(sel, (l) => setLocks(l || {}));
     const engOk = () => saving.current || ['ready', 'loading'].includes(R.current.eng.status);
     const unConf = watchLiveConfirms(sel, (c) => {
       setConfirms(c || {});
@@ -1064,7 +1067,7 @@ function Board() {
     };
     const un3 = watchActualHours(sel, onActual('cur'));
     const un4 = watchActualHours(pw, onActual('prev'));
-    return () => { unNotes(); unConf(); unAtt(); unLate(); un1(); un2(); un3(); un4(); unSm(); unPrev(); };
+    return () => { unNotes(); unLocks(); unConf(); unAtt(); unLate(); un1(); un2(); un3(); un4(); unSm(); unPrev(); };
   }, [sel]);
 
   // A No-call-no-show / call-off dispatch put on the report (2026-10-08): mark that day here too —
@@ -1561,7 +1564,7 @@ function Board() {
       <${DayList} view=${view} viewRT=${viewRT} day=${vday} searching=${!!q.trim() || !!vanF}
         match=${(n, x) => (!q.trim() || fold(n).includes(fold(q.trim()))) && (!x || vanOk(x))}
         Block=${Block} subLine=${subLine} routeFor=${routeFor} bkFor=${bkFor} markOf=${markOf} notes=${notes} lates=${lates}
-        risks=${risks} ready=${ready} busy=${busy} onCell=${(name, day) => setCell({ name, day })}
+        locks=${locks} risks=${risks} ready=${ready} busy=${busy} onCell=${(name, day) => setCell({ name, day })}
         onCounts=${setCounter} onFind=${goFind} strip=${html`${stripFor(vday)}${tradesFor(vday)}`}
         onPost=${canOffers() ? (date) => setPostAt(date) : null}
         offerLine=${canOffers() ? (date) => html`<${OfferDayLine} date=${date} />` : null} />` : html`
@@ -1623,6 +1626,7 @@ function Board() {
                   const hot = risks[x.name] && risks[x.name].hot.includes(dd.date);
                   const note = notes[dd.date + '|' + x.name];
                   const late = lates[dd.date + '|' + x.name];
+                  const lk = lockOf(locks, x.name, dd.date);
                   const route = routeFor(x.name, dd.date);
                   const rtBk = c.kind === 'empty' && route == null ? bkFor(x.name, dd.date) : undefined;
                   const lm = x.left ? markOf(x.name, dd.day) : null;
@@ -1635,7 +1639,8 @@ function Board() {
                     onMouseLeave=${hot ? () => setPop(null) : undefined}
                     onClick=${!x.notScheduled && (dd.open || note) ? () => { setPop(null); setCell({ name: x.name, day: dd.day }); } : undefined}><${Block} v=${v} route=${route} bk=${rtBk} left=${leftWas} />${
                       note ? html`<span class="lv-notedot" aria-label="Has a comment">💬</span>` : ''}${
-                      late ? html`<span class="lv-notedot" style="right:auto;left:2px" title=${'Late — ' + late.time} aria-label="Late arrival">⏰</span>` : ''}</td>`;
+                      late ? html`<span class="lv-notedot" style="right:auto;left:2px" title=${'Late — ' + late.time} aria-label="Late arrival">⏰</span>` : ''}${
+                      lk ? html`<span class="lv-notedot lk-pub" title=${lockTip(lk)} aria-label=${lockTip(lk)}>🔒</span>` : ''}</td>`;
                 })}
                 <td class=${'lv-stat ' + hoursCls(x.clock_hours ?? x.hours)}>${x.clock_hours ?? x.hours}h</td>
                 <td class=${'lv-stat ' + max7Cls(x.max7 ?? 0)}>${x.max7 ?? '—'}${x.max7 != null ? 'h' : ''}${(() => {

@@ -249,6 +249,26 @@
       delete all[day + '|' + nm];
       put('timeoff/' + week, all); fire();
     },
+    // locked days (2026-11-20): schedule_locks/{week}/days in 'locks/{week}' — the fields api.js documents. Refused
+    // once the week is published, as the hub's rules should.
+    watchScheduleLocks: (week, cb) => listen('locks/' + week, () => get('locks/' + week) || {}, cb),
+    saveScheduleLock: async (week, l) => {
+      await delay(LAT);
+      if (weeks()[week]) throw new Error('Missing or insufficient permissions.');
+      const all = get('locks/' + week) || {};
+      const k = String(l.date) + '|' + String(l.driverKey);
+      all[k] = { driverKey: String(l.driverKey).slice(0, 120), date: String(l.date).slice(0, 10),
+        note: String(l.note || '').trim().slice(0, 300), training: !!l.training, trainer: l.training ? String(l.trainer || '').slice(0, 120) : '',
+        by: name, at: now() };
+      put('locks/' + week, all); fire();
+    },
+    deleteScheduleLock: async (week, driverKey, date) => {
+      await delay(LAT);
+      if (weeks()[week]) throw new Error('Missing or insufficient permissions.');
+      const all = get('locks/' + week) || {};
+      delete all[date + '|' + driverKey];
+      put('locks/' + week, all); fire();
+    },
     // day-off reviews (Driver App SPEC-v4, 2026-10-19): timeoff_reviews/{TID_day} in 'reviews' (times as ms, like
     // jajb.js). __mock.putReview seeds one (the Driver App's server makes them for real); an answer here plays the
     // hub's timeoff_review_apply too: an approved day goes in schedule_timeoff (week not published) or as a

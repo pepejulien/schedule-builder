@@ -477,6 +477,13 @@ def load_config(config_path):
                 bad = [d for d in v if d not in ALL]
                 if bad:
                     errs.append(f"like_days['{nm}']: {bad} not valid days ({ALL})")
+    ld = cfg.get('locked_days')
+    if ld is not None and (not isinstance(ld, list)
+                           or any(not isinstance(x, dict) or not x.get('name')
+                                  or x.get('day') not in ALL for x in ld)):
+        errs.append("'locked_days' must be a list of {name, day (Sun..Sat), training?, trainer?, note?}")
+    if isinstance(tp, list) and any(isinstance(p, dict) and p.get('day') not in (None, *ALL) for p in tp):
+        errs.append(f"training_pairs: a locked 'day' must be one of {ALL}")
 
     if errs:
         raise ScheduleConfigError(
@@ -983,7 +990,39 @@ def build_schedule(cfg, prev_hook=None):
     infeasible = []
     LOCKED = set()
     PAIRLOG = []                       # (trainer, trainee, training day)
-    for pair in cfg.get('training_pairs', []):
+
+    # LOCKED DAYS (Jose 2026-11-20, schedule_locks): a manager pinned a driver to
+    # work a date. cfg['locked_days'] = [{name, day, training?, trainer?, note?}];
+    # a training pair with a 'day' is a locked training day. A lock wins over the
+    # driver's days off for that day only (the manager was warned about time off),
+    # and over their own Drivers-page limits (max days / in a row / weekends): it
+    # is placed before anyone else and never moved. The hard rules still hold --
+    # max_consecutive and max_days_in_7 -- and a day with no free route can't
+    # take it: those stay on LOCKS with a reason ('why') and a note, never dropped
+    # silently. A locked day counts toward the driver's week like any other.
+    LOCKS = []
+
+    def _lock_free(i, d):
+        """Why driver i can't be locked into a route on d (None = they can)."""
+        dr = roster[i]
+        if d not in DAYS or not waves.get(d):
+            return 'no route'
+        if len(pslot[d]) >= routes[d]:
+            return 'no route'
+        PREFS_OFF[0] = True            # the lock wins over their own max in a row
+        try:
+            ok = runok(dr, DATEALL[d])
+        finally:
+            PREFS_OFF[0] = False
+        return None if ok else 'days in a row'
+
+    def _unlock_unav(i, d):
+        dr = roster[i]
+        if d in dr['unav'] and d not in dr['extra'] and d not in dr['meet']:
+            dr['unav'].discard(d)
+            dr['unav_why'].pop(d, None)
+
+    def _pair(pair):
         pt, pn = pair['trainer'], pair['trainee']
         ti = [i for i, dr in enumerate(roster) if resolve(pt, [norm(dr['name'])])]
         ni = [i for i, dr in enumerate(roster) if resolve(pn, [norm(dr['name'])])]
@@ -991,6 +1030,42 @@ def build_schedule(cfg, prev_hook=None):
             raise ScheduleConfigError(
                 f'training_pairs: "{pt}" matched {len(ti)}, "{pn}" matched {len(ni)} roster names')
         t, n = ti[0], ni[0]
+        fixed = pair.get('day')
+
+        if fixed:
+            # a locked training day: that day or nothing (the lock pass then
+            # keeps the trainee on it alone). The lock covers the trainee, and
+            # the trainer only when the manager picked them ('manual'); a
+            # rotation pick has to be free that day.
+            why = None
+            mine = (t, n) if pair.get('manual') else (n,)
+            if t not in mine and fixed in roster[t]['unav']:
+                why = f'{roster[t]["name"]} is off that day'
+            for i in (t, n):
+                dr = roster[i]
+                if why is None and (fixed in dr['prim'] or fixed in dr['helper'] or fixed in dr['extra']
+                                    or fixed in dr['meet']):
+                    why = f'{dr["name"]} already works that day'
+                    break
+            why = why or _lock_free(n, fixed)
+            if why is None:
+                PREFS_OFF[0] = True
+                try:
+                    if not runok(roster[t], DATEALL[fixed]):
+                        why = 'days in a row'
+                finally:
+                    PREFS_OFF[0] = False
+            if why is not None:
+                notes.append(f'TRAINING: {roster[t]["name"]} + {roster[n]["name"]} not '
+                             f'placed on the locked day {fixed} -- {why}')
+                return
+            for i in mine:
+                _unlock_unav(i, fixed)
+            pslot[fixed].append(n); roster[n]['prim'].append(fixed); roster[t]['helper'].append(fixed)
+            LOCKED.add((n, fixed))
+            roster[n]['train_done'] = ALL.index(fixed)
+            PAIRLOG.append((roster[t]['name'], roster[n]['name'], fixed))
+            return
 
         def _day_ok(d):
             if len(pslot[d]) >= routes[d]:
@@ -1021,7 +1096,7 @@ def build_schedule(cfg, prev_hook=None):
             else:
                 infeasible.append(f'TRAINING: no feasible day for '
                                   f'{roster[t]["name"]} + {roster[n]["name"]}')
-            continue
+            return
 
         # Train FIRST (Jose 2026-07-10): the EARLIEST feasible day, preferring
         # one that leaves the trainee an available later day for solo routes.
@@ -1035,6 +1110,41 @@ def build_schedule(cfg, prev_hook=None):
         LOCKED.add((n, dT))
         roster[n]['train_done'] = ALL.index(dT)   # solo days only AFTER this
         PAIRLOG.append((roster[t]['name'], roster[n]['name'], dT))
+
+    def _place_locks():
+        for lk in cfg.get('locked_days') or []:
+            d = lk.get('day')
+            row = dict(name=str(lk.get('name') or ''), day=d, training=bool(lk.get('training')),
+                       trainer=lk.get('trainer') or None, note=str(lk.get('note') or ''), why=None)
+            LOCKS.append(row)
+            h = resolve(row['name'], rnames)
+            i = idx.get(h[0]) if len(h) == 1 else None
+            if i is None:
+                row['why'] = 'not on this week\'s roster' if not h or h[0] not in EXCLUDE else 'excluded'
+            else:
+                dr = roster[i]
+                row['name'] = dr['name']
+                dr.setdefault('locked', set()).add(d)
+                if d in dr['prim'] or d in dr['helper'] or d in dr['extra'] or d in dr['meet']:
+                    if d in dr['prim']:
+                        LOCKED.add((i, d))     # e.g. their locked training day
+                    continue
+                row['why'] = _lock_free(i, d)
+                if row['why'] is None:
+                    _unlock_unav(i, d)
+                    pslot[d].append(i); dr['prim'].append(d)
+                    LOCKED.add((i, d))
+                    continue
+            notes.append(f'LOCKED, NOT PLACED: {row["name"]} {d} -- {row["why"]}')
+
+    pairs = cfg.get('training_pairs', [])
+    for pair in pairs:                 # locked training days first,
+        if pair.get('day'):
+            _pair(pair)
+    _place_locks()                     # then every other locked day,
+    for pair in pairs:                 # then the pairs the builder places
+        if not pair.get('day'):
+            _pair(pair)
 
     # ---- PHASE 1: primaries (hit targets, max most, balance free by primary-day count) ----
     def _fill_days():
@@ -1665,7 +1775,7 @@ def build_schedule(cfg, prev_hook=None):
                   MAXWKND=MAXWKND, weekend_rule=weekend_rule, CAPX=CAPX,
                   XBK=XBK, exchanges=exchanges,
                   prefs_unmatched=prefs_unmatched, KEEPT=KEEPT, PREFD=PREFD, LIKED=LIKED,
-                  OTPREF=OTPREF,
+                  OTPREF=OTPREF, LOCKS=LOCKS,
                   merge_std=merge_std, notes=notes, infeasible=infeasible)
 
 

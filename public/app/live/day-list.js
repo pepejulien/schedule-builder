@@ -5,6 +5,7 @@ import { html } from '../preact-setup.js';
 import { cellInfo, WAVE_COLORS, SHIFT_COLORS } from './live-model.js';
 import { parseISODate } from '../lib/weeks.js';
 import { headCounts } from './offers-model.js';
+import { lockOf, lockTip } from '../lib/locks.js';
 
 // "10:05 AM" < "10:25 AM" < "1:05 PM"
 const waveMins = (w) => { const m = String(w).match(/(\d{1,2}):(\d{2}) ([AP]M)/); if (!m) return 9999;
@@ -34,7 +35,7 @@ export function DayPills({ view, day, today, onPick, dot }) {
   </div>`;
 }
 
-export function DayList({ view, viewRT, day, match, searching, Block, subLine, routeFor, bkFor, markOf, notes, lates, risks,
+export function DayList({ view, viewRT, day, match, searching, Block, subLine, routeFor, bkFor, markOf, notes, lates, locks, risks,
   ready, busy, onCell, onCounts, onFind, strip, onPost, offerLine }) {
   const dd = view.days.find((x) => x.day === day) || view.days[0];
   const date = parseISODate(dd.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
@@ -68,11 +69,13 @@ export function DayList({ view, viewRT, day, match, searching, Block, subLine, r
     const now = risks[x.name] && risks[x.name].now;
     const hot = risks[x.name] && risks[x.name].hot.includes(dd.date);
     const tap = !x.notScheduled && (dd.open || notes[k]);
+    const lk = lockOf(locks, x.name, dd.date);     // a locked day (2026-11-20), read-only here
     const body = html`
       <div class=${'lvd-blk' + (hot ? ' lv-over' : '')}>${r.c.kind === 'empty' && r.route == null && r.rtBk == null && !r.left
         ? html`<span class="lvd-none">—</span>` : html`<${Block} v=${r.v} route=${r.route} bk=${r.rtBk} left=${r.left} />`}</div>
       <div class="lvd-who">
-        <b>${x.name}</b>${notes[k] ? html` <span aria-label="Has a comment">💬</span>` : ''}${lates[k] ? html` <span title=${'Late — ' + lates[k].time} aria-label="Late arrival">⏰</span>` : ''}
+        <b>${x.name}</b>${notes[k] ? html` <span aria-label="Has a comment">💬</span>` : ''}${lates[k] ? html` <span title=${'Late — ' + lates[k].time} aria-label="Late arrival">⏰</span>` : ''}${
+          lk ? html` <span title=${lockTip(lk)} aria-label=${lockTip(lk)}>🔒</span>` : ''}
         ${r.c.partner ? html`<div class="lv-sub">${r.c.kind === 'trainer' ? 'Training' : 'Trainer'}: ${r.c.partner}</div>` : ''}
         ${subLine(x)}
         ${now && now.texts.length && now.date === dd.date ? html`<div class=${'lv-sub ' + (now.level === 'warn' ? 'lv-warn' : 'lv-bad')}><b>Today: ${now.texts.join(' · ')}</b></div>` : ''}

@@ -167,6 +167,7 @@ def _driver_rows(res):
             # soft (2026-10-19): would rather work at most N days / likes overtime
             soft_max_days=dr.get("soft_max_days"),
             likes_ot=bool(dr.get("likes_ot")),
+            locked=sorted(dr.get("locked") or (), key=ALL_DAYS.index),   # locked days (2026-11-20)
             # backup days Route Tracker shows he was sent out on a route (sync_actual made them routes)
             sent_days=sorted((d for (k, d), pv in (_STATE.get("rt") or {}).items()
                               if k == n and pv.get("kind") == "sent"), key=ALL_DAYS.index),
@@ -282,7 +283,20 @@ def _report(cfg, res, chk):
                     dispatch_hours=DISPATCH_H, live=bool(_STATE.get("live"))),
         marks=[dict(day=d, **m) for d in ALL_DAYS
                for m in _STATE["marks"].get(d, {}).values()],
+        locks=_lock_rows(res),
     )
+
+
+def _lock_rows(res):
+    """The week's locked days (schedule_locks, 2026-11-20): each lock as the build
+    took it, with working = the driver works that day now (a hand edit may have
+    taken it off) and why = what kept the build from placing it."""
+    out = []
+    for lk in getattr(res, "LOCKS", None) or []:
+        _, dr = _find(res, lk["name"])
+        on = dr is not None and any(lk["day"] in dr[k] for k in ("prim", "bk", "helper", "extra", "meet"))
+        out.append(dict(lk, working=on))
+    return out
 
 
 def _avail_days(res, name):
@@ -335,8 +349,9 @@ def _build_with_auto_trainers(cfg):
     res = c = None
     for _attempt in range(8):
         c = copy.deepcopy(cfg)
+        # a locked training day (schedule_locks, 2026-11-20) keeps its 'day'
         c["training_pairs"] = list(cfg.get("training_pairs", [])) + [
-            dict(trainer=pick[k], trainee=a["trainee"])
+            dict(trainer=pick[k], trainee=a["trainee"], **({"day": a["day"]} if a.get("day") else {}))
             for k, a in enumerate(auto) if pick[k]]
         res = build_schedule(c, hook)
         placed = {norm(t[1]) for t in res.PAIRLOG}
@@ -347,7 +362,7 @@ def _build_with_auto_trainers(cfg):
         changed = False
         for k in failed:
             tried[k].add(pick[k])
-            mine = _avail_days(res, auto[k]["trainee"])
+            mine = {auto[k]["day"]} if auto[k].get("day") else _avail_days(res, auto[k]["trainee"])
             if not mine:
                 continue           # the trainee has no open day - no trainer helps
             used ={norm(p) for j, p in enumerate(pick) if p and j != k} | fixed
@@ -395,8 +410,11 @@ def run(config_path):
         if _apply_actual(res, cfg.get("actual")):   # last week's REAL hours (Route Tracker)
             res.notes = list(res.notes) + ["Last week's hours: actual clock-outs from Route Tracker"]
         write_xlsx(res)                       # -> cfg['out']
+        # a locked day is the manager's own call: the limits it bends (their max
+        # days / in a row, overtime) show as approved, not as a failed build
+        locked = {norm(lk["name"]) for lk in (getattr(res, "LOCKS", None) or []) if not lk.get("why")}
         _STATE.update(cfg=cfg, res=res, edits=[], undo=[],
-                      ovr_unav=set(), ovr_policy=set(), ovr_limits=set(), marks={},
+                      ovr_unav=set(), ovr_policy=set(locked), ovr_limits=set(locked), marks={},
                       rt={}, rt_off=set())
         chk = _verify(res)
         # Shortfalls straight from the finished grid (routes AND backups), so

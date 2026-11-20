@@ -4,7 +4,7 @@ import { useStore, setWizard, getState, toast } from '../store.js';
 import { StepNav, goStep } from '../app.js';
 import { Banner } from '../ui.js';
 import { DAYS } from '../lib/waves.js';
-import { storeGet, storePutJSON, loadTrainingHistory, timeoffOnce } from '../api.js';
+import { storeGet, storePutJSON, loadTrainingHistory, timeoffOnce, locksOnce } from '../api.js';
 import { readDriverPrefs } from '../lib/driver-prefs.js';
 import { AUTO_TRAINER, trainerRotation } from '../lib/config-assemble.js';
 
@@ -72,6 +72,14 @@ export function ensureDriverPrefs({ force = false } = {}) {
       patch.weekTimeoff = t;
       patch.weekTimeoffISO = weekISO;
       patch.timeoffFailed = !t;
+    }
+    // this week's locked days (2026-11-20), read on the same terms as the days off
+    if (weekISO && (force || w.locksFailed || w.weekLocksISO !== weekISO || !w.weekLocks)) {
+      let l = null;
+      try { l = await locksOnce(weekISO); } catch { l = null; }
+      patch.weekLocks = l;
+      patch.weekLocksISO = weekISO;
+      patch.locksFailed = !l;
     }
     setWizard(patch);
   })().finally(() => { prefsLoading = null; });

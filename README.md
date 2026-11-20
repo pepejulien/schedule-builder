@@ -63,6 +63,17 @@
 > reload keeps the edits (undo history doesn't survive it). Publishing warns about anything still
 > open. `app/steps/build-editor.js`; test: `python tests/build_edits_test.py`.
 
+> **Locked days (2026-11-20, Firebase only; card #1360):** on a week not published yet (built or not), click a
+> driver's day on the Live board → **🔒 Lock: working this day** (note, optional *Training day* + trainer). Stored
+> on their own in Firestore `schedule_locks/{weekStart}/days/{id}` through `jajb.js` (`watchScheduleLocks`,
+> `saveScheduleLock`, `deleteScheduleLock` — the contract is in `app/api.js`; hidden while the hub's `jajb.js`
+> doesn't have them), so a rebuild keeps them. The build places every lock first (solver `locked_days`; a training
+> pair with a `day`) and never moves it; a lock wins over the driver's unavailable day for that date only (saved
+> preferences and time off untouched) and over their own max days / in a row (shown as approved). 5-in-a-row and
+> 5-in-7 still hold; no free route → kept and flagged "locked, no route". Time off on that date asks first.
+> Published weeks show the 🔒 read-only. `app/lib/locks.js`, `app/live/future-week.js`; tests:
+> `python tests/locked_days_test.py`, `node tests/locks_test.mjs`.
+
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's
 inputs, click **Build**, download the finished `Week-NN-Schedule.xlsx`.

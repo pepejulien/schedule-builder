@@ -186,7 +186,7 @@ const DAY_IDX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 const wkJoin = (days) => (days || []).slice().sort((a, b) => DAY_IDX[a] - DAY_IDX[b]).join(' ');
 
 // One row per training pair: {trainer, trainee, day, date (ISO), wave,
-// picked: 'auto'|'chosen', solo: [days]}. Shown on the card AND saved as the
+// picked: 'auto'|'chosen'|'manual' (a locked day's own trainer), solo: [days]}. Shown on the card AND saved as the
 // week's training record (Firestore schedule_training/{weekStart}).
 export function trainingRows(r, startISO) {
   const auto = {};
@@ -201,12 +201,14 @@ export function trainingRows(r, startISO) {
     const dt = new Date(y, mo - 1, d + DAY_IDX[day]);
     return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
   };
+  // a locked training day with the trainer the manager picked (2026-11-20)
+  const manual = new Set((r.locks || []).filter((l) => l.training && l.trainer).map((l) => `${l.name}|${l.day}|${l.trainer}`));
   return (r.pairlog || []).map(([trainer, trainee, day]) => {
     const cell = (row[trainee]?.cells || {})[day] || '';
     return {
       trainer, trainee, day, date: isoOf(day),
       wave: (cell.match(/^\d{1,2}:\d{2} [AP]M/) || [''])[0],
-      picked: auto[trainee] === trainer ? 'auto' : 'chosen',
+      picked: manual.has(`${trainee}|${day}|${trainer}`) ? 'manual' : auto[trainee] === trainer ? 'auto' : 'chosen',
       solo: (row[trainee]?.road_days || []).filter((x) => x !== day).sort((a, b) => DAY_IDX[a] - DAY_IDX[b]),
     };
   });
@@ -231,7 +233,8 @@ function TrainingCard({ r, startISO }) {
       <tbody>${rows.map((t) => html`<tr>
           <td><b>${t.trainee}</b></td>
           <td>${t.trainer} ${t.picked === 'auto'
-            ? html`<span class="chip blue" title="Picked by the trainer rotation">auto</span>` : ''}</td>
+            ? html`<span class="chip blue" title="Picked by the trainer rotation">auto</span>`
+            : t.picked === 'manual' ? html`<span class="chip gray" title="Picked on the locked day">🔒 picked</span>` : ''}</td>
           <td>${t.day} ${short(t.date)}</td>
           <td>${t.wave || '—'}</td>
           <td class="muted">${t.solo.join(' ') || '—'}</td></tr>`)}</tbody>

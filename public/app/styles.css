@@ -746,6 +746,24 @@ table.lv-grid { font-size: 12.5px; }
 .fw-menu-title { font-weight: 600; margin: 6px 0 4px; }
 .fw-menu-form input { width: 100%; margin: 4px 0 8px; }
 .fw-menu-acts { margin-top: 8px; }
+/* locked days (2026-11-20): the 🔒 on a cell (live/lock-mark.js), the Working block, the lock form */
+.lv-blk.b-lock, .lv-sw.b-lock { background: #EAF1FB; border: 2px solid #9DB6DD; color: #1d3a66; }
+.lv-blk.b-lock { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 2px; padding: 3px 4px 3px 6px; }
+.lv-blk.b-lock .lk-mark { position: static; }
+.lk-mark { position: absolute; top: 1px; right: 2px; display: inline-flex; align-items: center; gap: 1px; font-size: 11px; line-height: 1; }
+.lk-mark.lk-flag { position: static; display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px; padding: 2px 4px; border-radius: 4px;
+  background: #FFF4DE; border: 1px dashed var(--warn); color: #6b4a08; font-weight: 600; }
+.lk-mark.lk-flag small { font-size: 11px; }
+.lk-warn { color: var(--warn); font-weight: 700; }
+.lk-x { border: 0; background: transparent; padding: 0 2px; font-size: 14px; line-height: 1; color: var(--muted); cursor: pointer; min-height: 0; }
+.lk-x:hover { color: var(--err); }
+.lk-ask { color: #8a5a00; font-weight: 600; }
+.lv-notedot.lk-pub { top: auto; bottom: 1px; right: 2px; pointer-events: auto; cursor: help; }
+.lk-info { padding: 6px 8px; border-radius: 8px; background: #F3F7FD; }
+.lk-check { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-weight: 500; }
+.lk-check input { width: auto; margin: 0; }
+.lk-trainer { width: 100%; margin: 0 0 8px; }
+@media (max-width: 700px) { .lk-x { font-size: 18px; padding: 0 4px; } }
 
 /* ---- Live board on a phone (2026-10-11): live/day-list.js + a slimmer Week grid ---- */
 .lv-hide { display: none !important; }
