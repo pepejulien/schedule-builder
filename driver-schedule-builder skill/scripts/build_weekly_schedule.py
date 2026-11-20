@@ -52,6 +52,26 @@ OPTIONAL FEATURES (behind config flags):
   * weekend_spread (default ON) : soft nudge toward ~1 weekend day per driver
     when Sat+Sun both operate -- not half the fleet working both weekend days
     while the other half has none. Company need still wins.
+  * Drivers-page preferences (2026-10, all optional; names matched loosely --
+    an unmatched / ambiguous name is skipped and listed, never an error):
+      extra_unavailable {name: {Day: why}} -- HARD days off, like a submitted
+        Unavailable day (why: 'timeoff' | 'days' | 'weekend'; kept in dr['unav_why']).
+      driver_max_days {name: n} -- HARD cap on days on the clock this week
+        (roads + backups + training + dispatch + meetings); min with max_total_days.
+      driver_max_row {name: n} -- HARD max days in a row (last week counts);
+        min with max_consecutive.
+      keep_together [name] -- SOFT: adjacency weight doubled in prefsc().
+      prefer_days {name: [Day]} -- SOFT: +15 placement on those days.
+      like_days {name: [Day]} -- VERY SOFT: +4 placement on days they'd like
+        to work (the weakest nudge; never flagged, never a verification check).
+      driver_soft_max_days {name: n} -- SOFT (2026-10-19): would rather work at
+        most n days. A day past it ranks below every upgrade (filled last, moved
+        away when it can); backups skip them until a last-resort pass. Broken
+        only when needed -> a SOFT DAY CAP note. Ignored when >= their max_days.
+      prefer_ot [name] -- SOFT (2026-10-19): likes overtime -- first in the
+        upgrade layers and the 42h overflow. Never past a hard limit.
+    A cap the driver asked for beats an exact_days target / a training pair;
+    the shortfall is reported, not an error.
 
 OUTPUT: the configured xlsx with a `Shifts & Availability` sheet (same format as
 the inputs, ready to enter into the system) + a `By Day` sheet, plus a verification
@@ -200,14 +220,66 @@ def load_roster(avail_file):
                 mins = parse_wave_time(v)
                 if mins is not None:
                     seed_time[d] = mins
-        rows.append(dict(name=name, tid=str(ws.cell(r, tidc).value or '').strip(),
-                         unav=unav, seed=seed, seed_time=seed_time,
-                         meet=meet, meet_txt=meet_txt,
-                         std_added=set(), usual=[], soft=[],
-                         present=0, prim=[], bk=[], helper=[], extra=set()))
+        rows.append(driver_row(name, str(ws.cell(r, tidc).value or '').strip(),
+                               unav=unav, seed=seed, seed_time=seed_time, meet=meet, meet_txt=meet_txt))
     if not rows:
         raise ScheduleConfigError(f"No driver rows found in {avail_file} (no name rows under the header).")
     return rows
+
+
+def driver_row(name, tid='', unav=None, seed=None, seed_time=None, meet=None, meet_txt=None):
+    """One roster entry, as load_roster makes it (also runner.add_driver / extra_drivers)."""
+    return dict(name=name, tid=tid, unav=set(unav or ()), seed=set(seed or ()), seed_time=dict(seed_time or {}),
+                meet=set(meet or ()), meet_txt=dict(meet_txt or {}),
+                std_added=set(), unav_why={}, max_days=None, max_row=None,
+                soft_max_days=None, likes_ot=False,
+                usual=[], soft=[],
+                present=0, prim=[], bk=[], helper=[], extra=set())
+
+
+def before_hire(start, hire_date):
+    """The week's days (Sun..Sat from `start`) before an ISO hire date -> [Day]. Bad / no date = []."""
+    try:
+        h = datetime.date.fromisoformat(str(hire_date or '')[:10])
+    except ValueError:
+        return []
+    return [ALL[j] for j in range(7) if start + datetime.timedelta(days=j) < h]
+
+
+def _fl(name):
+    t = re.sub(r'[^a-z ]', ' ', str(name).lower()).split()
+    return t[0] + '|' + t[-1] if t else ''
+
+
+def on_roster(name, roster):
+    """Is `name` already one of the roster rows? Loose both ways: same first|last ("Kyle Hickman" =
+    "Kyle Stanley Hickman"), or resolve() either way (a nickname / a missing middle name)."""
+    k, n = _fl(name), norm(name)
+    for dr in roster:
+        if (k and _fl(dr['name']) == k) or resolve(name, [norm(dr['name'])]) or resolve(dr['name'], [n]):
+            return True
+    return False
+
+
+def add_extra_drivers(roster, extra, start):
+    """cfg['extra_drivers'] (2026-10-22, Jose: the build gets every active driver): the cloud's
+    active drivers who aren't in the uploaded availability file -- [{name, tid?, hire_date?}] or
+    [name]. A name that already matches a roster row (resolve) is skipped. Added rows have no
+    submitted days off; days before their hire date are Unavailable ("Not hired yet").
+    Mutates roster -> the names added."""
+    added = []
+    for x in extra or []:
+        x = {'name': x} if isinstance(x, str) else dict(x or {})
+        name = re.sub(r'\s+', ' ', str(x.get('name') or '')).strip()
+        if not _is_data_name(name) or on_roster(name, roster):
+            continue
+        dr = driver_row(name, str(x.get('tid') or '').strip())
+        for d in before_hire(start, x.get('hire_date')):
+            dr['unav'].add(d)
+            dr['unav_why'][d] = 'Not hired yet'
+        roster.append(dr)
+        added.append(name)
+    return added
 
 
 def load_prev_worked(prev_file, start_date):
@@ -361,6 +433,58 @@ def load_config(config_path):
                            or any(not isinstance(v, list) for v in ew.values())):
         errs.append("'extra_worked_days' must be {name: [days]} (e.g. dispatch duty)")
 
+    # per-driver preferences from the Drivers page (2026-10). Shape errors are
+    # loud; names are matched loosely later (unmatched = skipped + listed).
+    def _whole(x, lo):
+        return (isinstance(x, (int, float)) and not isinstance(x, bool)
+                and float(x).is_integer() and x >= lo)
+    eu = cfg.get('extra_unavailable')
+    if eu is not None:
+        if not isinstance(eu, dict) or any(not isinstance(v, dict) for v in eu.values()):
+            errs.append("'extra_unavailable' must be {name: {Day: why}} "
+                        "(why = 'timeoff' | 'days' | 'weekend')")
+        else:
+            for nm, v in eu.items():
+                bad = [d for d in v if d not in ALL]
+                if bad:
+                    errs.append(f"extra_unavailable['{nm}']: {bad} not valid days ({ALL})")
+    for k, lo in (('driver_max_days', 0), ('driver_max_row', 1), ('driver_soft_max_days', 1)):
+        v = cfg.get(k)
+        if v is not None and (not isinstance(v, dict)
+                              or any(not _whole(x, lo) for x in v.values())):
+            errs.append(f"'{k}' must be {{name: whole number >= {lo}}}")
+    kt = cfg.get('keep_together')
+    if kt is not None and (not isinstance(kt, list) or any(not isinstance(x, str) for x in kt)):
+        errs.append("'keep_together' must be a list of driver names")
+    po = cfg.get('prefer_ot')
+    if po is not None and (not isinstance(po, list) or any(not isinstance(x, str) for x in po)):
+        errs.append("'prefer_ot' must be a list of driver names")
+    pf = cfg.get('prefer_days')
+    if pf is not None:
+        if not isinstance(pf, dict) or any(not isinstance(v, list) for v in pf.values()):
+            errs.append("'prefer_days' must be {name: [Day, ...]}")
+        else:
+            for nm, v in pf.items():
+                bad = [d for d in v if d not in ALL]
+                if bad:
+                    errs.append(f"prefer_days['{nm}']: {bad} not valid days ({ALL})")
+    lk = cfg.get('like_days')
+    if lk is not None:
+        if not isinstance(lk, dict) or any(not isinstance(v, list) for v in lk.values()):
+            errs.append("'like_days' must be {name: [Day, ...]}")
+        else:
+            for nm, v in lk.items():
+                bad = [d for d in v if d not in ALL]
+                if bad:
+                    errs.append(f"like_days['{nm}']: {bad} not valid days ({ALL})")
+    ld = cfg.get('locked_days')
+    if ld is not None and (not isinstance(ld, list)
+                           or any(not isinstance(x, dict) or not x.get('name')
+                                  or x.get('day') not in ALL for x in ld)):
+        errs.append("'locked_days' must be a list of {name, day (Sun..Sat), training?, trainer?, note?}")
+    if isinstance(tp, list) and any(isinstance(p, dict) and p.get('day') not in (None, *ALL) for p in tp):
+        errs.append(f"training_pairs: a locked 'day' must be one of {ALL}")
+
     if errs:
         raise ScheduleConfigError(
             "Invalid config (" + config_path + "):\n  - " + "\n  - ".join(errs))
@@ -450,7 +574,26 @@ class Result:
 
 
 # ------------------------------------------------------------- the solver ----
-def build_schedule(cfg):
+def days7(s, dt):
+    """Most worked days (dates in `s`) in any 7 days in a row that hold `dt`."""
+    one = datetime.timedelta(days=1)
+    return max(sum(1 for j in range(7) if dt - k * one + j * one in s) for k in range(7))
+
+
+def days7_worst(s, dates):
+    """(count, first day) of the busiest 7-day stretch holding any of `dates`."""
+    one = datetime.timedelta(days=1)
+    best, at = 0, None
+    for dt in dates:
+        for k in range(7):
+            s0 = dt - k * one
+            n = sum(1 for j in range(7) if s0 + j * one in s)
+            if n > best:
+                best, at = n, s0
+    return best, at
+
+
+def build_schedule(cfg, prev_hook=None):
     start = datetime.date.fromisoformat(cfg['start_date'])           # a Sunday
     DATEALL = {ALL[j]: start + datetime.timedelta(days=j) for j in range(7)}
     closed = set(cfg.get('closed_days', []))
@@ -466,6 +609,9 @@ def build_schedule(cfg):
     # (otherwise the wave-labeling step divides by an empty wave list)
     backup = {d: (backup[d] if waves[d] else 0) for d in DAYS}
     MAXC = cfg.get('max_consecutive', 5)
+    # Jose 2026-10-07: never more than 5 worked days in ANY 7 days in a row, last
+    # week included (a Thu-Sat + Sun-Wed six-day stretch put drivers over 60h).
+    MAX7D = cfg.get('max_days_in_7', 5)
     PH = cfg.get('primary_hours', 10)
     BH = cfg.get('backup_hours', 2)
     FREECAP = cfg.get('free_primary_cap', 4)
@@ -484,6 +630,7 @@ def build_schedule(cfg):
     WSPREAD = cfg.get('weekend_spread', True) and WEEKEND <= set(DAYS)
 
     roster = load_roster(cfg['avail_file'])
+    extra_added = add_extra_drivers(roster, cfg.get('extra_drivers'), start)
     if not USESEED:
         for dr in roster:
             dr['seed'] = set()
@@ -509,8 +656,97 @@ def build_schedule(cfg):
             pw = prev[hits[0]] if len(hits) == 1 else set()
         dr['w_prev'] = set(pw)
 
+    # last week's REAL worked days from its Live board (midweek changes included)
+    # win over the uploaded sheet's tail -- same as runner.load_state.
+    pwk = cfg.get('prev_worked') or {}
+    if pwk:
+        lo = start - datetime.timedelta(days=7)
+        byn = {norm(k): {datetime.date.fromisoformat(x) for x in v} for k, v in pwk.items()}
+        for dr in roster:
+            got = byn.get(norm(dr['name']))
+            if got is None:
+                hits = [k for k in byn if resolve(dr['name'], [k])]
+                got = byn[hits[0]] if len(hits) == 1 else None
+            if got is not None:
+                dr['w_prev'] = {x for x in got if lo <= x < start}
+    if prev_hook:                    # runner: Route Tracker's clock-outs for last week
+        prev_hook(roster, DATEALL, PH)
+
     EXCLUDE, TARGET, MOST, BKX, FBACK, notes = _resolve_named_lists(cfg, roster, rnames)
+    if extra_added:
+        notes.append('ACTIVE DRIVERS not in the availability file, added with no days off '
+                     '(from the cloud roster): ' + ', '.join(extra_added))
     roster = [dr for dr in roster if norm(dr['name']) not in EXCLUDE]
+
+    # ---- per-driver preferences (Drivers page, 2026-10) ----
+    # Loose names: the Drivers page lists people who may not be on this week's
+    # roster, so an unmatched / ambiguous name is skipped and LISTED (never the
+    # strict_names error); a name that is an excluded driver is skipped quietly.
+    #   extra_unavailable {name: {Day: why}} : HARD days off, exactly like a
+    #       submitted Unavailable day (dr['unav']); dr['unav_why'] keeps why.
+    #   driver_max_days {name: n} : HARD cap on days on the clock this week.
+    #   driver_max_row {name: n}  : HARD max worked days in a row (last week counts).
+    #   keep_together [name]      : SOFT, days next to each other (placement only).
+    #   prefer_days {name: [Day]} : SOFT placement boost (placement only).
+    #   like_days {name: [Day]}   : VERY SOFT placement nudge, the weakest term.
+    #   driver_soft_max_days {name: n} : SOFT day cap (2026-10-19) -- see _rank_at / _bk_ok.
+    #   prefer_ot [name]          : SOFT (2026-10-19), likes overtime -- see _dayscore / overflow.
+    prefs_unmatched = []
+    by_n = {norm(dr['name']): dr for dr in roster}
+
+    def _pref_driver(nm, key):
+        h = resolve(nm, rnames)
+        if len(h) == 1:
+            return by_n.get(h[0])            # None = excluded this week
+        prefs_unmatched.append(f'{key}: "{nm}" ' + ('(not on this week\'s roster)' if not h
+                                                    else f'(matches {len(h)} drivers)'))
+        return None
+
+    for nm, days in (cfg.get('extra_unavailable') or {}).items():
+        dr = _pref_driver(nm, 'extra_unavailable')
+        if dr is None:
+            continue
+        for d, why in days.items():
+            if d in dr['unav'] or d in dr['meet']:
+                continue                     # already off (submitted / standing) or a meeting
+            dr['unav'].add(d)
+            dr['unav_why'][d] = str(why)
+    for key, fld in (('driver_max_days', 'max_days'), ('driver_max_row', 'max_row')):
+        for nm, v in (cfg.get(key) or {}).items():
+            dr = _pref_driver(nm, key)
+            if dr is not None:
+                v = int(v)
+                dr[fld] = v if dr.get(fld) is None else min(dr[fld], v)
+    for nm, v in (cfg.get('driver_soft_max_days') or {}).items():
+        dr = _pref_driver(nm, 'driver_soft_max_days')
+        if dr is not None:
+            v = int(v)
+            dr['soft_max_days'] = v if dr.get('soft_max_days') is None else min(dr['soft_max_days'], v)
+    for dr in roster:                        # the hard cap already says it
+        if dr.get('soft_max_days') is not None and dr.get('max_days') is not None \
+                and dr['soft_max_days'] >= dr['max_days']:
+            dr['soft_max_days'] = None
+    OTPREF = set()
+    for nm in cfg.get('prefer_ot') or []:
+        dr = _pref_driver(nm, 'prefer_ot')
+        if dr is not None:
+            dr['likes_ot'] = True
+            OTPREF.add(norm(dr['name']))
+    KEEPT = set()
+    for nm in cfg.get('keep_together') or []:
+        dr = _pref_driver(nm, 'keep_together')
+        if dr is not None:
+            KEEPT.add(norm(dr['name']))
+    PREFD = {}
+    for nm, days in (cfg.get('prefer_days') or {}).items():
+        dr = _pref_driver(nm, 'prefer_days')
+        if dr is not None:
+            PREFD.setdefault(norm(dr['name']), set()).update(days)
+    LIKED = {}
+    for nm, days in (cfg.get('like_days') or {}).items():
+        dr = _pref_driver(nm, 'like_days')
+        if dr is not None:
+            LIKED.setdefault(norm(dr['name']), set()).update(days)
 
     # within-tier rate ordering (Jose 2026-07-11): when two drivers sit in the
     # same priority class, the BETTER board rate (closer to 0, e.g. -14 beats
@@ -563,6 +799,37 @@ def build_schedule(cfg):
         training-helper days (a helper is out on the road all day = 10h)."""
         return len(dr['prim']) + len(dr['helper'])
 
+    # Drivers-page hard caps (per driver). PREFS_OFF is flipped on only to ask
+    # "would this be feasible without the Drivers-page caps?" (training pairs),
+    # so a shortfall the driver asked for is reported as a note, not an error.
+    PREFS_OFF = [False]
+
+    def maxc(dr):
+        """Max worked days in a row for this driver: min(max_consecutive, max_row)."""
+        k = dr.get('max_row')
+        return MAXC if k is None or PREFS_OFF[0] else min(MAXC, k)
+
+    def dcap(dr):
+        """Total worked-days cap (roads + backups + dispatch + meetings)."""
+        k = dr.get('max_days')
+        return MAXTOT if k is None or PREFS_OFF[0] else min(MAXTOT, k)
+
+    def roadcap(dr):
+        """Road days (incl. helper days) the driver's own max_days leaves room
+        for, after the fixed dispatch / meeting days. Backups are placed after
+        every road pass (the 40h exchange releases them first), so not counted."""
+        k = dr.get('max_days')
+        if k is None or PREFS_OFF[0]:
+            return 99
+        return k - len(dr['extra']) - len(dr['meet'])
+
+    def softroad(dr):
+        """Road days (incl. helper days) under the driver's SOFT day cap (Drivers
+        page "would rather work at most", 2026-10-19), after the fixed dispatch /
+        meeting days. 99 = no soft cap. Ranking only -- never a hard limit."""
+        k = dr.get('soft_max_days')
+        return 99 if k is None else k - len(dr['extra']) - len(dr['meet'])
+
     def runok(dr, dt):
         s = worked(dr) | {dt}
         n = 0; c = dt
@@ -571,7 +838,7 @@ def build_schedule(cfg):
         f = dt + ONE
         while f in s:
             n += 1; f += ONE
-        return n <= MAXC
+        return n <= maxc(dr) and days7(s, dt) <= MAX7D
 
     # CAPX: per-driver EXTRA road-day allowance granted by the emergency
     # route-coverage pass (Jose 2026-07-20: routes must be covered -- a short
@@ -586,7 +853,7 @@ def build_schedule(cfg):
             base = MAXPRIM
         else:                      # Fair: road cap; the rank enforces the soft 3-target
             base = MAXPRIM
-        return min(base + CAPX.get(n, 0), MAXPRIM)
+        return min(base + CAPX.get(n, 0), MAXPRIM, roadcap(dr))
 
     # Day-count priority rank (Jose 2026-07-19: base floor + layered upgrades).
     # Higher = filled first / cut last. Day-independent (placement = prefsc).
@@ -602,9 +869,23 @@ def build_schedule(cfg):
     #   30  discipline 1 -> 2
     #   20  Top/Solid 3 -> 4
     #   10  Fair 3 -> 4
+    #    5  a day past the driver's SOFT day cap (2026-10-19, Drivers page "would
+    #       rather work at most"): below every upgrade, so filled last and moved
+    #       away by _rebalance when it can. Explicit exact_days pins are exempt.
     #    0  at cap (not a fill candidate)
+    SOFTR = 5
+
     def _rank_at(dr, cur):
+        r = _rank_base(dr, cur)
         n = norm(dr['name'])
+        if r > SOFTR and cur >= softroad(dr) and not (n in TARGET and n not in REDS):
+            return SOFTR
+        return r
+
+    def _rank_base(dr, cur):
+        n = norm(dr['name'])
+        if cur >= roadcap(dr):                 # the driver's own max_days (Drivers page)
+            return 0
         if n in TARGET and n not in REDS:      # explicit exact_days (incl. <5 routes)
             return 70 if cur < TARGET[n] else 0
         if n in REDS:                          # discipline: base 1, then upgrade to 2
@@ -632,7 +913,8 @@ def build_schedule(cfg):
             return (r, key2, rate_of(dr), prefsc(dr, d))
         if r >= 50:                        # Fair/discipline base: round-robin
             return (r, -cur, rate_of(dr), prefsc(dr, d))
-        return (r, rate_of(dr), -cur, prefsc(dr, d))   # upgrades: better rate first
+        # upgrades: likes overtime first (Drivers page, 2026-10-19), then better rate
+        return (r, n in OTPREF, rate_of(dr), -cur, prefsc(dr, d))
 
     def wkend_ok(dr, d):
         if not weekend_rule or d not in WEEKEND:
@@ -655,24 +937,32 @@ def build_schedule(cfg):
         days, never how many (day counts are decided by rank/rate above this
         in the priority tuple). Ordering: seed (Jose's pre-made schedule, +40)
         > weekend spread (+/-25) > compactness (+18 adjacent / +8 near, Jose
-        2026-07-11: no more Sun-Tue-Thu-Sat zigzags) > usual day (+20) >
-        often-off (-12)."""
+        2026-07-11: no more Sun-Tue-Thu-Sat zigzags; doubled to +36/+16 for
+        keep_together drivers) > usual day (+20) > Drivers-page prefer_days
+        (+15) > often-off (-12) > Drivers-page like_days (+4, the weakest
+        nudge: only breaks near-ties)."""
         p = 0
         if d in dr['seed']:
             p += 40
         if WSPREAD and d in WEEKEND:
             p += 25 if wknd_worked(dr) == 0 else -25
         wk = dr['prim'] + dr['helper'] + dr['bk']
+        n = norm(dr['name'])
         if wk:
             gap = min(abs(ALL.index(d) - ALL.index(x)) for x in wk)
+            kt = n in KEEPT                # Drivers page: keep my days together (x2)
             if gap == 1:
-                p += 18
+                p += 36 if kt else 18
             elif gap == 2:
-                p += 8
+                p += 16 if kt else 8
+        if d in PREFD.get(n, ()):          # Drivers page: preferred days (below seed)
+            p += 15
         if d in dr['usual']:
             p += 20
         if d in dr['soft']:
             p -= 12
+        if d in LIKED.get(n, ()):          # Drivers page: days they'd like (weakest)
+            p += 4
         # Discipline tier works the days nobody wants (Sun/Sat) -- soft placement
         # now (Jose 2026-07-19); the day COUNT is set by the rank ladder above.
         if norm(dr['name']) in REDS:
@@ -700,7 +990,39 @@ def build_schedule(cfg):
     infeasible = []
     LOCKED = set()
     PAIRLOG = []                       # (trainer, trainee, training day)
-    for pair in cfg.get('training_pairs', []):
+
+    # LOCKED DAYS (Jose 2026-11-20, schedule_locks): a manager pinned a driver to
+    # work a date. cfg['locked_days'] = [{name, day, training?, trainer?, note?}];
+    # a training pair with a 'day' is a locked training day. A lock wins over the
+    # driver's days off for that day only (the manager was warned about time off),
+    # and over their own Drivers-page limits (max days / in a row / weekends): it
+    # is placed before anyone else and never moved. The hard rules still hold --
+    # max_consecutive and max_days_in_7 -- and a day with no free route can't
+    # take it: those stay on LOCKS with a reason ('why') and a note, never dropped
+    # silently. A locked day counts toward the driver's week like any other.
+    LOCKS = []
+
+    def _lock_free(i, d):
+        """Why driver i can't be locked into a route on d (None = they can)."""
+        dr = roster[i]
+        if d not in DAYS or not waves.get(d):
+            return 'no route'
+        if len(pslot[d]) >= routes[d]:
+            return 'no route'
+        PREFS_OFF[0] = True            # the lock wins over their own max in a row
+        try:
+            ok = runok(dr, DATEALL[d])
+        finally:
+            PREFS_OFF[0] = False
+        return None if ok else 'days in a row'
+
+    def _unlock_unav(i, d):
+        dr = roster[i]
+        if d in dr['unav'] and d not in dr['extra'] and d not in dr['meet']:
+            dr['unav'].discard(d)
+            dr['unav_why'].pop(d, None)
+
+    def _pair(pair):
         pt, pn = pair['trainer'], pair['trainee']
         ti = [i for i, dr in enumerate(roster) if resolve(pt, [norm(dr['name'])])]
         ni = [i for i, dr in enumerate(roster) if resolve(pn, [norm(dr['name'])])]
@@ -708,6 +1030,42 @@ def build_schedule(cfg):
             raise ScheduleConfigError(
                 f'training_pairs: "{pt}" matched {len(ti)}, "{pn}" matched {len(ni)} roster names')
         t, n = ti[0], ni[0]
+        fixed = pair.get('day')
+
+        if fixed:
+            # a locked training day: that day or nothing (the lock pass then
+            # keeps the trainee on it alone). The lock covers the trainee, and
+            # the trainer only when the manager picked them ('manual'); a
+            # rotation pick has to be free that day.
+            why = None
+            mine = (t, n) if pair.get('manual') else (n,)
+            if t not in mine and fixed in roster[t]['unav']:
+                why = f'{roster[t]["name"]} is off that day'
+            for i in (t, n):
+                dr = roster[i]
+                if why is None and (fixed in dr['prim'] or fixed in dr['helper'] or fixed in dr['extra']
+                                    or fixed in dr['meet']):
+                    why = f'{dr["name"]} already works that day'
+                    break
+            why = why or _lock_free(n, fixed)
+            if why is None:
+                PREFS_OFF[0] = True
+                try:
+                    if not runok(roster[t], DATEALL[fixed]):
+                        why = 'days in a row'
+                finally:
+                    PREFS_OFF[0] = False
+            if why is not None:
+                notes.append(f'TRAINING: {roster[t]["name"]} + {roster[n]["name"]} not '
+                             f'placed on the locked day {fixed} -- {why}')
+                return
+            for i in mine:
+                _unlock_unav(i, fixed)
+            pslot[fixed].append(n); roster[n]['prim'].append(fixed); roster[t]['helper'].append(fixed)
+            LOCKED.add((n, fixed))
+            roster[n]['train_done'] = ALL.index(fixed)
+            PAIRLOG.append((roster[t]['name'], roster[n]['name'], fixed))
+            return
 
         def _day_ok(d):
             if len(pslot[d]) >= routes[d]:
@@ -724,9 +1082,21 @@ def build_schedule(cfg):
 
         wins = [d for d in DAYS if _day_ok(d)]
         if not wins:
-            infeasible.append(f'TRAINING: no feasible day for '
-                              f'{roster[t]["name"]} + {roster[n]["name"]}')
-            continue
+            # blocked only by a Drivers-page cap the driver asked for? Then the
+            # cap wins and it's a reported shortfall, not a build error.
+            PREFS_OFF[0] = True
+            try:
+                by_prefs = any(_day_ok(d) for d in DAYS)
+            finally:
+                PREFS_OFF[0] = False
+            if by_prefs:
+                notes.append(f'TRAINING: {roster[t]["name"]} + {roster[n]["name"]} not '
+                             f'placed -- a Drivers-page limit (max days / days in a row) '
+                             f'leaves no day for the pair')
+            else:
+                infeasible.append(f'TRAINING: no feasible day for '
+                                  f'{roster[t]["name"]} + {roster[n]["name"]}')
+            return
 
         # Train FIRST (Jose 2026-07-10): the EARLIEST feasible day, preferring
         # one that leaves the trainee an available later day for solo routes.
@@ -740,6 +1110,41 @@ def build_schedule(cfg):
         LOCKED.add((n, dT))
         roster[n]['train_done'] = ALL.index(dT)   # solo days only AFTER this
         PAIRLOG.append((roster[t]['name'], roster[n]['name'], dT))
+
+    def _place_locks():
+        for lk in cfg.get('locked_days') or []:
+            d = lk.get('day')
+            row = dict(name=str(lk.get('name') or ''), day=d, training=bool(lk.get('training')),
+                       trainer=lk.get('trainer') or None, note=str(lk.get('note') or ''), why=None)
+            LOCKS.append(row)
+            h = resolve(row['name'], rnames)
+            i = idx.get(h[0]) if len(h) == 1 else None
+            if i is None:
+                row['why'] = 'not on this week\'s roster' if not h or h[0] not in EXCLUDE else 'excluded'
+            else:
+                dr = roster[i]
+                row['name'] = dr['name']
+                dr.setdefault('locked', set()).add(d)
+                if d in dr['prim'] or d in dr['helper'] or d in dr['extra'] or d in dr['meet']:
+                    if d in dr['prim']:
+                        LOCKED.add((i, d))     # e.g. their locked training day
+                    continue
+                row['why'] = _lock_free(i, d)
+                if row['why'] is None:
+                    _unlock_unav(i, d)
+                    pslot[d].append(i); dr['prim'].append(d)
+                    LOCKED.add((i, d))
+                    continue
+            notes.append(f'LOCKED, NOT PLACED: {row["name"]} {d} -- {row["why"]}')
+
+    pairs = cfg.get('training_pairs', [])
+    for pair in pairs:                 # locked training days first,
+        if pair.get('day'):
+            _pair(pair)
+    _place_locks()                     # then every other locked day,
+    for pair in pairs:                 # then the pairs the builder places
+        if not pair.get('day'):
+            _pair(pair)
 
     # ---- PHASE 1: primaries (hit targets, max most, balance free by primary-day count) ----
     def _fill_days():
@@ -891,6 +1296,10 @@ def build_schedule(cfg):
                        key=lambda i: (pdays(roster[i]), -rate_of(roster[i]),
                                       norm(roster[i]['name'])))
         for f in frees:
+            if pdays(roster[f]) >= pcap(roster[f]):    # f's own max_days (Drivers page)
+                continue
+            if pdays(roster[f]) >= softroad(roster[f]):  # f's soft day cap (2026-10-19)
+                continue
             for g in reversed(frees):
                 if pdays(roster[g]) - pdays(roster[f]) < 2:
                     continue
@@ -915,12 +1324,14 @@ def build_schedule(cfg):
     # then to bring every working Fair up to the 3-road target.
     def _runs_ok(dv):
         s = worked(dv)
+        if any(days7(s, DATEALL[d]) > MAX7D for d in ALL if DATEALL[d] in s):
+            return False
         for dt0 in s:
             if dt0 - ONE not in s:
                 run = 0; c = dt0
                 while c in s:
                     run += 1; c += ONE
-                if run > MAXC:
+                if run > maxc(dv):
                     return False
         return True
 
@@ -1007,7 +1418,7 @@ def build_schedule(cfg):
     for i, dr in enumerate(roster):
         n = norm(dr['name'])
         if n in TARGET and n not in REDS:
-            _complete_to(i, min(TARGET[n], MAXPRIM))
+            _complete_to(i, min(TARGET[n], MAXPRIM, roadcap(dr)))
 
     # a final rebalance settles anything the exact-completion shifted.
     _rebalance()
@@ -1048,12 +1459,13 @@ def build_schedule(cfg):
     # coverage wins as the true last resort.
     bslot = {d: [] for d in DAYS}
     BKCAP = HCAP if HCAP else 4 * PH          # the "under 40 hours" line
+    SOFT_BK = [False]                         # True = the last-resort pass may pass soft day caps
 
     def _bk_common(i, dr, d, dt):
         return (d not in dr['unav'] and d not in dr['prim'] and d not in dr['helper']
                 and d not in dr['meet'] and d not in dr['extra'] and i not in bslot[d]
                 and runok(dr, dt) and wkend_ok(dr, d)
-                and pdays(dr) + len(dr['bk']) + len(dr['extra']) + len(dr['meet']) < MAXTOT)
+                and pdays(dr) + len(dr['bk']) + len(dr['extra']) + len(dr['meet']) < dcap(dr))
 
     def _tier_rank(dr):
         n = norm(dr['name'])
@@ -1077,7 +1489,10 @@ def build_schedule(cfg):
         tot = pdays(dr) + len(dr['bk']) + len(dr['extra']) + len(dr['meet'])
         if FREE(dr) and tot >= FREETOT:
             return False
-        if tot >= MAXTOT:
+        if tot >= dcap(dr):                  # incl. the driver's own max_days
+            return False
+        # soft day cap (2026-10-19): skipped until the last-resort pass
+        if not SOFT_BK[0] and dr.get('soft_max_days') is not None and tot >= dr['soft_max_days']:
             return False
         return H(dr) < BKCAP                 # under 40 road+backup hours
 
@@ -1138,7 +1553,7 @@ def build_schedule(cfg):
 
     def _try_exchange():
         tops = sorted((i for i, dr in enumerate(roster)
-                       if norm(dr['name']) in MOST and pdays(dr) < MAXPRIM
+                       if norm(dr['name']) in MOST and pdays(dr) < min(MAXPRIM, roadcap(dr), softroad(dr))
                        and H(dr) < BKCAP),
                       key=lambda i: (-rate_of(roster[i]), H(roster[i]),
                                      norm(roster[i]['name'])))
@@ -1221,15 +1636,43 @@ def build_schedule(cfg):
 
     # overflow: the ladder is spent and slots remain -> Top/Solid at 4 roads
     # take a 5th day (42h), best rate first. Coverage beats the 40h line here.
-    if _bk_filled() < total_slots:
-        for i in sorted((i for i, dr in enumerate(roster)
-                         if norm(dr['name']) in MOST and pdays(dr) == 4
-                         and not dr['bk']
-                         and pdays(dr) + len(dr['extra']) + len(dr['meet']) < MAXTOT),
-                        key=_bk_order):
+    # Drivers who like overtime (prefer_ot, 2026-10-19) go first and may take it
+    # from any tier -- every hard rule still holds (_bk_common: days in a row,
+    # days in 7, max_days / max_total_days; a Fair's free_total_days; no backups
+    # for a pinned exact-days driver).
+    def _overflow(only_ot):
+        if _bk_filled() >= total_slots:
+            return
+
+        def _in(dr):
+            n = norm(dr['name'])
+            if only_ot and n not in OTPREF:
+                return False
+            if n not in MOST:                 # likes overtime, another tier: its own rules hold
+                if n not in OTPREF or (n in TARGET and n not in REDS and n not in BKX):
+                    return False
+                if FREE(dr) and pdays(dr) + len(dr['bk']) >= FREETOT:
+                    return False
+            if not SOFT_BK[0] and dr.get('soft_max_days') is not None \
+                    and pdays(dr) + len(dr['extra']) + len(dr['meet']) >= dr['soft_max_days']:
+                return False
+            return (pdays(dr) == 4 and not dr['bk']
+                    and pdays(dr) + len(dr['extra']) + len(dr['meet']) < dcap(dr))
+        for i in sorted((i for i, dr in enumerate(roster) if _in(dr)),
+                        key=lambda i: (norm(roster[i]['name']) not in OTPREF, _bk_order(i))):
             if _bk_filled() >= total_slots:
                 break
             _bk_augment(i, set())
+
+    if OTPREF:
+        _overflow(True)                       # likes overtime: the extra hours go to them first
+    # last resort for the soft day caps (2026-10-19): the ladder again, allowed past them.
+    # Only when someone has one -- a week without soft caps runs exactly as before.
+    if _bk_filled() < total_slots and any(dr.get('soft_max_days') is not None for dr in roster):
+        SOFT_BK[0] = True
+        _run_ladder()
+    SOFT_BK[0] = True
+    _overflow(False)
 
     # discipline-tier coverage is worth a line of its own in the report
     disc_lr = sorted((dr['name'], d) for dr in roster
@@ -1252,6 +1695,22 @@ def build_schedule(cfg):
             f'BACKUPS {_bk_filled()}/{total_slots}: {short} slot(s) open on '
             f'{"/".join(open_days)} -- nobody under {BKCAP}h with >=2 road days '
             f'can work those days, and no 4-road Top/Solid can either.')
+
+    # who went past their SOFT day cap (Drivers page "would rather work at most",
+    # 2026-10-19) -- allowed, named so it isn't silent. Fixed dispatch / meeting
+    # days alone over it are not the build's doing.
+    soft_over = []
+    for dr in roster:
+        k = dr.get('soft_max_days')
+        if k is None:
+            continue
+        fixed = len(dr['extra']) + len(dr['meet'])
+        tot = pdays(dr) + len(dr['bk']) + fixed
+        if tot > max(k, fixed):
+            soft_over.append((dr['name'], tot, k))
+    if soft_over:
+        notes.append('SOFT DAY CAP broken (Drivers page, would rather work less) -- '
+                     + '; '.join(f'{nm} {t} days (would rather {k})' for nm, t, k in sorted(soft_over)))
 
     # ---- wave labels (primaries hit exact counts; backups spread across waves) ----
     # Requested times first (Jose 2026-09-11): a driver whose seed cell carried
@@ -1309,12 +1768,14 @@ def build_schedule(cfg):
     return Result(cfg=cfg, roster=roster, cell=cell, waves=waves, routes=routes,
                   backup=backup, DAYS=DAYS, DATEALL=DATEALL, closed=closed,
                   TARGET=TARGET, MOST=MOST, EXCLUDE=EXCLUDE, prev=prev, idx=idx,
-                  MAXC=MAXC, PH=PH, BH=BH, MAXPRIM=MAXPRIM, HCAP=HCAP,
+                  MAXC=MAXC, MAX7D=MAX7D, PH=PH, BH=BH, MAXPRIM=MAXPRIM, HCAP=HCAP,
                   MAXTOT=MAXTOT, FREETOT=FREETOT, FBACK=FBACK,
                   fallback_used=fallback_used, WSPREAD=WSPREAD, USESEED=USESEED,
                   PAIRLOG=PAIRLOG, REDS=REDS, REDPREF=REDPREF, RATE=RATE,
                   MAXWKND=MAXWKND, weekend_rule=weekend_rule, CAPX=CAPX,
                   XBK=XBK, exchanges=exchanges,
+                  prefs_unmatched=prefs_unmatched, KEEPT=KEEPT, PREFD=PREFD, LIKED=LIKED,
+                  OTPREF=OTPREF, LOCKS=LOCKS,
                   merge_std=merge_std, notes=notes, infeasible=infeasible)
 
 
@@ -1603,11 +2064,14 @@ def check_invariants(res):
     # inv 2: max consecutive worked days (incl prev-week tail, helper days,
     # and extra worked days like dispatch duty)
     mx = 0
+    week0, week6 = DATEALL['Sun'], DATEALL['Sat']
+    pref_row_bad, pref_days_bad = [], []
     for dr in roster:
         wd = (set(dr['w_prev']) | {DATEALL[d] for d in dr['prim']}
               | {DATEALL[d] for d in dr['bk']} | {DATEALL[d] for d in dr['helper']}
               | {DATEALL[d] for d in dr['extra'] if d in DATEALL}
               | {DATEALL[d] for d in dr['meet'] if d in DATEALL})
+        krow = dr.get('max_row')
         for dt in wd:
             if dt - ONE not in wd:
                 n = 0; c = dt
@@ -1616,6 +2080,28 @@ def check_invariants(res):
                 mx = max(mx, n)
                 if n > MAXC:
                     errs.append(f'CONSEC>{MAXC}: {dr["name"]} run={n}')
+                elif krow is not None and n > krow and dt <= week6 and c - ONE >= week0:
+                    # the driver's own max in a row (Drivers page); a run that
+                    # lies entirely in last week isn't this build's doing
+                    pref_row_bad.append((dr['name'], n, krow))
+                    errs.append(f'PREF-ROW: {dr["name"]} run={n} '
+                                f'(asked max {krow} in a row, Drivers page)')
+        # the driver's own max days this week (Drivers page). Fixed dispatch /
+        # meeting days alone over the cap are not the build's doing.
+        kd = dr.get('max_days')
+        if kd is not None:
+            fixed = len(dr['extra']) + len(dr['meet'])
+            tot = len(dr['prim']) + len(dr['helper']) + len(dr['bk']) + fixed
+            if tot > max(kd, fixed):
+                pref_days_bad.append((dr['name'], tot, kd))
+                errs.append(f'PREF-DAYS: {dr["name"]} {tot} worked days '
+                            f'(asked max {kd}, Drivers page)')
+        # inv 2b: never more than MAX7D worked days in any 7 days in a row
+        # (last week counts) -- only stretches holding a day worked THIS week
+        m7 = getattr(res, 'MAX7D', 5)
+        n7, s7 = days7_worst(wd, [DATEALL[d] for d in ALL if DATEALL[d] in wd])
+        if n7 > m7:
+            errs.append(f'DAYS7>{m7}: {dr["name"]} {n7} days in 7 from {s7:%a %m/%d}')
         overlaps = (set(dr['prim']) & set(dr['bk'])) | (set(dr['prim']) & set(dr['helper'])) \
             | (set(dr['bk']) & set(dr['helper']))
         if overlaps:
@@ -1762,7 +2248,20 @@ def check_invariants(res):
     floor2_road = [(dr['name'], pdy(dr)) for dr in roster
                    if FREE_name(dr, TARGET, MOST) and 0 < pdy(dr) < 2]
 
+    # Drivers-page preferences, for the summary (old saved states: no fields)
+    pref_off = [(dr['name'], d, w) for dr in roster
+                for d, w in sorted((dr.get('unav_why') or {}).items())]
+    pref_caps = [(dr['name'], dr['max_days'],
+                  len(dr['prim']) + len(dr['helper']) + len(dr['bk'])
+                  + len(dr['extra']) + len(dr['meet']))
+                 for dr in roster if dr.get('max_days') is not None]
+    pref_rows = [(dr['name'], dr['max_row']) for dr in roster
+                 if dr.get('max_row') is not None]
+
     return dict(errors=errs, max_consec=mx, target_bad=target_bad,
+                pref_off=pref_off, pref_caps=pref_caps, pref_rows=pref_rows,
+                pref_row_bad=pref_row_bad, pref_days_bad=pref_days_bad,
+                prefs_unmatched=list(getattr(res, 'prefs_unmatched', []) or []),
                 target_short=target_short,
                 over_cap=over_cap, over_days=over_days, backup_only=backup_only,
                 backup_under2=backup_under2, floor_unmet=floor_unmet,
@@ -1821,6 +2320,20 @@ def print_summary(res, chk):
     if res.merge_std:
         added = [(dr['name'], sorted(dr['std_added'])) for dr in res.roster if dr['std_added']]
         print('  standing days-off merged:', added or 'none added (all already submitted)')
+    if chk.get('pref_off'):
+        who = sorted({n for n, _d, _w in chk['pref_off']})
+        print(f"  Drivers-page days off added: {len(chk['pref_off'])} day(s) for "
+              f"{len(who)} driver(s) ({'; '.join(who)})")
+    if chk.get('pref_caps'):
+        print('  Drivers-page max days:',
+              '; '.join(f'{n} {k} (has {t}{", at cap" if t >= k else ""})'
+                        for n, k, t in sorted(chk['pref_caps'])))
+    if chk.get('pref_rows'):
+        print('  Drivers-page max in a row:',
+              '; '.join(f'{n} {k}' for n, k in sorted(chk['pref_rows'])))
+    if chk.get('prefs_unmatched'):
+        print('  Drivers-page names skipped (not matched on this week\'s roster):',
+              '; '.join(chk['prefs_unmatched']))
     if res.weekend_rule:
         print('  weekend cap:', res.MAXWKND, 'day(s) per driver (Sat+Sun both open)')
     if chk['usual_pct'] is not None:
