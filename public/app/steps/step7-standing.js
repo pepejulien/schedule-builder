@@ -7,6 +7,8 @@ import { DAYS } from '../lib/waves.js';
 import { storeGet, storePutJSON, loadTrainingHistory, timeoffOnce, locksOnce } from '../api.js';
 import { readDriverPrefs } from '../lib/driver-prefs.js';
 import { AUTO_TRAINER, trainerRotation } from '../lib/config-assemble.js';
+import { resolveFuzzy } from '../lib/names.js';
+import { loadDriverRoster } from '../lib/driver-prefs.js';
 
 export const DEFAULT_STANDING = {
   exclude: ['Zackary McDonald', 'Rachel Rhoades', 'Greyson Turner'],
@@ -20,13 +22,15 @@ export const DEFAULT_STANDING = {
 function NameChips({ names, roster, onChange, placeholder }) {
   const [sel, setSel] = useState('');
   const add = (n) => { if (n && !names.includes(n)) onChange([...names, n]); setSel(''); };
+  // a saved short name ('Barry Hughes') already stands for the full roster name ('Barry Len Hughes')
+  const left = roster.filter((r) => !names.includes(r) && !names.some((n) => resolveFuzzy(n, [r]).length));
   return html`
     <div class="row">
       ${names.map((n) => html`<span class="chip blue">${n}
         <a href="#" onClick=${(e) => { e.preventDefault(); onChange(names.filter((x) => x !== n)); }}> ✕</a></span>`)}
       <select value=${sel} onChange=${(e) => add(e.target.value)}>
         <option value="">${placeholder || '+ add'}</option>
-        ${roster.filter((r) => !names.includes(r)).map((r) => html`<option value=${r}>${r}</option>`)}
+        ${left.map((r) => html`<option value=${r}>${r}</option>`)}
       </select>
     </div>`;
 }
@@ -91,8 +95,20 @@ export function Step7Standing() {
   const standing = useStore((s) => s.wizard.standing);
   const history = useStore((s) => s.wizard.trainerHistory);
   const weekISO = useStore((s) => s.wizard.week.startISO);
-  const roster = avail?.rosterNames || [];
+  // The weekly roster; with no availability loaded yet, the current active roster, so new hires
+  // can still be picked.
+  const [activeNames, setActiveNames] = useState([]);
+  const weekRoster = avail?.rosterNames || [];
+  const roster = weekRoster.length ? weekRoster : activeNames;
   const [hasPrefs, setHasPrefs] = useState(false);
+
+  useEffect(() => {
+    if (weekRoster.length) return;
+    loadDriverRoster({ active: true }).then((all) => {
+      const act = all.some((r) => 'active' in r) ? all.filter((r) => r.active) : all;
+      setActiveNames(act.map((r) => r.name).filter(Boolean));
+    }).catch(() => { /* picker stays empty; saved names still show */ });
+  }, [weekRoster.length]);
 
   useEffect(() => {
     (async () => {
@@ -122,7 +138,7 @@ export function Step7Standing() {
   const dispatchRows = Object.entries(standing.dispatch);
   const trainers = standing.trainers || [];
   // Rotation line for this week's roster (who the engine tries first).
-  const lineup = trainerRotation(trainers.filter((t) => roster.includes(t)), history, weekISO);
+  const lineup = trainerRotation(trainers.filter((t) => roster.includes(t) || resolveFuzzy(t, roster).length === 1), history, weekISO);
   const setPair = (i, patch) => {
     const t = standing.trainingPairs.slice(); t[i] = { ...t[i], ...patch }; set({ trainingPairs: t });
   };
