@@ -310,6 +310,7 @@ const WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // (every other weekend, this one off).
 export function unavailRule(pref, why) {
   if (why === 'weekend') return 'every other weekend — this one is off';
+  if (why === 'altday') return 'every other week — this one is off';
   const p = normPref(pref);
   const can = (p && p.days) || WEEK;
   const missing = WEEK.filter((d) => !can.includes(d));

@@ -8,7 +8,7 @@ import { Spinner } from './ui.js';
 import { DAYS } from './lib/waves.js';
 import { parseISODate, toISODate, addDays } from './lib/weeks.js';
 import { canTimeoff, timeoffOnce, saveTimeoff, clearTimeoff, liveWeeks } from './api.js';
-import { loadDriverPrefs, saveDriverPref, loadDriverRoster, normPref, prefSummary, weekendOn } from './lib/driver-prefs.js';
+import { loadDriverPrefs, saveDriverPref, loadDriverRoster, normPref, prefSummary, weekendOn, altDayOff } from './lib/driver-prefs.js';
 
 // case- and accent-insensitive, like the Live board's search
 const fold = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
@@ -23,6 +23,13 @@ function nextWeekends() {
   return [0, 1, 2, 3].map((i) => shift(sat, 7 * i));
 }
 const weekendLabel = (sat) => `Sat ${md(sat)} – Sun ${md(shift(sat, 1))}`;
+
+// The next 2 dates of a weekday (today counts) — every other week only has two ways to fall.
+function nextDates(day) {
+  const today = toISODate(new Date());
+  const first = shift(today, (DAYS.indexOf(day) - parseISODate(today).getDay() + 7) % 7);
+  return [first, shift(first, 7)];
+}
 
 const sundayOf = (iso) => shift(iso, -parseISODate(iso).getDay());
 const dayLabel = (iso) => `${DAYS[parseISODate(iso).getDay()]} ${md(iso)}`;
@@ -120,6 +127,8 @@ function formFrom(pref) {
   const sats = nextWeekends();
   let on = sats[0];
   if (p.weekends) on = sats.find((s) => weekendOn(p, s) === true) || sats[0];
+  const altOff = {};               // {Day: next OFF date}
+  for (const a of p.altDays || []) altOff[a.day] = nextDates(a.day).find((s) => altDayOff(p, s)) || nextDates(a.day)[0];
   return {
     days: p.days ? [...p.days] : [...DAYS],
     likeDays: p.likeDays ? [...p.likeDays] : [],
@@ -129,6 +138,8 @@ function formFrom(pref) {
     maxRow: p.maxRow ? String(p.maxRow) : '',
     alternate: !!p.weekends,
     on,
+    altOn: !!p.altDays,
+    altOff,
     together: !!p.together,
     note: p.note || '',
   };
@@ -144,6 +155,7 @@ function prefFrom(f) {
     maxRow: f.maxRow ? Number(f.maxRow) : null,
     together: f.together || undefined,
     weekends: f.alternate ? { mode: 'alternate', on: f.on } : undefined,
+    altDays: f.altOn ? DAYS.filter((d) => f.altOff[d]).map((d) => ({ day: d, off: f.altOff[d] })) : undefined,
     note: f.note,
   };
 }
@@ -158,6 +170,11 @@ function Editor({ name, pref, onSaved, onClose }) {
   const toggleLike = (d) => {
     if (!f.days.includes(d)) return;
     set({ likeDays: f.likeDays.includes(d) ? f.likeDays.filter((x) => x !== d) : DAYS.filter((x) => x === d || f.likeDays.includes(x)) });
+  };
+  const toggleAlt = (d) => {
+    const next = { ...f.altOff };
+    if (next[d]) delete next[d]; else next[d] = nextDates(d)[0];
+    set({ altOff: next });
   };
   const saved = normPref(pref);
 
@@ -174,6 +191,7 @@ function Editor({ name, pref, onSaved, onClose }) {
   };
   const save = () => {
     if (!f.days.length) { toast('Pick at least one day they can work.', 'err'); return; }
+    if (f.altOn && !Object.keys(f.altOff).length) { toast('Pick the day they get off every other week.', 'err'); return; }
     write(prefFrom(f), 'Saved');
   };
   const clear = () => {
@@ -241,6 +259,24 @@ function Editor({ name, pref, onSaved, onClose }) {
             </select></label>` : ''}
         </div>
         <div class="hint dv-h">On their off weekend, Saturday and Sunday count as days off. On their on weekend, the build tries to give them both days.</div>
+      </div>
+
+      <label class="dv-lab" for="dv-alt">Day off every other week</label>
+      <div>
+        <select id="dv-alt" value=${f.altOn ? 'alt' : 'any'} onChange=${(e) => set({ altOn: e.target.value === 'alt' })}>
+          <option value="any">Same every week</option>
+          <option value="alt">Every other…</option>
+        </select>
+        ${f.altOn ? html`<div class="row dv-days dv-alt">${DAYS.map((d) => {
+          const on = !!f.altOff[d];
+          return html`<label class=${'chip ' + (on ? 'blue' : 'gray')}>
+            <input type="checkbox" class="dv-sr" checked=${on} onChange=${() => toggleAlt(d)} />${d}</label>`;
+        })}</div>
+        ${DAYS.filter((d) => f.altOff[d]).map((d) => html`<label class="row dv-on"><span>First ${d} OFF:</span>
+          <select value=${f.altOff[d]} onChange=${(e) => set({ altOff: { ...f.altOff, [d]: e.target.value } })}>
+            ${nextDates(d).map((s) => html`<option value=${s}>${dayLabel(s)}</option>`)}
+          </select></label>`)}
+        <div class="hint dv-h">That day is off every second week, counting from the date you pick. They can work it on the weeks between.</div>` : ''}
       </div>
 
       ${canTimeoff() ? html`<div class="dv-lab">Specific days off</div>

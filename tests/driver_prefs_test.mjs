@@ -12,7 +12,7 @@ function ok(name, cond, detail) { if (cond) pass++; else { fail++; fails.push(`$
 function eq(name, a, b) { ok(name, JSON.stringify(a) === JSON.stringify(b), `${JSON.stringify(a)} != ${JSON.stringify(b)}`); }
 
 eq('key', PREFS_KEY, 'standing/drivers.json');
-eq('labels', WHY_LABEL, { timeoff: 'Asked off', days: "Can't work", weekend: 'Off weekend' });
+eq('labels', WHY_LABEL, { timeoff: 'Asked off', days: "Can't work", weekend: 'Off weekend', altday: 'Off every other week' });
 
 // normPref
 eq('null in', normPref(null), null);
@@ -175,6 +175,27 @@ let threw = false;
 window.JAJB.scheduleGet = async () => { throw new Error('offline'); };
 try { await saveDriverPref('X', { maxDays: 2 }); } catch { threw = true; }
 ok('save does not write over on a failed read', threw && store.drivers === null);
+
+// altDays (2026-11-21): a weekday off every other week, counting from its `off` date
+eq('alt normalized', normPref({ altDays: [{ day: 'thu', off: '2026-11-26' }, { day: 'Tue', off: '2026-11-24' }, { day: 'Tue', off: '2026-12-01' }, { day: 'X', off: '2026-11-24' }, { day: 'Wed' }] }),
+  { altDays: [{ day: 'Tue', off: '2026-11-24' }, { day: 'Thu', off: '2026-11-26' }] });
+eq('alt date snaps to its weekday', normPref({ altDays: [{ day: 'Tue', off: '2026-11-26' }] }), { altDays: [{ day: 'Tue', off: '2026-11-24' }] });
+eq('alt empty dropped', normPref({ altDays: [] }), null);
+const altT = { altDays: [{ day: 'Tue', off: '2026-11-24' }] };
+eq('alt off week', prefOffDays(altT, '2026-11-22'), { Tue: 'altday' });
+eq('alt on week', prefOffDays(altT, '2026-11-29'), {});
+eq('alt +2 weeks off (Dec 8)', prefOffDays(altT, '2026-12-06'), { Tue: 'altday' });
+eq('alt -1 week on', prefOffDays(altT, '2026-11-15'), {});
+eq('alt -2 weeks off', prefOffDays(altT, '2026-11-08'), { Tue: 'altday' });
+eq('alt across DST (Oct 27 = -4 wks)', prefOffDays(altT, '2026-10-25'), { Tue: 'altday' });
+eq('alt + can\'t-work days: days wins', prefOffDays({ days: ['Mon', 'Wed', 'Thu', 'Fri', 'Sat'], altDays: [{ day: 'Tue', off: '2026-11-24' }] }, '2026-11-22'),
+  { Sun: 'days', Tue: 'days' });
+eq('alt + weekends both apply', prefOffDays({ weekends: { mode: 'alternate', on: '2026-11-21' }, altDays: [{ day: 'Mon', off: '2026-11-30' }] }, '2026-11-29'),
+  { Sun: 'weekend', Mon: 'altday' });
+eq('alt in weekUnavailable', weekUnavailable({ drivers: { Amy: altT } }, {}, '2026-11-22'), { Amy: { Tue: { why: 'altday' } } });
+eq('alt summary', prefSummary({ maxDays: 4, altDays: [{ day: 'Fri', off: '2026-11-27' }, { day: 'Tue', off: '2026-11-24' }] }),
+  ['4 days max', 'Every other Tue, Fri off']);
+ok('alt is a limit', prefHasLimit(altT));
 
 console.log(`driver_prefs: ${pass} passed, ${fail} failed`);
 if (fail) { for (const f of fails) console.log('  FAIL ' + f); process.exit(1); }

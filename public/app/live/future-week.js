@@ -170,7 +170,7 @@ function DayMenu({ week, m, canEdit, prefs, onPrefs, onClose, lock, canLock, tra
     ${why === 'timeoff' ? html`<div class="fw-menu-info">
       <div><b>${WHY_LABEL.timeoff}</b> <span class="muted">· by ${(rec && rec.by) || '—'}, ${when(rec && rec.at)}</span></div>
       ${rec && rec.note ? html`<div class="fw-menu-note">“${rec.note}”</div>` : ''}</div>` : ''}
-    ${why === 'days' || why === 'weekend' ? html`<div class="fw-menu-info">
+    ${why === 'days' || why === 'weekend' || why === 'altday' ? html`<div class="fw-menu-info">
       <b>${WHY_LABEL[why]}</b> — from their preferences</div>` : ''}
     ${lock && !why ? ''
       : !canEdit ? html`<p class="muted" style="margin:6px 0 0">Days off are entered on the JAJB site.</p>`
@@ -371,7 +371,7 @@ export function FutureWeek({ week, label }) {
     </div>
     <div class="lv-legend">
       <span class="lv-sw" style=${`background:${SHIFT_COLORS.off}`}>${WHY_LABEL.timeoff}</span>
-      <span class="fw-pref">${WHY_LABEL.days} / ${WHY_LABEL.weekend} — from their preferences</span>
+      <span class="fw-pref">${WHY_LABEL.days} / ${WHY_LABEL.weekend} / ${WHY_LABEL.altday} — from their preferences</span>
       <span class="lv-sw b-lock">🔒 Locked: working</span>
       <span class="muted">⚠ = clashes with time off</span>
     </div>

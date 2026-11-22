@@ -12,6 +12,8 @@
 //   maxRow?: 1..5         most days in a row (1 = every other day, 2 = 2 on 1 off)
 //   together?: true       soft: keep their days next to each other
 //   weekends?: { mode: 'alternate', on: 'YYYY-MM-DD' }   `on` = a Saturday of one of their ON weekends
+//   altDays?: [{ day: 'Tue', off: 'YYYY-MM-DD' }]   (2026-11-21) that weekday is off every other week; `off` =
+//                         a date of that weekday when it's OFF (counting from there, both ways). One per day.
 //   likeDays?: ['Mon', ...]   very soft: days they'd LIKE to work (only days inside `days`; all 7 = no
 //                             preference, so dropped). A light placement nudge only; every other rule wins.
 //   likesOT?: true        SOFT (2026-10-19): likes overtime -- picked first for extra days / hours,
@@ -24,7 +26,7 @@ import { DAYS } from './waves.js';
 import { parseISODate, toISODate, addDays } from './weeks.js';
 
 export const PREFS_KEY = 'standing/drivers.json';
-export const WHY_LABEL = { timeoff: 'Asked off', days: "Can't work", weekend: 'Off weekend' };
+export const WHY_LABEL = { timeoff: 'Asked off', days: "Can't work", weekend: 'Off weekend', altday: 'Off every other week' };
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const isISO = (s) => typeof s === 'string' && ISO_RE.test(s) && !Number.isNaN(parseISODate(s).getTime());
@@ -62,6 +64,17 @@ export function normPref(p) {
   if (w && typeof w === 'object' && w.mode === 'alternate' && isISO(w.on)) {
     out.weekends = { mode: 'alternate', on: satOf(w.on) };   // a non-Saturday snaps to its weekend's Saturday
   }
+  if (Array.isArray(p.altDays)) {
+    const by = {};
+    for (const a of p.altDays) {
+      const d = a && DAYS.find((x) => x.toLowerCase() === String(a.day || '').trim().slice(0, 3).toLowerCase());
+      if (!d || by[d] || !isISO(a.off)) continue;
+      // a date on another weekday snaps to that day in the same Sun..Sat week
+      by[d] = { day: d, off: shift(a.off, DAYS.indexOf(d) - parseISODate(a.off).getDay()) };
+    }
+    const alt = DAYS.filter((d) => by[d]).map((d) => by[d]);
+    if (alt.length) out.altDays = alt;
+  }
   if (Array.isArray(p.likeDays)) {
     const set = new Set(p.likeDays.map((d) => String(d).trim().slice(0, 3).toLowerCase()));
     const like = DAYS.filter((d) => set.has(d.toLowerCase()) && (!out.days || out.days.includes(d)));
@@ -85,9 +98,20 @@ export function weekendOn(pref, satISO) {
   return ((k % 2) + 2) % 2 === 0;
 }
 
+// Is dateISO one of their OFF days from an every-other-week weekday rule (altDays)? false = no rule
+// for that weekday, or its ON week. Alternates every 7 days from the rule's `off`, both forward and back.
+export function altDayOff(pref, dateISO) {
+  const p = normPref(pref);
+  if (!p || !p.altDays || !isISO(dateISO)) return false;
+  const a = p.altDays.find((x) => x.day === DAYS[parseISODate(dateISO).getDay()]);
+  if (!a) return false;
+  const k = Math.round((parseISODate(dateISO) - parseISODate(a.off)) / (7 * 86400000));
+  return ((k % 2) + 2) % 2 === 0;
+}
+
 // Days of the Sun..Sat week starting weekStartISO they can't work, from their preferences:
-// {Day: 'days' | 'weekend'}. Sat goes with this week's weekend; Sun with the weekend whose Saturday
-// is the day before it. 'days' wins when both apply.
+// {Day: 'days' | 'weekend' | 'altday'}. Sat goes with this week's weekend; Sun with the weekend whose Saturday
+// is the day before it. 'days' wins, then 'weekend', then 'altday' (every other week).
 export function prefOffDays(pref, weekStartISO) {
   const p = normPref(pref);
   const out = {};
@@ -95,6 +119,7 @@ export function prefOffDays(pref, weekStartISO) {
   if (p.days) for (const d of DAYS) if (!p.days.includes(d)) out[d] = 'days';
   if (!out.Sun && weekendOn(p, shift(weekStartISO, -1)) === false) out.Sun = 'weekend';
   if (!out.Sat && weekendOn(p, shift(weekStartISO, 6)) === false) out.Sat = 'weekend';
+  if (p.altDays) DAYS.forEach((d, i) => { if (!out[d] && altDayOff(p, shift(weekStartISO, i))) out[d] = 'altday'; });
   return out;
 }
 
@@ -156,6 +181,7 @@ export function prefSummary(pref) {
   if (p.maxRow) out.push(`${p.maxRow} in a row max`);
   if (p.together) out.push('Days together');
   if (p.weekends) out.push('Every other weekend');
+  if (p.altDays) out.push(`Every other ${p.altDays.map((a) => a.day).join(', ')} off`);
   if (p.likeDays) {
     const idx = p.likeDays.map((d) => DAYS.indexOf(d));
     const run = idx[idx.length - 1] - idx[0] + 1 === idx.length;
