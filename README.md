@@ -80,6 +80,10 @@
 > do **Left**, keeps them out of "Who can work extra?" / "give this shift to someone else", and has a **Show drivers
 > who left** toggle. The build leaves them out of an availability export (with a *keep* link). Read fresh each
 > time; nothing saved is changed. Test: `node tests/inactive_test.mjs`.
+> **Their time off (card #1511):** on the Requests page (and its nav badge) the same test drops, from today on, their
+> days off and their waiting / approved day-off reviews — from the list, the off counts and the alert
+> (`requests-model.js withoutGone`); past days and denied reviews stay as history. A day off the hub marked
+> `closed: 'driver no longer active'` drops too and the weekly build ignores it, so it stays closed if they come back.
 
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's

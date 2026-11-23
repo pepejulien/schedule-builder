@@ -154,6 +154,7 @@ export function weekUnavailable(prefsDoc, timeoff, weekStartISO) {
   const end = shift(weekStartISO, 6);
   for (const t of Object.values(timeoff || {})) {
     if (!t || !t.name || !isISO(t.day) || t.day < weekStartISO || t.day > end) continue;
+    if (t.closed) continue;     // closed by the hub: the driver left (2026-11-22) — kept as history, never reopened
     const note = typeof t.note === 'string' ? t.note.trim() : '';
     slot(t.name)[DAYS[parseISODate(t.day).getDay()]] = note ? { why: 'timeoff', note } : { why: 'timeoff' };
   }

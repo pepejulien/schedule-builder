@@ -255,6 +255,23 @@ export function reviewActions(r) {
   return { approve: true, deny: true, close: false, note: '' };
 }
 
+// --- Drivers who left (2026-11-22, card #1511): the same "inactive driver" test as the Live board
+// (lib/inactive.js gone(name, tid, date)). From today on, their days off and their waiting / approved reviews
+// drop out of the feed, the off counts, the alert and the nav badge; so does a day off the hub closed
+// (closed: LEFT_WHY — it stays closed if the driver comes back). Past days and denied reviews stay as history.
+// Nothing is deleted or written here. offByWeek values undefined (loading) / null (read failed) pass through.
+export const LEFT_WHY = 'driver no longer active';
+export function withoutGone(offByWeek, reviews, gone, today) {
+  const g = typeof gone === 'function' ? gone : () => false;
+  const out = (t, tid) => !!t && String(t.day || '') >= today && (!!t.closed || !!g(t.name, tid || '', t.day));
+  const off = {};
+  for (const [w, docs] of Object.entries(offByWeek || {})) {
+    off[w] = docs && typeof docs === 'object' ? Object.fromEntries(Object.entries(docs).filter(([, t]) => !out(t))) : docs;
+  }
+  const rv = (reviews || []).filter((r) => !(r && (r.status === 'pending' || r.status === 'approved') && out(r, r.tid)));
+  return { off, reviews: rv };
+}
+
 // The ones still to answer (from a day on, '' = every day), by day then sent time.
 export function pendingReviews(reviews, from = '') {
   return (reviews || []).filter((r) => r && r.status === 'pending' && r.day && String(r.day) >= from)

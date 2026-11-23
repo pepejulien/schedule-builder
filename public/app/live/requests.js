@@ -15,14 +15,33 @@ import { setState, toast, useStore } from '../store.js';
 import { Banner, Spinner } from '../ui.js';
 import { canLive, canTimeoff, watchTimeoff, saveTimeoff, clearTimeoff, liveWeeks, liveWeek, watchLiveWeek,
   watchLiveSummary, canWatchSummary, canOffers, watchOffers, canReviews, watchReviews, decideReview,
-  canBlocks, watchBlocked, blockDay, unblockDay } from '../api.js';
+  canBlocks, watchBlocked, blockDay, unblockDay, activeListOnce } from '../api.js';
 import { loadDriverRoster, loadDriverPrefs } from '../lib/driver-prefs.js';
+import { inactiveIndex } from '../lib/inactive.js';
 import { toISODate } from '../lib/weeks.js';
 import { useTakesMap, OfferForm, OfferRow, CancelledToggle } from './offers.js';
 import { dayLabel, offerDays } from './offers-model.js';
 import { fold, shiftISO, sundayOf, rangeOf, weeksBetween, askedLabel, conflictsOf,
   monthOf, shiftMonth, longDate, monthGrid, dayViews, refusedText, reviewsWaiting, applyProblem, denyReason,
-  reviewActions, CALL_OFF_WHY, BLOCKED_WARN, BLOCK_REASON_MAX, blockReason, blockedOf, offMode, bothLine } from './requests-model.js';
+  reviewActions, CALL_OFF_WHY, BLOCKED_WARN, BLOCK_REASON_MAX, blockReason, blockedOf, offMode, bothLine, withoutGone } from './requests-model.js';
+
+// Drivers who left (2026-11-22, card #1511): the roster's active list, read once for the page and the nav badge
+// (again after a few minutes) -> gone(name, tid, date). Until it answers (or when it can't be read) nobody is gone.
+let goneCache = null;
+function useGone() {
+  const [gone, setGone] = useState(() => (goneCache && goneCache.fn) || (() => false));
+  useEffect(() => {
+    if (!goneCache || Date.now() - goneCache.at > 5 * 60e3) {
+      const c = { at: Date.now(), fn: null };
+      c.p = activeListOnce().then((x) => { c.fn = inactiveIndex(x); return c.fn; }).catch(() => () => false);
+      goneCache = c;
+    }
+    let alive = true;
+    goneCache.p.then((fn) => { if (alive) setGone(() => fn); });
+    return () => { alive = false; };
+  }, []);
+  return gone;
+}
 
 // "Off counts:" Requested / Weekly preference / Both (Jose 2026-10-19): remembered per browser (default
 // Requested; storage blocked = Requested)
@@ -103,7 +122,8 @@ export function useConflictCount() {
   const off = useFeed(subOff, weeks), sm = useFeed(subSm, weeks);
   const rk = `${today}|`;
   const rv = useFeed(subReviews, canLive() && canReviews() ? [rk] : []);
-  return conflictsOf(off, sm, today, rv[rk]).drivers + reviewsWaiting(rv[rk], today).n;
+  const open = withoutGone(off, rv[rk], useGone(), today);     // drivers who left don't count (2026-11-22)
+  return conflictsOf(open.off, sm, today, open.reviews).drivers + reviewsWaiting(open.reviews, today).n;
 }
 
 // "+ Add a day off": a driver (the roster, or any typed name, as on Driver preferences), a date, a note.
@@ -459,6 +479,7 @@ export function Requests() {
     if (canLive()) loadDriverRoster({ active: true }).then((r) => { if (alive) setRoster((r || []).filter((x) => x && x.name)); }).catch(() => {});
     return () => { alive = false; };
   }, []);
+  const gone = useGone();
 
   // a tap on a day: on a phone (the panel is under the calendar) bring the panel into view
   const panelRef = useRef(null);
@@ -489,14 +510,16 @@ export function Requests() {
 
   // the active roster (no `active` marks = the active list couldn't be read: everyone on it)
   const activeNames = (roster.some((r) => 'active' in r) ? roster.filter((r) => r.active) : roster).map((r) => r.name);
-  const src = { offByWeek: off, smByWeek: sm, offers, takesById, reviews, blocked,
+  // drivers who left: their days off and reviews from today on drop out (withoutGone; past ones stay as history)
+  const open = withoutGone(off, reviews, gone, today);
+  const src = { offByWeek: open.off, smByWeek: sm, offers, takesById, reviews: open.reviews, blocked,
     prefs: mode !== 'requested' ? prefs : null, activeNames: roster.length ? activeNames : null };
   const filter = { show, driver, counts: mode };
   const first = grid.cells[0].date, last = grid.cells[41].date;
   const views = dayViews(first, last, src, filter);
   const selView = (sel >= first && sel <= last ? views : dayViews(sel, sel, src, filter))[sel];
-  const c = conflictsOf(off, sm, today, reviews);
-  const rw = reviewsWaiting(reviews, today);
+  const c = conflictsOf(open.off, sm, today, open.reviews);
+  const rw = reviewsWaiting(open.reviews, today);
   const loading = grid.weeks.some((w) => (canTimeoff() && off[w] === undefined) || (canOffers() && offerWeeks[w] === undefined));
   const failed = grid.weeks.some((w) => off[w] === null || offerWeeks[w] === null) || rv[rkMonth] === null || bk[rkMonth] === null;
   // the offer form's days: the published days of the next 14 days (the Live board's view.days shape)
