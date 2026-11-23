@@ -425,7 +425,7 @@ select.lv-wksel option { font-size: 13.5px; font-weight: 500; }
      at the grid's end the wheel goes on to scroll the page */
   .layout.lv-wide .lv-wrap.lv-tall { max-height: max(420px, calc(100vh - 52px - 24px)); }   /* shrinks when a search leaves few rows */
   .layout.lv-wide .lv-jump {
-    display: inline-flex; position: fixed; right: 16px; bottom: 72px; z-index: 30;   /* above the hub's ⌂ Home button */ height: 36px; padding: 0 14px;
+    display: inline-flex; position: fixed; right: 16px; bottom: calc(108px + env(safe-area-inset-bottom,0px)); z-index: 30;   /* above the hub's ⌂ Home + 💡 Idea pills (they end at ~94px) */ height: 36px; padding: 0 14px;
     border-radius: 999px; border: 0; background: var(--navy); color: #fff; font-size: 12.5px; font-weight: 600;
     box-shadow: 0 4px 14px rgba(36,55,98,.28);
   }
