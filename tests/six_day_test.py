@@ -60,8 +60,17 @@ def open_count(rep):
 
 print('-- a tight week: everyone worked Thu-Sat last week, 9 routes + 2 backups a day, 14 drivers')
 names = [f'Driver {chr(65 + i)} Test' for i in range(14)]
-p = week('tight', names, 9, 2, {'Thu', 'Fri', 'Sat'})
+print('-- by default it only OFFERS the 6-day rebuild')
+p = week('ask', names, 9, 2, {'Thu', 'Fri', 'Sat'})
 rep = json.loads(runner.run(p))
+off = rep.get('six_day_offer')
+ok(off and off['open_six'] < off['open_now'], f'offer: {off and (off["open_now"], off["open_six"], len(off["drivers"]))}')
+ok(not rep.get('six_day_used') and not any(n.startswith('6-DAY') for n in rep['notes']), 'normal build kept until asked')
+ok(off and runner._open_slots(runner._STATE['res']) == off['open_now'], 'the shown week is the normal one')
+print('-- the button: six_day_fallback = use')
+p = week('tight', names, 9, 2, {'Thu', 'Fri', 'Sat'}, six_day_fallback='use')
+rep = json.loads(runner.run(p))
+ok(rep.get('six_day_used') and not rep.get('six_day_offer'), 'used, no offer shown')
 ok(rep.get('ok'), 'build ran')
 res = runner._STATE['res']
 note = next((n for n in rep['notes'] if n.startswith('6-DAY WEEK') or n.startswith('6-day rebuild')), '')
@@ -96,13 +105,13 @@ ok(rep['check']['errors'] == [] or all(not e.startswith(('DAYS7', 'TOTDAYS', 'CO
 print('-- an easy week: plenty of drivers, nothing open -> no rebuild')
 p = week('easy', [f'Easy {chr(65 + i)} Person' for i in range(30)], 6, 1, set())
 rep = json.loads(runner.run(p))
-ok(rep.get('ok') and not any('6-DAY' in n or '6-day rebuild' in n for n in rep['notes']), 'no 6-day rebuild when nothing is open')
+ok(rep.get('ok') and not any('6-DAY' in n or '6-day rebuild' in n for n in rep['notes']) and not rep.get('six_day_offer'), 'no offer when nothing is open')
 ok(not getattr(runner._STATE['res'], 'six_ok', None), 'no 6-day approvals')
 
 print('-- six_day_fallback: false turns it off')
 p = week('off', names, 9, 2, {'Thu', 'Fri', 'Sat'}, six_day_fallback=False)
 rep = json.loads(runner.run(p))
-ok(rep.get('ok') and not any(n.startswith('6-DAY') for n in rep['notes']), 'off when asked')
+ok(rep.get('ok') and not any(n.startswith('6-DAY') for n in rep['notes']) and not rep.get('six_day_offer'), 'off when asked')
 
 print('\nall ok' if not fails else f'\n{len(fails)} FAILED')
 sys.exit(1 if fails else 0)

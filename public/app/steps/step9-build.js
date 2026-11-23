@@ -974,6 +974,20 @@ export function Step9Build() {
       </div>
       <${PublishCard} wizard=${wizard} r=${r} />
 
+      ${r.six_day_offer ? html`<${Banner} kind="warn">
+        <b>${r.six_day_offer.open_now} route/backup spot${r.six_day_offer.open_now === 1 ? ' is' : 's are'} still open.</b>
+        A 6-day rebuild would leave <b>${r.six_day_offer.open_six}</b> open. It lets
+        ${r.six_day_offer.drivers.length} driver${r.six_day_offer.drivers.length === 1 ? '' : 's'} work 6 days in 7,
+        each with at least one backup day, and treats every driver the same (no tiers).
+        <div class="hint">${r.six_day_offer.drivers.map((d) => `${d.name} (${d.road} route + ${d.backup} backup)`).join(', ')}</div>
+        <button class="accent" style="margin-top:8px" onClick=${() => {
+          setWizard((w) => ({ advanced: { ...(w.advanced || {}), six_day_rebuild: true } })); runBuild(); }}>
+          Rebuild with 6-day rules</button><//>` : ''}
+      ${r.six_day_used || wizard.advanced?.six_day_rebuild ? html`<${Banner} kind="info">
+        ${r.six_day_used ? 'Built with 6-day rules.' : '6-day rules were on, but they filled no more spots.'}
+        <button class="link" onClick=${() => {
+          setWizard((w) => ({ advanced: { ...(w.advanced || {}), six_day_rebuild: false } })); runBuild(); }}>
+          Go back to normal rules</button><//>` : ''}
       ${(r.notes || []).length ? html`<${Banner} kind="info">
         <b>Notes:</b>
         <ul>${r.notes.map((l) => html`<li>${l}</li>`)}</ul><//>` : ''}

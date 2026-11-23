@@ -446,6 +446,21 @@ def _six_day_rebuild(cfg, res, tnotes):
     return c6b, res6, t6
 
 
+def _six_day_preview(cfg, res):
+    """Try the 6-day rebuild on the side, keep the normal build, and return the offer for the
+    button: {open_now, open_six, drivers: [{name, road, backup}]} - or None if it fills no more."""
+    before = _open_slots(res)
+    try:
+        _c, res6, _t = _six_day_rebuild(cfg, res, [])
+    except Exception:  # noqa: BLE001 - no offer
+        return None
+    if res6 is res:                       # it filled no more (or failed): nothing to offer
+        res.notes = [n for n in res.notes if not n.startswith("6-day rebuild:")]
+        return None
+    return dict(open_now=before, open_six=_open_slots(res6),
+                drivers=[dict(name=n, road=r, backup=b) for n, r, b in _six_days(res6)])
+
+
 def run(config_path):
     """Return a JSON string. On success: {ok:true, ...report}. On a config
     error: {ok:false, kind:'config', message}. On any other crash:
@@ -455,8 +470,15 @@ def run(config_path):
         if cfg.get("exact_copy"):                 # Amazon's sheet as is (see _force_exact)
             cfg = _exact_plan(cfg)
         cfg, res, tnotes = _build_with_auto_trainers(cfg)
-        if not cfg.get("exact_copy") and cfg.get("six_day_fallback", True) and _open_slots(res):
-            cfg, res, tnotes = _six_day_rebuild(cfg, res, tnotes)
+        # Jose 2026-11-23: don't switch on its own - "ask" (default) tries the 6-day version on the
+        # side and offers it with a button; "use" (the button / advanced setting) keeps it
+        six_mode = cfg.get("six_day_fallback", "ask")
+        six_offer = None
+        if not cfg.get("exact_copy") and six_mode and _open_slots(res):
+            if six_mode == "use":
+                cfg, res, tnotes = _six_day_rebuild(cfg, res, tnotes)
+            else:
+                six_offer = _six_day_preview(cfg, res)
         if cfg.get("exact_copy"):
             _force_exact(res)
             tnotes = []
@@ -478,7 +500,12 @@ def run(config_path):
                           + _recount_short(res, chk))
         # json.dumps turns int dict keys (Counter distributions) into strings
         # and tuples into lists automatically -> browser-safe.
-        return json.dumps(_report(cfg, res, chk), default=str)
+        rep = _report(cfg, res, chk)
+        if six_offer:
+            rep["six_day_offer"] = six_offer
+        if getattr(res, "six_ok", None) is not None:
+            rep["six_day_used"] = True
+        return json.dumps(rep, default=str)
     except ScheduleConfigError as e:
         return json.dumps(dict(ok=False, kind="config", message=str(e)))
     except Exception:  # noqa: BLE001 - report any solver crash to the UI

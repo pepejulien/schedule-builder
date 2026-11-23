@@ -360,6 +360,8 @@ export function assembleConfig(state) {
   const wknCap = Number(adv.max_weekend_days);
   if (Number.isFinite(wknCap) && wknCap > 0) config.max_weekend_days = wknCap;
   if (adv.merge_standing_unavailable && config.prefs_csv) config.merge_standing_unavailable = true;
+  // 6-day rebuild (2026-11-23): the engine only offers it; the button on the build page sets this
+  if (adv.six_day_rebuild) config.six_day_fallback = 'use';
   // Drivers-page keys: only when non-empty. NOT part of the name pre-flight below.
   for (const k of ['extra_unavailable', 'driver_max_days', 'driver_soft_max_days', 'driver_max_row', 'prefer_days', 'like_days']) {
     if (Object.keys(prefs[k]).length) config[k] = prefs[k];

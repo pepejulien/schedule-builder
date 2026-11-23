@@ -69,6 +69,10 @@ export function setWizard(patch) {
   const nextW = { ...w, ...(typeof patch === 'function' ? patch(w) : patch) };
   // a new week starts with no build
   if (nextW.week?.startISO !== w.week?.startISO && nextW.build?.status !== 'idle') nextW.build = idleBuild();
+  // ...and asks again about 6-day rules (the button on the build page, 2026-11-23)
+  if (nextW.week?.startISO !== w.week?.startISO && nextW.advanced?.six_day_rebuild) {
+    nextW.advanced = { ...nextW.advanced, six_day_rebuild: false };
+  }
   setState({ wizard: nextW });
   scheduleDraftSave();
 }
