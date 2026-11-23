@@ -84,6 +84,10 @@
 > days off and their waiting / approved day-off reviews — from the list, the off counts and the alert
 > (`requests-model.js withoutGone`); past days and denied reviews stay as history. A day off the hub marked
 > `closed: 'driver no longer active'` drops too and the weekly build ignores it, so it stays closed if they come back.
+> **A last day mid-week (card #1733):** a roster end date inside the build week (`lastDaysInWeek`, both availability
+> paths → `availability.leftAfter`) makes every day after it a HARD day off, why `'left'` (solver `extra_unavailable`;
+> beats an asked-off day; a lock there is dropped with a warning). An end date before the Sunday leaves them out of
+> the build on both paths. Test: `node tests/left_midweek_test.mjs` (real builds of the Week-40 fixture).
 
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's

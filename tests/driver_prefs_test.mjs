@@ -12,7 +12,8 @@ function ok(name, cond, detail) { if (cond) pass++; else { fail++; fails.push(`$
 function eq(name, a, b) { ok(name, JSON.stringify(a) === JSON.stringify(b), `${JSON.stringify(a)} != ${JSON.stringify(b)}`); }
 
 eq('key', PREFS_KEY, 'standing/drivers.json');
-eq('labels', WHY_LABEL, { timeoff: 'Asked off', days: "Can't work", weekend: 'Off weekend', altday: 'Off every other week' });
+eq('labels', WHY_LABEL, { timeoff: 'Asked off', days: "Can't work", weekend: 'Off weekend', altday: 'Off every other week',
+  left: 'After their last day' });
 
 // normPref
 eq('null in', normPref(null), null);

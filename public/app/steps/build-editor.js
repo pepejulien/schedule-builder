@@ -382,7 +382,7 @@ export function DayMenu({ d, info, r, busy, onClose, act }) {
         <div class=${d.streak >= (lim.max_consecutive || 5) ? 'hot' : ''}><b>${d.streak}</b><span>days in a row, last week counts</span></div>
         <div class=${(d.max7 ?? 0) > (lim.max_7day_hours || 60) - 6 ? 'hot' : ''}><b>${d.max7 ?? '—'}h</b><span>most in any 7 days (max ${lim.max_7day_hours || 60})</span></div>
       </div>
-      ${c.kind === 'off' ? html`<div class="dm-info warn"><b>${first} is off ${day}</b>${why ? ` — ${why === 'Not hired yet' ? 'not hired yet' : 'from the Drivers page'}` : ' — marked Unavailable'}.
+      ${c.kind === 'off' ? html`<div class="dm-info warn"><b>${first} is off ${day}</b>${why ? ` — ${why === 'Not hired yet' ? 'not hired yet' : why === 'left' ? 'after their last day with us' : 'from the Drivers page'}` : ' — marked Unavailable'}.
         You can still give them a shift after confirming you talked to them.</div>` : ''}
       ${c.kind === 'trainer' || c.kind === 'trainee' ? html`<div class="dm-info">${c.kind === 'trainer'
         ? html`<b>Trainer</b> — rides along with <b>${c.partner}</b> on the ${c.top} route.`

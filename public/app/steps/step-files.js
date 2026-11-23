@@ -19,7 +19,7 @@ import { isSunday, weekLabel, weekNumberOf, nextSunday, toISODate } from '../lib
 import { inspectWorkbook, pairUp } from '../lib/file-detect.js';
 import { demandFromPrevSchedule } from '../lib/demand-prefill.js';
 import { liveAvailability, missingActive, withExtraDrivers } from '../lib/live-availability.js';
-import { goneForWeek } from '../lib/inactive.js';
+import { goneForWeek, lastDaysInWeek } from '../lib/inactive.js';
 import { EXACT_MIN } from '../lib/config-assemble.js';
 
 function DayCell({ cell }) {
@@ -128,9 +128,11 @@ export function StepFiles() {
     const extra = missingActive(av.rosterNames, active, weekISO);
     // and the ones in the file who left the company (2026-11-22, lib/inactive.js): left out of the build
     const leftOut = goneForWeek(av.rosterNames, active, weekISO);
-    if (!extra.length && !leftOut.length) return;
+    // last day inside the week (2026-11-22, card #1733): the days after it become hard days off in the build
+    const leftAfter = lastDaysInWeek([...av.rosterNames, ...extra.map((x) => x.name)], active, weekISO);
+    if (!extra.length && !leftOut.length && !Object.keys(leftAfter).length) return;
     setWizard((w) => (w.availability && w.availability.bytes === av.bytes
-      ? { availability: { ...withExtraDrivers(w.availability, extra, weekISO), leftOut } } : {}));
+      ? { availability: { ...withExtraDrivers(w.availability, extra, weekISO), leftOut, leftAfter } } : {}));
   }
   const leaveOut = (name) => setWizard((w) => ({ availability: withExtraDrivers(w.availability,
     (w.availability.extraDrivers || []).filter((x) => x.name !== name), week.startISO) }));

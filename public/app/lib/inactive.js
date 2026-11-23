@@ -41,6 +41,21 @@ export function goneForWeek(names, active, weekStartISO) {
   return (names || []).filter((n) => gone(n, '', weekStartISO));
 }
 
+// ... and the ones whose last day falls inside the week (2026-11-22, card #1733): here on its Sunday, gone by
+// its Saturday. -> {name: endDate 'YYYY-MM-DD'} — the build makes every day after endDate a hard day off.  (pure)
+export function lastDaysInWeek(names, active, weekStartISO) {
+  const gone = inactiveIndex(active);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(weekStartISO || ''));
+  if (!m) return {};
+  const sat = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + 6)).toISOString().slice(0, 10);
+  const out = {};
+  for (const n of names || []) {
+    const g = !gone(n, '', weekStartISO) && gone(n, '', sat);
+    if (g && g.why === 'end') out[n] = g.endDate;
+  }
+  return out;
+}
+
 // A day on the schedule that is real work to cover: a route, backup, training, dispatch or meeting.
 // Empty, Unavailable and a call-out / no-show / day-off mark are not.
 export function isWorkCell(v) {

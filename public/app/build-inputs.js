@@ -17,6 +17,8 @@ export function assembleFromWizard(w) {
     demand: w.demand || {},
     backups: w.backups || { mode: 'pct', pct: 0.15 },
     standing: withLeftOut(w.standing || {}, w.availability),
+    // {name: last day} inside this week (card #1733): the days after it are hard days off
+    leftAfter: (w.availability && w.availability.leftAfter) || {},
     trainerHistory: w.trainerHistory || {},
     advanced: w.advanced || {},
     priorWeekAvailable: !!(w.priorWeek && w.priorWeek.bytes),

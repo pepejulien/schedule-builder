@@ -26,7 +26,8 @@ import { DAYS } from './waves.js';
 import { parseISODate, toISODate, addDays } from './weeks.js';
 
 export const PREFS_KEY = 'standing/drivers.json';
-export const WHY_LABEL = { timeoff: 'Asked off', days: "Can't work", weekend: 'Off weekend', altday: 'Off every other week' };
+export const WHY_LABEL = { timeoff: 'Asked off', days: "Can't work", weekend: 'Off weekend', altday: 'Off every other week',
+  left: 'After their last day' };   // left: a roster end date inside the build week (card #1733)
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const isISO = (s) => typeof s === 'string' && ISO_RE.test(s) && !Number.isNaN(parseISODate(s).getTime());

@@ -786,6 +786,7 @@ PREF_OFF_WHY = {
     "timeoff": "asked for this day off (Drivers page)",
     "days": "can't work {day}s (Drivers page)",
     "weekend": "off weekend (Drivers page)",
+    "left": "after their last day with the company (roster)",   # card #1733
 }
 
 

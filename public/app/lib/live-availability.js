@@ -12,6 +12,7 @@ import * as XLSX from '../../vendor/xlsx.mjs';
 import { DAYS } from './waves.js';
 import { parseISODate, addDays, toISODate as toISO } from './weeks.js';
 import { weekUnavailable, WHY_LABEL } from './driver-prefs.js';
+import { goneForWeek, lastDaysInWeek } from './inactive.js';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const fold = (s) => String(s || '').trim().toLowerCase();
@@ -66,19 +67,24 @@ export function makeAvailability(roster, unavailable, weekStartISO) {
 // on the newest published week or Driver preferences — new hires, or staff the export never had)
 // and left (on those but not active any more — not scheduled).
 export async function liveAvailability(weekStartISO) {
-  const [{ loadDriverRoster, readDriverPrefs }, { timeoffOnce }] = await Promise.all([
+  const [{ loadDriverRoster, readDriverPrefs }, { timeoffOnce, activeListOnce }] = await Promise.all([
     import('./driver-prefs.js'), import('../api.js')]);
-  const [all, prefs, timeoff] = await Promise.all([
-    loadDriverRoster({ active: true }), readDriverPrefs(), timeoffOnce(weekStartISO)]);
+  const [all, prefs, timeoff, active] = await Promise.all([
+    loadDriverRoster({ active: true }), readDriverPrefs(), timeoffOnce(weekStartISO),
+    activeListOnce().catch(() => null)]);
   if (!timeoff) throw new Error("couldn't read the days off asked for that week");
   const fromActive = all.some((r) => 'active' in r);
-  const roster = fromActive ? all.filter((r) => r.active) : all;
+  // a last day (roster endDate, card #1733) before the week: left out like the inactive ones; inside the
+  // week: on the sheet, every day after it a hard day off in the build (leftAfter, config-assemble)
+  const ended = new Set(goneForWeek(all.map((r) => r.name), active, weekStartISO));
+  const roster = (fromActive ? all.filter((r) => r.active) : all).filter((r) => !ended.has(r.name));
   if (!roster.length) throw new Error('no drivers found');
   return {
     ...makeAvailability(roster, weekUnavailable(prefs, timeoff, weekStartISO), weekStartISO),
     fromActive,
-    added: all.filter((r) => r.isNew).map((r) => r.name),
-    left: fromActive ? all.filter((r) => !r.active).map((r) => r.name) : [],
+    added: all.filter((r) => r.isNew && !ended.has(r.name)).map((r) => r.name),
+    left: all.filter((r) => (fromActive && !r.active) || ended.has(r.name)).map((r) => r.name),
+    leftAfter: lastDaysInWeek(roster.map((r) => r.name), active, weekStartISO),
   };
 }
 

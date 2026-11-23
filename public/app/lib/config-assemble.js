@@ -4,6 +4,9 @@ import { portalToSchedule } from './waves.js';
 import { preflightNames, resolveFuzzy, matchName } from './names.js';
 import { normPref, weekUnavailable, onWeekendDays } from './driver-prefs.js';
 import { locksForBuild, lockList } from './locks.js';
+import { parseISODate, addDays, toISODate } from './weeks.js';
+
+const isoPlus = (iso, n) => (iso ? toISODate(addDays(parseISODate(iso), n)) : '');
 
 export const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 export const PREFS_FAILED_MSG = "Couldn't read driver preferences — this build doesn't use them.";
@@ -276,6 +279,24 @@ export function assembleConfig(state) {
   // Names map to this week's roster spelling when they match one driver; the rest
   // go through as-is (the solver skips + lists them, never a strict_names error).
   const prefs = buildPrefKeys(state, roster, exclude, bench, closed);
+  // --- a last day inside the week (roster endDate, card #1733 — lib/inactive.js lastDaysInWeek): every day
+  // after it is a HARD day off ('left'), whatever else the driver asked for; a lock there is dropped ---
+  const leftDays = {};
+  for (const [nm, end] of Object.entries(state.leftAfter || {})) {
+    const r = canon(nm);
+    if (!r || exclude.has(r) || !/^\d{4}-\d{2}-\d{2}$/.test(String(end))) continue;
+    const after = DAYS.filter((_, i) => isoPlus(state.week?.startISO, i) > end);
+    if (!after.length) continue;
+    leftDays[r] = after;
+    const eu = (prefs.extra_unavailable[r] = prefs.extra_unavailable[r] || {});
+    const inf = (prefs.info.off[r] = prefs.info.off[r] || {});
+    for (const d of after) { eu[d] = 'left'; inf[d] = { why: 'left', note: `last day ${end}` }; }
+  }
+  const lockedAfter = lk.locked_days.filter((l) => (leftDays[l.name] || []).includes(l.day));
+  if (lockedAfter.length) {
+    lk.locked_days = lk.locked_days.filter((l) => !lockedAfter.includes(l));
+    warnings.push(`Locked after their last day, so not used: ${lockedAfter.map((l) => `${l.name} ${l.day}`).join(', ')}.`);
+  }
   if (state.driverPrefsFailed) warnings.push(PREFS_FAILED_MSG);
   if (state.timeoffFailed) warnings.push(TIMEOFF_FAILED_MSG);
 

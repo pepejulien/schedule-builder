@@ -55,7 +55,8 @@ OPTIONAL FEATURES (behind config flags):
   * Drivers-page preferences (2026-10, all optional; names matched loosely --
     an unmatched / ambiguous name is skipped and listed, never an error):
       extra_unavailable {name: {Day: why}} -- HARD days off, like a submitted
-        Unavailable day (why: 'timeoff' | 'days' | 'weekend'; kept in dr['unav_why']).
+        Unavailable day (why: 'timeoff' | 'days' | 'weekend' | 'left' = after a roster
+        last day inside the week, card #1733; kept in dr['unav_why']).
       driver_max_days {name: n} -- HARD cap on days on the clock this week
         (roads + backups + training + dispatch + meetings); min with max_total_days.
       driver_max_row {name: n} -- HARD max days in a row (last week counts);
@@ -442,7 +443,7 @@ def load_config(config_path):
     if eu is not None:
         if not isinstance(eu, dict) or any(not isinstance(v, dict) for v in eu.values()):
             errs.append("'extra_unavailable' must be {name: {Day: why}} "
-                        "(why = 'timeoff' | 'days' | 'weekend')")
+                        "(why = 'timeoff' | 'days' | 'weekend' | 'left')")
         else:
             for nm, v in eu.items():
                 bad = [d for d in v if d not in ALL]
