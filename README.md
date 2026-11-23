@@ -74,6 +74,13 @@
 > Published weeks show the 🔒 read-only. `app/lib/locks.js`, `app/live/future-week.js`; tests:
 > `python tests/locked_days_test.py`, `node tests/locks_test.mjs`.
 
+> **Drivers who left (2026-11-22, card #1426):** one "inactive driver" test, `app/lib/inactive.js` — roster status
+> former OR Amazon offboarded (= not on Firestore `dispatch/lists.drivers`) OR `driverInfo[name].endDate` before the
+> day. The Live board hides their rows on a week (phone: a day) where they have no work, tags the ones who still
+> do **Left**, keeps them out of "Who can work extra?" / "give this shift to someone else", and has a **Show drivers
+> who left** toggle. The build leaves them out of an availability export (with a *keep* link). Read fresh each
+> time; nothing saved is changed. Test: `node tests/inactive_test.mjs`.
+
 A web app that lets an HR person build the weekly Amazon DSP driver schedule for
 JAJB Logistics (station WWV9) without touching Claude Code: fill in the week's
 inputs, click **Build**, download the finished `Week-NN-Schedule.xlsx`.

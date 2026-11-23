@@ -19,6 +19,7 @@ import { isSunday, weekLabel, weekNumberOf, nextSunday, toISODate } from '../lib
 import { inspectWorkbook, pairUp } from '../lib/file-detect.js';
 import { demandFromPrevSchedule } from '../lib/demand-prefill.js';
 import { liveAvailability, missingActive, withExtraDrivers } from '../lib/live-availability.js';
+import { goneForWeek } from '../lib/inactive.js';
 import { EXACT_MIN } from '../lib/config-assemble.js';
 
 function DayCell({ cell }) {
@@ -125,12 +126,16 @@ export function StepFiles() {
     if (!canActiveRoster() || !av) return;
     const active = await activeListOnce();
     const extra = missingActive(av.rosterNames, active, weekISO);
-    if (!extra.length) return;
+    // and the ones in the file who left the company (2026-11-22, lib/inactive.js): left out of the build
+    const leftOut = goneForWeek(av.rosterNames, active, weekISO);
+    if (!extra.length && !leftOut.length) return;
     setWizard((w) => (w.availability && w.availability.bytes === av.bytes
-      ? { availability: withExtraDrivers(w.availability, extra, weekISO) } : {}));
+      ? { availability: { ...withExtraDrivers(w.availability, extra, weekISO), leftOut } } : {}));
   }
   const leaveOut = (name) => setWizard((w) => ({ availability: withExtraDrivers(w.availability,
     (w.availability.extraDrivers || []).filter((x) => x.name !== name), week.startISO) }));
+  const keepIn = (name) => setWizard((w) => ({ availability: { ...w.availability,
+    leftOut: (w.availability.leftOut || []).filter((n) => n !== name) } }));
 
   // Next week's availability from Driver preferences + the days off asked for
   // on the Live board's future week (lib/live-availability.js).
@@ -307,6 +312,9 @@ export function StepFiles() {
         ${avail.extraDrivers.map((x, i) => html`${i ? ', ' : ''}${x.name}${x.hire_date ? html` <span class="muted">(hired ${x.hire_date})</span>` : ''}${' '}
           <button class="link" onClick=${() => leaveOut(x.name)}>leave out</button>`)}.
         A new hire needs a training pair in <b>Trainers & settings</b>.<//>` : ''}
+      ${avail && avail.source !== 'live' && (avail.leftOut || []).length ? html`<p class="muted small" style="margin:6px 2px 0">
+        Left the company (Amazon offboarded, or former on the roster), so left out of the build:${' '}
+        ${avail.leftOut.map((n, i) => html`${i ? ', ' : ''}${n} <button class="link" onClick=${() => keepIn(n)}>keep</button>`)}.</p>` : ''}
       ${avail && avail.source !== 'live' && prior.bytes ? html`<p class="muted" style="margin:6px 2px 0">Wrong way round?${' '}<button class="link" onClick=${swap}>Swap the two files</button></p>` : ''}
 
       <h3>Week</h3>

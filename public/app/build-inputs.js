@@ -1,6 +1,13 @@
 // Adapt the wizard store shape to the config assembler + gather solver inputs.
 import { assembleConfig, capacityCheck } from './lib/config-assemble.js';
 
+// drivers in the availability export who left the company (step-files addActive, 2026-11-22) are
+// excluded from this build only — the saved standing settings stay as they are
+function withLeftOut(standing, av) {
+  const out = av && av.source !== 'live' ? (av.leftOut || []) : [];
+  return out.length ? { ...standing, exclude: [...(standing.exclude || []), ...out] } : standing;
+}
+
 export function assembleFromWizard(w) {
   const state = {
     week: { num: w.week.num, startISO: w.week.startISO, label: w.week.label },
@@ -9,7 +16,7 @@ export function assembleFromWizard(w) {
     tierByDriver: w.tierByDriver || {},
     demand: w.demand || {},
     backups: w.backups || { mode: 'pct', pct: 0.15 },
-    standing: w.standing || {},
+    standing: withLeftOut(w.standing || {}, w.availability),
     trainerHistory: w.trainerHistory || {},
     advanced: w.advanced || {},
     priorWeekAvailable: !!(w.priorWeek && w.priorWeek.bytes),

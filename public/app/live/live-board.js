@@ -18,6 +18,7 @@ import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualH
   watchLiveSummary, canWatchSummary, canOffers, canTrades, activeListOnce, watchLocks } from '../api.js';
 import { lockOf, lockTip } from '../lib/locks.js';
 import { certIndex, canDrive, certLabel } from '../lib/van-certs.js';
+import { inactiveIndex, isWorkCell, leftTip } from '../lib/inactive.js';
 import { MissingCheck } from './missing.js';
 import { routeDays, backupDays, rtMismatches, rtBackupShown } from './limits.js';
 import { RtCheck } from './rt-check.js';
@@ -705,7 +706,7 @@ function PickUndo({ picked, busy, onUndo, onGone }) {
 
 // "Who can work extra?" — every driver checked against the rules for one
 // day and role, safest first. picked (optional): the last pick, still undoable (PickUndo).
-function Finder({ view, finder, setFinder, ready, rev, busy, onPick, picked, onUndoPick, onPickGone }) {
+function Finder({ view, finder, setFinder, ready, rev, busy, onPick, picked, onUndoPick, onPickGone, gone = () => false }) {
   const [st, setSt] = useState(null);
   const days = view.days.filter((x) => x.open);
   const info = view.days.find((x) => x.day === finder.day);
@@ -720,7 +721,7 @@ function Finder({ view, finder, setFinder, ready, rev, busy, onPick, picked, onU
   }, [ready, rev, finder.day, finder.role]);
 
   const open = info ? (finder.role === 'road' ? info.routes - info.routes_filled : info.backup - info.backup_filled) : 0;
-  const list = (st && st.list) || [];
+  const list = ((st && st.list) || []).filter((c) => !gone(c.name, finder.day));   // left the company (2026-11-22)
   const groups = [['ok', 'Can work — no rule breaks'], ['warn', 'Can work — goes past a soft limit (flagged)'],
     ['confirm', 'Overtime — can work after a pop-up'],
     ['confirm6', '6 days out of 7 — can work after a pop-up'],
@@ -808,6 +809,8 @@ function Board() {
   const [bkOnly, setBkOnly] = useState(false);      // "Backups only": on backup every picked day (no day: any day)
   const [vanF, setVanF] = useState('');             // van certification filter (2026-11-11): '' | 'CDV' | 'EDV' (EDV covers CDV)
   const [certOf, setCertOf] = useState(null);       // (name, tid) -> "EDV" | "CDV" | "" | null, from dispatch/lists.driverInfo
+  const [goneOf, setGoneOf] = useState(() => () => false);   // (name, tid, ISO) -> left the company? (lib/inactive.js)
+  const [showGone, setShowGone] = useState(false);  // "Show drivers who left" (2026-11-22): their empty rows too
   const [mode, setMode] = useState(readMode);       // a phone: 'day' (one day's list) | 'week' (the grid)
   const [pday, setPday] = useState(null);           // the day the Day view shows (null: firstDay)
   const small = useSmall();
@@ -825,7 +828,10 @@ function Board() {
   // Amazon van certifications (2026-11-11): the cloud roster's, via dispatch/lists.driverInfo.cert
   useEffect(() => {
     let alive = true;
-    activeListOnce().then((x) => { if (alive && x && x.info && Object.values(x.info).some((d) => d && 'cert' in d)) setCertOf(() => certIndex(x.info)); })
+    activeListOnce().then((x) => {
+      if (alive && x) setGoneOf(() => inactiveIndex(x));   // the roster, read fresh each time the board opens
+      if (alive && x && x.info && Object.values(x.info).some((d) => d && 'cert' in d)) setCertOf(() => certIndex(x.info));
+    })
       .catch(() => {});
     return () => { alive = false; };
   }, []);
@@ -1416,8 +1422,23 @@ function Board() {
   // van certification filter (2026-11-11): "CDV" = CDV or EDV certified, "EDV" = EDV certified
   const certFor = (x) => (certOf ? certOf(x.name, x.tid) : null);
   const vanOk = (x) => !vanF || canDrive(certFor(x) || '', vanF);
+  // drivers who left (2026-11-22, card #1426): gone on a day = the roster says so (lib/inactive.js) or the
+  // board's own "left the company" from that day on. Their row only shows while they still have work on
+  // it (with a Left tag, so it gets covered) — or with "Show drivers who left". Nothing saved changes.
+  const wkEnd = view.days[view.days.length - 1].date;
+  const goneOn = (x, iso) => (x.notScheduled ? false : x.left && iso >= x.left ? { why: 'left' } : goneOf(x.name, x.tid, iso));
+  const workOn = (x, dd) => { const lm = x.left ? markOf(x.name, dd.day) : null;
+    const v = (x.cells || {})[dd.day];
+    return isWorkCell(v) || routeFor(x.name, dd.date) != null || (!v && bkFor(x.name, dd.date) != null)
+      || !!(lm && lm.kind === 'left' && lm.was); };
+  const goneIdle = (x) => !!goneOn(x, wkEnd) && !view.days.some((dd) => workOn(x, dd));
+  // and never offered a new shift: left out of "Who can work extra?" / "give this shift to someone else"
+  const goneDay = (name, day) => { const dd = view.days.find((y) => y.day === day);
+    return !!dd && !!(byName[name] ? goneOn(byName[name], dd.date) : goneOf(name, '', dd.date)); };
+  const nGone = view.drivers.filter((x) => goneOn(x, wkEnd)).length;
+  const nGoneHid = showGone ? 0 : view.drivers.filter(goneIdle).length;
   const shown = view.drivers.filter((x) => (!q.trim() || fold(x.name).includes(fold(q.trim())))
-    && vanOk(x)
+    && vanOk(x) && (showGone || !goneIdle(x))
     && (!bkOnly ? dayF.every((day) => worksOn(x, day))
       : dayF.length ? dayF.every((day) => bkOn(x, day)) : view.days.some((y) => bkOn(x, y.day))));
   const filtered = q.trim() || dayF.length || bkOnly || vanF;
@@ -1556,6 +1577,9 @@ function Board() {
           <button class=${vanF === 'EDV' ? 'on' : ''} aria-pressed=${vanF === 'EDV'} onClick=${() => setVanF(vanF === 'EDV' ? '' : 'EDV')}
             title="Only drivers Amazon has certified for an EDV (they may drive a CDV too)">EDV</button>
         </div>` : ''}
+        ${nGone ? html`<label class="row lv-showgone" title="Drivers who left the company (Amazon offboarded, or marked former on the roster). Anyone who still has a shift this week always shows, with a Left tag.">
+          <input type="checkbox" checked=${showGone} onChange=${(e) => setShowGone(e.target.checked)} /> Show drivers who left${
+            nGoneHid && !dayMode ? html` <span class="muted">(${nGoneHid} hidden)</span>` : ''}</label>` : ''}
         ${filtered && !dayMode ? html`<span class="muted">${shown.length} of ${view.drivers.length} drivers</span>` : ''}
       </div>
       ${dayMode ? html`
@@ -1565,6 +1589,7 @@ function Board() {
         match=${(n, x) => (!q.trim() || fold(n).includes(fold(q.trim()))) && (!x || vanOk(x))}
         Block=${Block} subLine=${subLine} routeFor=${routeFor} bkFor=${bkFor} markOf=${markOf} notes=${notes} lates=${lates}
         locks=${locks} risks=${risks} ready=${ready} busy=${busy} onCell=${(name, day) => setCell({ name, day })}
+        goneOn=${goneOn} showGone=${showGone}
         onCounts=${setCounter} onFind=${goFind} strip=${html`${stripFor(vday)}${tradesFor(vday)}`}
         onPost=${canOffers() ? (date) => setPostAt(date) : null}
         offerLine=${canOffers() ? (date) => html`<${OfferDayLine} date=${date} />` : null} />` : html`
@@ -1611,11 +1636,12 @@ function Board() {
               const nWorked = (x.worked_dates || []).length;
               const tm = TIER_META[x.cls] || TIER_META.free;
               const now = risks[x.name] && risks[x.name].now;
-              return html`<tr class=${x.left ? 'lv-leftrow' : ''}>
+              return html`<tr class=${x.left || goneOn(x, wkEnd) ? 'lv-leftrow' : ''}>
                 <td class="lv-namecol">${x.notScheduled ? html`<b class="lv-name">${x.name}</b> <span class="chip gray" title="In Route Tracker, not on this week's schedule — hours checks only">not on the schedule</span>`
                   : html`<button class="link lv-name" title=${x.left ? `${x.name} left the company` : 'Give ' + x.name + ' a shift'}
                   onClick=${() => (x.left ? setCell({ name: x.name, day: x.left }) : setAdder({ name: x.name }))}>${x.name}</button>`}
-                  ${x.left ? html` <span class="chip gray" title="Left the company">Left ${x.left}</span>` : ''}${certChip(x)}
+                  ${x.left ? html` <span class="chip gray" title="Left the company">Left ${x.left}</span>`
+                    : goneOn(x, wkEnd) ? html` <span class="chip gray" title=${leftTip(goneOn(x, wkEnd))}>Left</span>` : ''}${certChip(x)}
                   ${sortBy === 'name' ? html` <span class="chip ${tm.chip} tier-mini">${tm.short}</span>` : ''}
                   ${(x.helper_days || []).length ? html` <span class="chip trainer-chip" title="Trains a new hire this week">Trainer</span>` : ''}
                   ${subLine(x)}
@@ -1673,7 +1699,7 @@ function Board() {
         or overtime goes through after a pop-up — that driver's days then shake until it's fixed.</p>
     </div>
 
-    <${Finder} view=${view} finder=${finder} setFinder=${setFinder} ready=${ready} rev=${data.rev} busy=${busy}
+    <${Finder} view=${view} finder=${finder} setFinder=${setFinder} ready=${ready} rev=${data.rev} busy=${busy} gone=${goneDay}
       onPick=${finderPick} picked=${pickLive} onUndoPick=${undoPick} onPickGone=${() => setPicked(null)} />
 
     <div class="card">
@@ -1719,7 +1745,8 @@ function Board() {
     ${pairer && view.days.find((x) => x.day === pairer.day) ? html`<${PairPicker} req=${pairer}
       info=${view.days.find((x) => x.day === pairer.day)} busy=${busy}
       onClose=${() => setPairer(null)} onPick=${pairPick} />` : ''}
-    ${mover ? html`<${SlotEditor} editor=${mover} cands=${moverCands} busy=${busy}
+    ${mover ? html`<${SlotEditor} editor=${mover} busy=${busy}
+      cands=${moverCands && moverCands.list ? { ...moverCands, list: moverCands.list.filter((c) => !goneDay(c.name, mover.day)) } : moverCands}
       onPick=${(n) => moveTo(n)} onClose=${() => setMover(null)}
       onRemove=${async () => { const m = await run('apply', { day: mover.day, role: mover.role, from_name: mover.fromName }); if (m.ok) setMover(null); }} />` : ''}
     ${counter && view.days.find((x) => x.day === counter && x.open) ? html`<${CountsEditor}

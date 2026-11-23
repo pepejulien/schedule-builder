@@ -6,6 +6,7 @@ import { cellInfo, WAVE_COLORS, SHIFT_COLORS } from './live-model.js';
 import { parseISODate } from '../lib/weeks.js';
 import { headCounts } from './offers-model.js';
 import { lockOf, lockTip } from '../lib/locks.js';
+import { isWorkCell, leftTip } from '../lib/inactive.js';
 
 // "10:05 AM" < "10:25 AM" < "1:05 PM"
 const waveMins = (w) => { const m = String(w).match(/(\d{1,2}):(\d{2}) ([AP]M)/); if (!m) return 9999;
@@ -35,8 +36,10 @@ export function DayPills({ view, day, today, onPick, dot }) {
   </div>`;
 }
 
+// goneOn(x, ISO) (2026-11-22): left the company that day — hidden when they have no work that day
+// (unless showGone), else tagged Left so the shift gets covered
 export function DayList({ view, viewRT, day, match, searching, Block, subLine, routeFor, bkFor, markOf, notes, lates, locks, risks,
-  ready, busy, onCell, onCounts, onFind, strip, onPost, offerLine }) {
+  ready, busy, onCell, onCounts, onFind, strip, onPost, offerLine, goneOn = () => false, showGone = false }) {
   const dd = view.days.find((x) => x.day === day) || view.days[0];
   const date = parseISODate(dd.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   const g = { wave: {}, bk: [], trainer: [], other: [], rt: [], out: [], left: [], off: [], free: [] };
@@ -48,7 +51,9 @@ export function DayList({ view, viewRT, day, match, searching, Block, subLine, r
     const rtBk = c.kind === 'empty' && route == null ? bkFor(x.name, dd.date) : undefined;
     const lm = x.left ? markOf(x.name, dd.day) : null;
     const left = lm && lm.kind === 'left' && lm.was ? lm.was : null;
-    const r = { x, v, c, route, rtBk, left };
+    const gone = goneOn(x, dd.date);
+    if (gone && !showGone && !isWorkCell(v) && route == null && rtBk == null && !left) continue;
+    const r = { x, v, c, route, rtBk, left, gone };
     if (x.notScheduled) { if (route != null) g.rt.push(r); continue; }
     if (left) g.left.push(r);
     else if (c.kind === 'road' || c.kind === 'trainee') (g.wave[c.top] = g.wave[c.top] || []).push(r);
@@ -74,7 +79,7 @@ export function DayList({ view, viewRT, day, match, searching, Block, subLine, r
       <div class=${'lvd-blk' + (hot ? ' lv-over' : '')}>${r.c.kind === 'empty' && r.route == null && r.rtBk == null && !r.left
         ? html`<span class="lvd-none">—</span>` : html`<${Block} v=${r.v} route=${r.route} bk=${r.rtBk} left=${r.left} />`}</div>
       <div class="lvd-who">
-        <b>${x.name}</b>${notes[k] ? html` <span aria-label="Has a comment">💬</span>` : ''}${lates[k] ? html` <span title=${'Late — ' + lates[k].time} aria-label="Late arrival">⏰</span>` : ''}${
+        <b>${x.name}</b>${r.gone ? html` <span class="chip gray" title=${leftTip(r.gone)}>Left</span>` : ''}${notes[k] ? html` <span aria-label="Has a comment">💬</span>` : ''}${lates[k] ? html` <span title=${'Late — ' + lates[k].time} aria-label="Late arrival">⏰</span>` : ''}${
           lk ? html` <span title=${lockTip(lk)} aria-label=${lockTip(lk)}>🔒</span>` : ''}
         ${r.c.partner ? html`<div class="lv-sub">${r.c.kind === 'trainer' ? 'Training' : 'Trainer'}: ${r.c.partner}</div>` : ''}
         ${subLine(x)}
