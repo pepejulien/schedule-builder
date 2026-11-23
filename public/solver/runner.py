@@ -394,6 +394,58 @@ def _prev_hook(actual):
     return hook
 
 
+def _open_slots(res):
+    """Routes + backups the finished grid leaves empty, the whole week."""
+    return sum(max(0, res.routes[d] - _routes_filled(res, d)) + max(0, res.backup[d] - _bk_filled(res, d))
+               for d in res.DAYS)
+
+
+def _six_days(res):
+    """Drivers with 6 worked days in some 7 days in a row this week: [(name, road days, backup days)]."""
+    out = []
+    for dr in res.roster:
+        s = _all_worked(res, dr)
+        if s and days7_worst(s, [res.DATEALL[d] for d in ALL_DAYS if res.DATEALL[d] in s])[0] > 5:
+            out.append((dr["name"], len(dr["prim"]) + len(dr["helper"]), len(dr["bk"])))
+    return out
+
+
+def _six_day_rebuild(cfg, res, tnotes):
+    """Jose 2026-11-23: the normal rules (5 days in 7, tiers, day targets) left routes or backups
+    open. Rebuild under six-day rules - every driver treated the same, 6 worked days in 7 allowed,
+    but never more than 5 road days in 7, so anyone on 6 days has a backup day (2h) and can be sent
+    home. Kept only when it leaves fewer open spots; either way a note says what happened."""
+    before = _open_slots(res)
+    c6 = copy.deepcopy(cfg)
+    c6.update(six_day_mode=True, max_days_in_7=6,
+              max_total_days=max(int(cfg.get("max_total_days", 5)), 6),
+              max_consecutive=max(int(cfg.get("max_consecutive", 5)), 6))
+    try:
+        c6b, res6, t6 = _build_with_auto_trainers(c6)
+    except Exception:  # noqa: BLE001 - the normal build stands
+        res.notes = list(res.notes) + ["6-day rebuild: tried because spots were open, but it failed - the normal build is kept."]
+        return cfg, res, tnotes
+    after = _open_slots(res6)
+    if after >= before:
+        res.notes = list(res.notes) + [f"6-day rebuild: tried with 6 days in 7 allowed, but it filled no more "
+                                       f"({after} open either way) - the normal build is kept."]
+        return cfg, res, tnotes
+    # after the build the normal limits come back (5 in 7, days in a row, total days), so the Live
+    # board still flags every 6th day for dispatch - these drivers' 6 days show as approved
+    # (run() puts them with the locked days' approvals), and a 7th day stays blocked
+    res6.MAX7D, res6.MAXC, res6.MAXTOT = res.MAX7D, res.MAXC, res.MAXTOT
+    six = _six_days(res6)
+    res6.six_ok = {norm(n) for n, _, _ in six}
+    one =sum(1 for _, _, b in six if b == 1)
+    res6.notes = list(res6.notes) + [
+        f"6-DAY WEEK: the normal rules left {before} route/backup spot(s) open, so the week was rebuilt "
+        f"with 6 days in 7 allowed and every driver treated the same (no tiers). Open now: {after}. "
+        f"{len(six)} driver(s) work 6 days in 7, each with at least one backup day"
+        + (f" ({one} with only one)" if one else "") + ": "
+        + ", ".join(f"{n} ({r} route + {b} backup this week)" for n, r, b in six)]
+    return c6b, res6, t6
+
+
 def run(config_path):
     """Return a JSON string. On success: {ok:true, ...report}. On a config
     error: {ok:false, kind:'config', message}. On any other crash:
@@ -403,6 +455,8 @@ def run(config_path):
         if cfg.get("exact_copy"):                 # Amazon's sheet as is (see _force_exact)
             cfg = _exact_plan(cfg)
         cfg, res, tnotes = _build_with_auto_trainers(cfg)
+        if not cfg.get("exact_copy") and cfg.get("six_day_fallback", True) and _open_slots(res):
+            cfg, res, tnotes = _six_day_rebuild(cfg, res, tnotes)
         if cfg.get("exact_copy"):
             _force_exact(res)
             tnotes = []
@@ -413,6 +467,7 @@ def run(config_path):
         # a locked day is the manager's own call: the limits it bends (their max
         # days / in a row, overtime) show as approved, not as a failed build
         locked = {norm(lk["name"]) for lk in (getattr(res, "LOCKS", None) or []) if not lk.get("why")}
+        locked |= getattr(res, "six_ok", set())    # the 6-day rebuild's drivers (2026-11-23)
         _STATE.update(cfg=cfg, res=res, edits=[], undo=[],
                       ovr_unav=set(), ovr_policy=set(locked), ovr_limits=set(locked), marks={},
                       rt={}, rt_off=set())
@@ -2026,7 +2081,7 @@ def _rp_tier(cfg, res, dr):
 # 6 days in 7 is only a real risk when those 7 days could go over this many hours on the clock
 # (Jose 2026-11-15: "the maximum amount of hours does not exceed 54"). At or under it the
 # driver ranks like anyone else; once a backup day has passed, the real hours bring it down.
-SIX_SAFE_H = 54
+SIX_SAFE_H = 56   # Jose 2026-11-23: 56h or less is fine (was 54)
 
 
 def _proj_hours(res, dr, day, avg):

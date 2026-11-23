@@ -169,7 +169,7 @@ if six:
     ok(rk is not None and rk['days'] >= 6, f'{six["name"]}: 6+ days in 7 with no backup is a risk ({rk})')
     p = J(runner.roster_plan, {'day': D, 'rows': live, 'today': TODAY})
     c = next((c for c in p['changes'] if c['kind'] == 'six' and c['name'] == six['name']), None)
-    ok(c is not None and not c['checked'] and '54h' in c['why'], f'6-day offered, unticked, says over 54h ({c and c["why"]})')
+    ok(c is not None and not c['checked'] and '56h' in c['why'], f'6-day offered, unticked, says over 56h ({c and c["why"]})')
     if c and c.get('with'):
         r = J(runner.roster_apply, {'day': D, 'picks': [{'kind': 'six', 'name': c['name'], 'with': c['with']}], 'today': TODAY})
         x = r['roster_results'][0]
@@ -223,7 +223,7 @@ for hlen, want_six in ((8.0, False), (11.0, True)):
         ok(runner._six_risk(res, dr, D3) is not None, f'{hlen}h days: 6-day risk offered')
     else:
         ok(x['rank'] < 3 and x['six_ok'] and x['h7'] <= runner.SIX_SAFE_H, f'{hlen}h days: 6 in 7 at {x["h7"]}h -> ranks like anyone (rank {x["rank"]})')
-        ok('under 54h' in runner._rp_why(x), 'says why: under 54h')
+        ok('under 56h' in runner._rp_why(x), 'says why: under 56h')
         ok(runner._six_risk(res, dr, D3) is None, f'{hlen}h days: no 6-day risk')
 for k, v in keep.items():
     dr[k] = v

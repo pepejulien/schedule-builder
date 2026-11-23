@@ -678,6 +678,14 @@ def build_schedule(cfg, prev_hook=None):
         notes.append('ACTIVE DRIVERS not in the availability file, added with no days off '
                      '(from the cloud roster): ' + ', '.join(extra_added))
     roster = [dr for dr in roster if norm(dr['name']) not in EXCLUDE]
+    if cfg.get('six_day_mode'):
+        # six-day mode (Jose 2026-11-23): every driver the same - no tiers, no discipline
+        # day targets, no rate order; only exact pins (trainees, HR overrides) keep their days
+        red = {r for nm in (cfg.get('reduced_days') or {}).get('names', [])
+               for r in resolve(nm, rnames)[:1]}
+        TARGET = {k: v for k, v in TARGET.items() if k not in red}
+        MOST = {norm(dr['name']) for dr in roster} - set(TARGET)
+        cfg = dict(cfg, reduced_days={}, driver_rates={})
 
     # ---- per-driver preferences (Drivers page, 2026-10) ----
     # Loose names: the Drivers page lists people who may not be on this week's
@@ -840,6 +848,28 @@ def build_schedule(cfg, prev_hook=None):
         while f in s:
             n += 1; f += ONE
         return n <= maxc(dr) and days7(s, dt) <= MAX7D
+
+    # SIX-DAY MODE (Jose 2026-11-23, cfg['six_day_mode']): a week where the normal rules leave
+    # routes / backups open, rebuilt with 6 worked days in 7 allowed - but never 6 ROUTE days:
+    # in any 7 days in a row a driver has at most MAX7D-1 road days (route / training helper),
+    # so anyone on 6 days has at least one backup day (2h) and is easy to send home.
+    SIX = bool(cfg.get('six_day_mode'))
+
+    def road_dates(dr):
+        s = {DATEALL[d] for d in dr['prim'] if d in DATEALL} | {DATEALL[d] for d in dr['helper'] if d in DATEALL}
+        hp = dr.get('h_prev')                # last week: real hours (a day over 2 backups = a road day)
+        if hp:
+            s |= {d for d, h in hp.items() if h and h > 2 * BH}
+        else:
+            s |= set(dr['w_prev'])           # no hours: every worked day counts as a road day
+        return s
+
+    def roadok(dr, dt):
+        """runok for a ROAD day (route / helper): in six-day mode also at most MAX7D-1 road
+        days in any 7 days in a row."""
+        if not runok(dr, dt):
+            return False
+        return not SIX or days7(road_dates(dr) | {dt}, dt) <= MAX7D - 1
 
     # CAPX: per-driver EXTRA road-day allowance granted by the emergency
     # route-coverage pass (Jose 2026-07-20: routes must be covered -- a short
@@ -1156,7 +1186,7 @@ def build_schedule(cfg, prev_hook=None):
                          if d not in dr['unav'] and i not in pslot[d]
                          and d not in dr['helper']
                          and (dr.get('train_done') is None or ALL.index(d) > dr['train_done'])
-                         and pdays(dr) < pcap(dr) and runok(dr, dt)
+                         and pdays(dr) < pcap(dr) and roadok(dr, dt)
                          and wkend_ok(dr, d)]
                 if not cands:
                     break  # PHASE 1b repairs stranded slots; shortfalls reported after it
@@ -1183,7 +1213,7 @@ def build_schedule(cfg, prev_hook=None):
         return (d not in dr['unav'] and i not in pslot[d]
                 and d not in dr['helper']
                 and (dr.get('train_done') is None or ALL.index(d) > dr['train_done'])
-                and runok(dr, DATEALL[d]) and wkend_ok(dr, d))
+                and roadok(dr, DATEALL[d]) and wkend_ok(dr, d))
 
     def _augment(d, seen):
         # `seen` is one SHARED mutable set per augmentation attempt (Kuhn's
@@ -1327,6 +1357,10 @@ def build_schedule(cfg, prev_hook=None):
         s = worked(dv)
         if any(days7(s, DATEALL[d]) > MAX7D for d in ALL if DATEALL[d] in s):
             return False
+        if SIX:                              # six-day mode: never 6 road days in 7
+            rd = road_dates(dv)
+            if any(days7(rd, DATEALL[d]) > MAX7D - 1 for d in ALL if DATEALL[d] in rd):
+                return False
         for dt0 in s:
             if dt0 - ONE not in s:
                 run = 0; c = dt0
