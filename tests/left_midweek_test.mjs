@@ -58,6 +58,24 @@ eq('nobody else touched', Object.keys(c.extra_unavailable), ['Daniel Lynch']);
 ok('an excluded driver: nothing', !assembleConfig({ ...state, leftAfter: { 'Zackary McDonald': '2026-08-03' } }).config.extra_unavailable?.['Zackary McDonald']);
 ok('last day Saturday: nothing', !assembleConfig({ ...state, weekTimeoff: null, leftAfter: { 'Aaron Bell': '2026-08-08' } }).config.extra_unavailable);
 
+// ---- a training day locked after the last day (trainee or trainer) is dropped with a warning ----
+const trLock = (date, name, trainer) => ({ [lockId(date, name)]: { driverKey: name, date, note: '', training: true, trainer, by: 'Jose', at: null } });
+{
+  const t1 = assembleConfig({ ...state, weekTimeoff: null, leftAfter: { 'Daniel Lynch': '2026-08-05' },
+    weekLocks: trLock('2026-08-06', 'Daniel Lynch', 'Cara Amos') });
+  ok('pair locked Thu after trainee last day: dropped', !t1.config.training_pairs.some((p) => p.trainee === 'Daniel Lynch'), JSON.stringify(t1.config.training_pairs));
+  ok('... with a warning', t1.warnings.some((w) => /Training locked after a last day/.test(w) && /Daniel Lynch Thu/.test(w)), t1.warnings.join(' | '));
+  const t2 = assembleConfig({ ...state, weekTimeoff: null, leftAfter: { 'Daniel Lynch': '2026-08-05' },
+    weekLocks: trLock('2026-08-06', 'Matthew Dutton', 'Daniel Lynch') });
+  ok('trainer gone by that day: dropped', !t2.config.training_pairs.some((p) => p.trainee === 'Matthew Dutton'), JSON.stringify(t2.config.training_pairs));
+  const t3 = assembleConfig({ ...state, weekTimeoff: null, leftAfter: { 'Daniel Lynch': '2026-08-05' },
+    weekLocks: trLock('2026-08-06', 'Daniel Lynch', '') });
+  ok('auto lock after last day: dropped + warned', !t3.config.auto_training.some((p) => p.trainee === 'Daniel Lynch') && t3.warnings.some((w) => /Training locked after/.test(w)));
+  const t4 = assembleConfig({ ...state, weekTimeoff: null, leftAfter: { 'Daniel Lynch': '2026-08-05' },
+    weekLocks: trLock('2026-08-04', 'Daniel Lynch', 'Cara Amos') });
+  ok('pair locked Tue (before last day): kept', t4.config.training_pairs.some((p) => p.trainee === 'Daniel Lynch' && p.day === 'Tue'), JSON.stringify(t4.config.training_pairs));
+}
+
 // ---- real builds: without and with the last day ----
 const FIX = decodeURIComponent(new URL('./fixtures', import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1');
 const SOLVER = decodeURIComponent(new URL('../public/solver', import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1');

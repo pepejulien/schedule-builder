@@ -190,6 +190,22 @@ export function assembleConfig(state) {
     warnings.push(`"Copy Amazon's schedule exactly" is on — this week's locked days aren't used.`);
   }
   if (lk.unmatched.length) warnings.push(`Locked, but not on this week's roster: ${[...new Set(lk.unmatched)].join(', ')}.`);
+  // A last day inside the week (card #1733): the days after it, per driver. A locked training day on one of them
+  // (trainee or trainer gone by then) is dropped BEFORE it's merged, so the pair's other days stay as they were.
+  const leftDays = {};
+  for (const [nm, end] of Object.entries(state.leftAfter || {})) {
+    const r = canon(nm);
+    if (!r || exclude.has(r) || !/^\d{4}-\d{2}-\d{2}$/.test(String(end))) continue;
+    const after = DAYS.filter((_, i) => isoPlus(state.week?.startISO, i) > end);
+    if (after.length) leftDays[r] = after;
+  }
+  const goneOn = (n, d) => (leftDays[n] || []).includes(d);
+  const pairsAfter = [...lk.pairs, ...lk.autos].filter((p) => p.day && (goneOn(p.trainee, p.day) || (p.trainer && goneOn(p.trainer, p.day))));
+  if (pairsAfter.length) {
+    lk.pairs = lk.pairs.filter((p) => !pairsAfter.includes(p));
+    lk.autos = lk.autos.filter((p) => !pairsAfter.includes(p));
+    warnings.push(`Training locked after a last day, so not used: ${pairsAfter.map((p) => `${p.trainee} ${p.day}`).join(', ')}.`);
+  }
   const notTrainee = (n) => (p) => p.trainee !== n;
   for (const p of lk.pairs) {
     for (const list of [trainingPairs, auto_training]) {
@@ -281,13 +297,10 @@ export function assembleConfig(state) {
   const prefs = buildPrefKeys(state, roster, exclude, bench, closed);
   // --- a last day inside the week (roster endDate, card #1733 — lib/inactive.js lastDaysInWeek): every day
   // after it is a HARD day off ('left'), whatever else the driver asked for; a lock there is dropped ---
-  const leftDays = {};
   for (const [nm, end] of Object.entries(state.leftAfter || {})) {
     const r = canon(nm);
-    if (!r || exclude.has(r) || !/^\d{4}-\d{2}-\d{2}$/.test(String(end))) continue;
-    const after = DAYS.filter((_, i) => isoPlus(state.week?.startISO, i) > end);
-    if (!after.length) continue;
-    leftDays[r] = after;
+    const after = leftDays[r];
+    if (!after) continue;
     const eu = (prefs.extra_unavailable[r] = prefs.extra_unavailable[r] || {});
     const inf = (prefs.info.off[r] = prefs.info.off[r] || {});
     for (const d of after) { eu[d] = 'left'; inf[d] = { why: 'left', note: `last day ${end}` }; }
