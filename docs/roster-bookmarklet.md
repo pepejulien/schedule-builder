@@ -200,3 +200,22 @@ Like Amazon's own picks, this happens before dispatch presses Save on Amazon.
    "**Live board updated:** Tiamia Allen Schwalbe → 10:25 AM", or per driver
    "Live board NOT updated for X: <why> — change it there by hand (to 10:25 AM)."
    An answer that comes after the 90 s still replaces the line.
+
+## EDV routes first (Jose 2026-11-24)
+
+Amazon's "Standard Parcel Electric - Rivian MEDIUM" rows are EDV routes. The app window tags each
+route driver (roster-send.js `tagEdv`): `list` = on the Vehicle Assigner's EDV drivers list (Fleet tab,
+Firestore `assigner/edv`) and EDV-certified (or certification unknown), `cert` = EDV-certified
+(dispatch/lists.driverInfo.cert) but not on the list, `nocert` = on the list but Amazon shows no EDV
+certification (never put on an EDV row), `''` = anyone else and every trainee.
+
+While the EDV service has an empty row and an EDV driver isn't on Amazon yet, the bookmark fills the
+EDV service first:
+1. List drivers go in at their own start time, else at the nearest EDV start time (the Live board
+   follows, like any moved driver).
+2. Rows still free: a pick list of the `cert` drivers on a route that day; dispatch ticks up to the
+   number of free rows.
+3. Dispatch presses Save under the EDV rows and clicks the bookmark again: Standard Parcel gets everyone
+   else (EDV drivers are "already on Amazon").
+"Skip EDV — fill Standard Parcel" goes straight to Standard Parcel; list drivers are then kept off it
+while the EDV service has an empty row. Mock: `tests/roster_mock/seed-edv.js` + `scheduling-legacy.html?set=edv`.

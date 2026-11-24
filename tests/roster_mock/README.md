@@ -94,3 +94,10 @@ Seed with `seed-moves.js` (as above; re-paste it before each run - a run saves t
 - `rows=rerun2` (+ Olga Pre on an 11:25 row, one more row): **Skip — fill as it is**, then
   **Fill 2 rows, take 1 off**: Casey in Daniel's place, Grace in the empty row, Olga's row emptied.
 `window.__mock.log` stays empty in all four.
+
+### EDV routes first (Jose 2026-11-24)
+Paste `seed-edv.js` in the http://localhost:8777 tab, open http://localhost:8791/scheduling-legacy.html?frame=1&set=edv,
+Run the bookmark. Expected: the EDV service is filled first — Alex Keller (10:45), Chris Smith moved from 10:25,
+Mark Barker "on the list but not EDV-certified", a pick list (Eva Cert, Ed Volt) for the 1 row left; tick Ed →
+Fill 3 rows. Press the EDV Save, run again: Standard Parcel gets the other 5 (1 row stays empty). "Skip EDV"
+instead: Standard Parcel without Alex and Chris ("Kept off Standard Parcel for the EDV rows").

@@ -114,7 +114,13 @@
 
   // Amazon's associate list (value = Transporter ID). No phone → "Name  Station"; inactive → "… (Inactive)".
   const ENGINE = params.get("set") === "engine";
-  const PEOPLE = (ENGINE ? [
+  // ?set=edv (Jose 2026-11-24): an EDV service; seeded by seed-edv.js (EDV list + certifications)
+  const EDV = params.get("set") === "edv";
+  const PEOPLE = (EDV ? [
+    ["Alex Keller", "A-ALEX", "+13045550301"], ["Chris Smith", "A-CHRIS", "+13045550302"], ["Mark Barker", "A-MARK", "+13045550303"],
+    ["Eva Cert", "A-EVA", "+13045550304"], ["Ed Volt", "A-ED", "+13045550305"], ["Ron Reg", "A-RON", "+13045550306"],
+    ["Rita Reg", "A-RITA", "+13045550307"], ["Rob Reg", "A-ROB", "+13045550308"],
+  ] : ENGINE ? [
     ["Alex Keller", "A0010", "+13045550201"], ["Bianca Cole", "A0005", "+13045550202"], ["Casey Church", "A0007", "+13045550203"],
     ["Colin Drake", "A0006", "+13045550204"], ["Connor Stephenson", "A0012", "+13045550205"], ["Daniel Lynch", "A0001", "+13045550206"],
     ["Grace Nolan", "A0009", "+13045550207"], ["Olga Pre", "A-OLGA", "+13045550112"],
@@ -140,7 +146,10 @@
     // + Olga Pre (not on the Live board) on an 11:25 row and one more empty row: Skip the checklist,
     // Fill -> Casey in Daniel's place, Grace in the empty row, Olga's row emptied
     rerun2: [["11:05 am", 2, { 0: "A0010", 1: "A0001" }], ["11:25 am", 3, { 0: "A0006", 1: "A-OLGA" }]] }[VARIANT] || [["11:05 am", 2], ["11:25 am", 2]];
-  const SVC = ENGINE ? [
+  const SVC = EDV ? [
+    { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours", rows: rows([["10:25 am", 3], ["10:45 am", 3]]) },
+    { heading: "Standard Parcel Electric - Rivian MEDIUM - Default as station - 10 Hours", rows: rows([["10:45 am", 3]]) },
+  ] : ENGINE ? [
     { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours", rows: rows(ENGINE_SP) },
   ] : [
     { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours",

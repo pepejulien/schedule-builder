@@ -8,7 +8,8 @@
 import { scheduleToPortal, DAY_FULL } from './lib/waves.js';
 import { parseISODate } from './lib/weeks.js';
 import { sundayOf, loadEngine, saveWeek, logLines, summaryFromReport } from './live/live-model.js';
-import { onFirebase, canLive, liveSummaryOnce, liveWeek } from './api.js';
+import { onFirebase, canLive, liveSummaryOnce, liveWeek, edvListOnce, activeListOnce } from './api.js';
+import { certIndex } from './lib/van-certs.js';
 import { liveRequest } from './solver-client.js';
 
 export const AMAZON_ORIGIN = 'https://logistics.amazon.com';
@@ -76,6 +77,36 @@ export function rosterForDay(summary, iso) {
   return out;
 }
 
+// EDV routes (Jose 2026-11-24): Amazon's "Standard Parcel Electric" rows go only to the drivers on the
+// Vehicle Assigner's EDV list (Fleet tab), and only when Amazon shows them EDV-certified (when the
+// certification is known). When the day has too few, dispatch picks from the other EDV-certified drivers
+// on a route that day. Each route driver gets edv:
+//   'list'   on the EDV list (and EDV-certified, or certification unknown)
+//   'cert'   EDV-certified, not on the list - offered to dispatch when the list runs short
+//   'nocert' on the list, but Amazon shows no EDV certification - never put on an EDV row
+//   ''       anyone else, and every trainee (a trainee never drives an EDV)
+// `names` = the list (null: couldn't read it), `certOf` = van-certs.js certIndex (null: no cert data).
+const foldName = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+const flName = (s) => { const t = foldName(s).replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean); return t.length ? t[0] + '|' + t[t.length - 1] : ''; };
+export function edvMatcher(names) {
+  const full = new Set(), fl = new Map();
+  for (const n of names || []) { full.add(foldName(n)); const k = flName(n); fl.set(k, (fl.get(k) || 0) + 1); }
+  // the exact name, else first + last when only one name on the list has them
+  return (name) => full.has(foldName(name)) || fl.get(flName(name)) === 1;
+}
+export function tagEdv(drivers, names, certOf) {
+  const onList = edvMatcher(names);
+  return (drivers || []).map((d) => {
+    const cert = certOf ? certOf(d.name, d.tid) : null;
+    let edv = '';
+    if (!d.trainee) {
+      if (onList(d.name)) edv = cert == null || cert === 'EDV' ? 'list' : 'nocert';
+      else if (cert === 'EDV') edv = 'cert';
+    }
+    return { ...d, edv };
+  });
+}
+
 // ---------------------------------------------------------------- the page --
 export function rosterHashDate(hash = (typeof location !== 'undefined' ? location.hash : '')) {
   const m = String(hash || '').match(/^#roster=(\d{4}-\d{2}-\d{2})$/);
@@ -138,13 +169,17 @@ export function startRosterPage(root, iso) {
   const showDrivers = (p) => {
     list.textContent = '';
     const ul = el('ul', 'hint');
-    for (const d of p.drivers) ul.append(el('li', null, `${d.portal} — ${d.name}${d.trainee ? ` (trainee, with ${d.trainer || 'trainer'})` : ''}`));
+    for (const d of p.drivers) ul.append(el('li', null, `${d.portal} — ${d.name}${d.trainee ? ` (trainee, with ${d.trainer || 'trainer'})` : ''}${d.edv === 'list' ? ' (EDV driver)' : ''}`));
     list.append(ul);
     if (p.skipped.length) list.append(el('p', 'hint', 'Not in a DA box: ' + p.skipped.map((s) => `${s.name} (${s.why.toLowerCase()})`).join(', ')));
   };
+  // the EDV list + certifications (2026-11-24), read once before the day is first sent
+  let edvNames = null, certOf = null;
   const dayPayload = (summary, rev) => {
     const r = rosterForDay(summary, iso);
-    return { type: 'jajb-roster', date: iso, week, rev, label: r.label, dayName: r.dayName, drivers: r.drivers, skipped: r.skipped, error: r.error };
+    return { type: 'jajb-roster', date: iso, week, rev, label: r.label, dayName: r.dayName,
+      drivers: tagEdv(r.drivers, edvNames, certOf), skipped: r.skipped, error: r.error,
+      edvInfo: { list: edvNames ? edvNames.length : null, certs: !!certOf } };
   };
 
   // the week + its engine (the plan and the changes need it): {d, rep}; throws plain words
@@ -255,6 +290,12 @@ export function startRosterPage(root, iso) {
     if (!J.user()) return fail('Not signed in — open jajb-ops.web.app, sign in, then click the bookmark again.');
     await J.waitMe();
     if (!J.has('schedule')) return fail('Your login doesn\'t include the Schedule Builder. Ask Jose if you need it.');
+    // read alongside the Live board; a list that can't be read only means no EDV rows get filled
+    const edvP = Promise.all([edvListOnce(6000).catch(() => null), activeListOnce(6000, 1500).catch(() => null)])
+      .then(([names, act]) => {
+        edvNames = names;
+        if (act && act.info && Object.values(act.info).some((x) => x && 'cert' in x)) certOf = certIndex(act.info);
+      });
     let summary = null, rev = null;
     try {
       const doc = await liveSummaryOnce(week, () => true, 8000);
@@ -265,6 +306,7 @@ export function startRosterPage(root, iso) {
       }
     } catch (e) { return fail('Could not read the Live board: ' + (e.message || e)); }
     if (!summary) return fail(`No Live board for that week (week of ${dayLabel(week)}) — publish it first.`);
+    await edvP;
     const p = dayPayload(summary, rev);
     if (p.error) { say('err', p.error + (opener ? '' : ' (opened directly — nothing is sent)')); ready(p); return; }
     // the rules engine loads while Amazon's page gets ready; if it can't, the day still

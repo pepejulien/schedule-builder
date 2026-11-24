@@ -12,9 +12,15 @@
  * there; then a Standard Parcel row holding someone who isn't on a route on the Live board any more
  * gets a Live board driver instead, or is emptied. Rows with a Live board route driver are never touched.
  *
+ * EDV routes first (Jose 2026-11-24): while "Standard Parcel Electric" (the EDV service) has empty rows
+ * and the Live board has EDV drivers for them, the bookmark fills THAT service: the drivers on the
+ * Vehicle Assigner's EDV list (Fleet tab) who are on a route that day — moved to the EDV row's start
+ * time when theirs differs (the Live board follows) — and, when the list runs short, the EDV-certified
+ * drivers on a route that day that dispatch ticks. Dispatch saves it and clicks again for Standard Parcel.
+ *
  * Amazon keeps nothing until the service's Save button is pressed, and this file NEVER clicks
- * Save, Cancel, SUBMIT, Auto Roster, Bulk Import or a red X. Nursery Route, Hub Transport, Standard Parcel Electric (EDV routes - only for
- * EDV-certified drivers, Jose 2026-11-11) and other services are left alone (listed).
+ * Save, Cancel, SUBMIT, Auto Roster, Bulk Import or a red X. Nursery Route, Hub Transport and other
+ * services are left alone (listed).
  * Dispatch checks the screen and presses Save themselves. On the new Dispatch page (Legacy view
  * off) it only says how to get to the legacy page.
  *
@@ -192,7 +198,8 @@
       .filter((el) => getComputedStyle(el).display !== "none")
       .map((el) => {
         const heading = one((el.querySelector(".rowHeader span") || {}).textContent);
-        return { el, heading, short: shortSvc(heading), sp: SP_RE.test(heading) && !ELECTRIC_RE.test(heading), rows: readRows(el) };
+        return { el, heading, short: shortSvc(heading), sp: SP_RE.test(heading) && !ELECTRIC_RE.test(heading),
+          ev: ELECTRIC_RE.test(heading), rows: readRows(el) };
       });
   }
   const shown = (row) => one((row.el.querySelector(".chosen-single span") || {}).textContent);
@@ -299,6 +306,7 @@
 
   /* ---------- the run ---------- */
   let date = null, payload = null;
+  let skipEdv = false;                                         // "Skip the EDV rows" pressed this run (2026-11-24)
 
   function stopWith(html) { progress(null); clearBtns(); say(html, "bad"); }
 
@@ -329,7 +337,7 @@
 
   async function run() {
     const my = ++runId;
-    stopped = false; payload = null;
+    stopped = false; payload = null; skipEdv = false;
     clearTimeout(ap.timer); Object.assign(ap, { my: 0, picks: null, res: null, note: "" });
     progress(null); clearBtns();
     const warn = checks();
@@ -549,28 +557,9 @@
     return out;
   }
 
-  async function buildPlan() {
-    const svcs = await waitFor(() => { const s = readServices(); return s.length ? s : null; }, 4000);
-    if (!svcs) return { err: "Couldn't find any confirmed services on this page. Let the page finish loading, then click the bookmark again." };
-    const sps = svcs.filter((s) => s.sp && s.rows.length);
-    if (!sps.length) return { err: "There is no Standard Parcel service with routes on this day — nothing to fill." };
-    // Amazon opens one service at a time: the open one with empty rows, else the first with empty rows
-    // A re-run (Jose 2026-11-12): a row holding someone who isn't on a route on the Live board any more
-    // ("stale") is a free row too - the Live board driver goes in their place, or it is emptied.
-    // Stale is only known once the associate list is read, so a service counts as "has room" here when
-    // it has an empty row or any filled one.
-    const hasEmpty = (s) => s.rows.some(isEmpty);
-    const hasRoom = (s) => hasEmpty(s) || s.rows.some((r) => r.sel.value && !r.sel.disabled);
-    const target = sps.find((s) => isOpen(s.el) && hasEmpty(s)) || sps.find(hasEmpty) || sps.find((s) => isOpen(s.el) && hasRoom(s))
-      || sps.find(hasRoom) || sps.find((s) => isOpen(s.el)) || sps[0];
-    const opened = !isOpen(target.el);
-    if (!(await openService(target.el))) {
-      return { errHtml: `Amazon didn't open <b>${esc(target.short)}</b> — it may be asking about unsaved changes. Answer it (or Save / Cancel the open service), then click the bookmark again.` };
-    }
-    const opts = readOptions(target.rows[0].sel);
-    if (!opts.length) return { err: "Amazon's associate list came up empty for this day. Nothing was changed." };
-    const taken = takenNow(svcs);
-    // pre-match every driver locally: Transporter ID first (Amazon's option value), then the name
+  // every Live board route driver matched to Amazon's associate list: Transporter ID first (Amazon's
+  // option value), then the name. -> {drivers: [{d, opt, status, why, where?}], keep}
+  function matchDrivers(opts, taken) {
     const usedBy = new Map();
     const keep = new Set();                                    // every option a Live board route driver could be
     const drivers = (payload.drivers || []).map((d) => {
@@ -590,6 +579,113 @@
       r.status = "match";
       return r;
     });
+    return { drivers, keep };
+  }
+  async function openTarget(target) {
+    const opened = !isOpen(target.el);
+    if (!(await openService(target.el))) {
+      return { errHtml: `Amazon didn't open <b>${esc(target.short)}</b> — it may be asking about unsaved changes. Answer it (or Save / Cancel the open service), then click the bookmark again.` };
+    }
+    const opts = readOptions(target.rows[0].sel);
+    if (!opts.length) return { err: "Amazon's associate list came up empty for this day. Nothing was changed." };
+    return { opened, opts };
+  }
+  const othersOf = (svcs, target) => svcs.filter((s) => s.el !== target.el)
+    .map((s) => ({ short: s.short, sp: s.sp, ev: s.ev, rows: s.rows.length, empty: s.rows.filter(isEmpty).length }));
+
+  /* ---------- EDV rows (Jose 2026-11-24) ----------
+   * The EDV service is filled first while it has an empty row and the Live board has an EDV driver who
+   * isn't on Amazon yet (payload.drivers[].edv, roster-send.js tagEdv: 'list' = on the Assigner's EDV
+   * list, 'cert' = EDV-certified, not on it). List drivers go in first, at their own start time when
+   * Amazon has a free EDV row there, else at the nearest one (the Live board follows, like any move).
+   * Rows still free after that: dispatch ticks EDV-certified drivers who are on a route that day. */
+  function edvWanted(svcs) {
+    const taken = takenNow(svcs);
+    return (payload.drivers || []).some((d) => (d.edv === "list" || d.edv === "cert") && !(d.tid && taken.has(d.tid)));
+  }
+  // (re)places the list drivers, then the ticked ones (plan.picked: Set of option values), on the EDV rows
+  function assignEdv(p) {
+    for (const l of p.lines) { l.ds = []; l.toFill = []; l.moved = []; }
+    for (const r of p.drivers) {
+      delete r.movedTo; delete r.movedFrom;
+      if (["match", "edvExtra", "edvPool", "other"].includes(r.status)) r.status = "match";
+    }
+    const spare = (l) => l.free - l.toFill.length;
+    const place = (rs) => {
+      const loose = [];
+      for (const r of rs) {                                    // their own start time first
+        const l = p.lines.find((x) => x.w.key === waveKey(r.d.portal) && spare(x) > 0);
+        if (l) { l.ds.push(r); l.toFill.push(r); } else loose.push(r);
+      }
+      for (const r of loose) {                                 // else the nearest one (a later one on a tie)
+        const mins = waveMins(waveKey(r.d.portal));
+        const l = p.lines.filter((x) => spare(x) > 0)
+          .sort((a, b) => Math.abs(waveMins(a.w.key) - mins) - Math.abs(waveMins(b.w.key) - mins) || waveMins(b.w.key) - waveMins(a.w.key))[0];
+        if (!l) { r.status = "edvExtra"; continue; }
+        r.movedTo = l.w.label; r.movedFrom = one(r.d.portal);
+        l.toFill.push(r); l.moved.push(r);
+      }
+    };
+    const ok = (r) => r.status === "match";
+    place(p.drivers.filter((r) => ok(r) && r.d.edv === "list"));
+    p.pool = p.drivers.filter((r) => ok(r) && r.d.edv === "cert");
+    p.spareAfterList = p.lines.reduce((n, l) => n + spare(l), 0);
+    place(p.pool.filter((r) => p.picked.has(r.opt.value)));
+    for (const r of p.pool) if (ok(r) && !p.lines.some((l) => l.toFill.includes(r))) r.status = "edvPool";
+    for (const r of p.drivers) if (ok(r) && !p.lines.some((l) => l.toFill.includes(r))) r.status = "other";
+    for (const l of p.lines) {
+      const into = Math.max(0, l.toFill.length - l.empty);
+      l.swapOut = l.stale.slice(0, into);
+      l.clear = l.stale.slice(into);
+    }
+    p.total = p.lines.reduce((n, l) => n + l.toFill.length, 0);
+    p.clears = p.lines.reduce((n, l) => n + l.clear.length, 0);
+    p.left = p.lines.reduce((n, l) => n + spare(l), 0);
+    return p;
+  }
+  async function buildEdvPlan(svcs, target) {
+    const o = await openTarget(target);
+    if (o.err || o.errHtml) return o;
+    const taken = takenNow(svcs);
+    const { drivers, keep } = matchDrivers(o.opts, taken);
+    const isStale = (row) => !!row.sel.value && !row.sel.disabled && !keep.has(row.sel.value);
+    const lines = readWaves(target.el).map((w) => {
+      const empty = w.rows.filter(isEmpty).length;
+      const stale = w.rows.filter(isStale).map((row) => ({ value: row.sel.value, name: currentDA(row) }));
+      return { w, s: null, routes: w.rows.length, empty, stale, free: empty + stale.length, ds: [], toFill: [], moved: [] };
+    });
+    const filtered = [...target.el.querySelectorAll(".DAFilter select")].some((x) => x.value);
+    const p = { edv: true, target, opened: o.opened, lines, noWave: [], drivers, keep, filtered, picked: new Set(),
+      others: othersOf(svcs, target), anyEmpty: target.rows.some(isEmpty) || lines.some((l) => l.stale.length) };
+    return assignEdv(p);
+  }
+
+  async function buildPlan() {
+    const svcs = await waitFor(() => { const s = readServices(); return s.length ? s : null; }, 4000);
+    if (!svcs) return { err: "Couldn't find any confirmed services on this page. Let the page finish loading, then click the bookmark again." };
+    const evTarget = !skipEdv && edvWanted(svcs) && svcs.find((s) => s.ev && s.rows.some(isEmpty));
+    if (evTarget) return buildEdvPlan(svcs, evTarget);
+    const sps = svcs.filter((s) => s.sp && s.rows.length);
+    if (!sps.length) return { err: "There is no Standard Parcel service with routes on this day — nothing to fill." };
+    // Amazon opens one service at a time: the open one with empty rows, else the first with empty rows
+    // A re-run (Jose 2026-11-12): a row holding someone who isn't on a route on the Live board any more
+    // ("stale") is a free row too - the Live board driver goes in their place, or it is emptied.
+    // Stale is only known once the associate list is read, so a service counts as "has room" here when
+    // it has an empty row or any filled one.
+    const hasEmpty = (s) => s.rows.some(isEmpty);
+    const hasRoom = (s) => hasEmpty(s) || s.rows.some((r) => r.sel.value && !r.sel.disabled);
+    const target = sps.find((s) => isOpen(s.el) && hasEmpty(s)) || sps.find(hasEmpty) || sps.find((s) => isOpen(s.el) && hasRoom(s))
+      || sps.find(hasRoom) || sps.find((s) => isOpen(s.el)) || sps[0];
+    const o = await openTarget(target);
+    if (o.err || o.errHtml) return o;
+    const opened = o.opened;
+    const taken = takenNow(svcs);
+    // pre-match every driver locally: Transporter ID first (Amazon's option value), then the name
+    const { drivers, keep } = matchDrivers(o.opts, taken);
+    // EDV drivers are held back while the EDV service still has an empty row (Skip EDV, 2026-11-24)
+    if (svcs.some((s) => s.ev && s.rows.some(isEmpty))) {
+      for (const r of drivers) if (r.status === "match" && r.d.edv === "list") r.status = "edvHold";
+    }
     // line schedule waves up with Amazon start times
     const waves = readWaves(target.el);
     const byKey = new Map(waves.map((w) => [w.key, w]));
@@ -641,8 +737,7 @@
     }
     const total = lines.reduce((n, l) => n + l.toFill.length, 0);
     const clears = lines.reduce((n, l) => n + l.clear.length, 0);
-    const others = svcs.filter((s) => s.el !== target.el)
-      .map((s) => ({ short: s.short, sp: s.sp, rows: s.rows.length, empty: s.rows.filter(isEmpty).length }));
+    const others = othersOf(svcs, target);
     const filtered = [...target.el.querySelectorAll(".DAFilter select")].some((x) => x.value);
     return { target, opened, lines, noWave, drivers, total, clears, others, filtered, keep,
       anyEmpty: target.rows.some(isEmpty) || lines.some((l) => l.stale.length) };
@@ -664,7 +759,9 @@
       const g = gone.filter((r) => r.movedTo === to);
       out.push(`<li class="warn">${plural(g.length, "more driver")} than Amazon has rows here, so ${g.length === 1 ? "this driver goes" : "these drivers go"} to <b>${esc(to)}</b> instead: ${names(g.map((r) => r.d))}</li>`);
     }
-    if ((l.moved || []).length) {
+    if (plan.edv && (l.moved || []).length) {
+      out.push(`<li class="warn">From another start time (the Live board follows): ${l.moved.map((r) => `${nameOf(r.d)} <span class="muted">(${esc(r.movedFrom)})</span>`).join(", ")}</li>`);
+    } else if ((l.moved || []).length) {
       const from = [...new Set(l.moved.map((r) => r.movedFrom))].join(" / ");
       out.push(`<li class="warn">Amazon has ${plural(l.moved.length, "more row")} here than drivers, so ${l.moved.length === 1 ? "this driver comes" : "these drivers come"} over from <b>${esc(from)}</b>: ${names(l.moved.map((r) => r.d))}</li>`);
     }
@@ -688,20 +785,61 @@
       if (l.swapOut.length) out.push(`<li class="warn">On Amazon but no longer on a route on the Live board — someone from the Live board takes their row: ${nm(l.swapOut)}</li>`);
       if (l.clear.length) out.push(`<li class="warn">On Amazon but no longer on a route on the Live board — their row will be emptied: ${nm(l.clear)}</li>`);
       const stay = l.free - l.toFill.length;
-      if (stay > 0) out.push(`<li class="bad">${plural(stay, "row")} will still be empty after the fill — not enough drivers</li>`);
+      if (stay > 0) out.push(plan.edv ? `<li class="warn">${plural(stay, "EDV row")} without a driver yet</li>`
+        : `<li class="bad">${plural(stay, "row")} will still be empty after the fill — not enough drivers</li>`);
     }
-    if (!l.s) out.push(`<li class="warn">Nobody on the Live board at this start time</li>`);
+    if (!l.s && !plan.edv) out.push(`<li class="warn">Nobody on the Live board at this start time</li>`);
     // the header compares Amazon's rows with the Live board's drivers at this time (Jose 2026-11-14:
     // "18 empty rows" read as 18 short when it was 6) - rows already holding someone are named apart
     const had = l.routes - l.empty;
     const head = final
       ? `<b>${esc(l.w.label)}</b> — Amazon: ${plural(l.routes, "row")} · ${l.placed || 0} filled just now`
-      : `<b>${esc(l.w.label)}</b> — Amazon: ${plural(l.routes, "row")}${had ? ` (${had} already ${had === 1 ? "has" : "have"} someone)` : ""} · Live board: ${plural(l.ds.length, "driver")}`;
+      : plan.edv
+        ? `<b>${esc(l.w.label)}</b> — Amazon: ${plural(l.routes, "EDV row")}${had ? ` (${had} already ${had === 1 ? "has" : "have"} someone)` : ""} · going in: ${l.toFill.length}`
+        : `<b>${esc(l.w.label)}</b> — Amazon: ${plural(l.routes, "row")}${had ? ` (${had} already ${had === 1 ? "has" : "have"} someone)` : ""} · Live board: ${plural(l.ds.length, "driver")}`;
     const who = !final && l.toFill.length
       ? `<details><summary>Who goes in (${l.toFill.length})</summary><ol>${l.toFill.map((r) => `<li>${nameOf(r.d)}</li>`).join("")}</ol></details>` : "";
     return `<div class="wave">${head}${out.length ? `<ul>${out.join("")}</ul>` : ""}${who}</div>`;
   }
-  function extraHtml(p) {
+  // the EDV pass's own lines (2026-11-24): what the list gave, what's wrong, the pick list
+  function edvHtml(p, final) {
+    const info = payload.edvInfo || {};
+    const of = (fn) => p.drivers.filter(fn);
+    const listed = (r) => r.d.edv === "list";
+    let h = "";
+    if (info.list == null) h += `<p class="warn">Couldn't read the EDV drivers list (Vehicle Assigner → Fleet tab), so only EDV-certified drivers are offered below.</p>`;
+    else if (!info.list) h += `<p class="warn">The EDV drivers list (Vehicle Assigner → Fleet tab) is empty.</p>`;
+    if (!info.certs) h += `<p class="muted">Amazon's EDV certifications didn't load — the EDV drivers list is used as it is.</p>`;
+    const nc = of((r) => r.d.edv === "nocert");
+    if (nc.length) h += `<p class="bad">On the EDV drivers list but Amazon doesn't show them EDV-certified — not put on an EDV route: ${names(nc.map((r) => r.d))}</p>`;
+    const bad = of((r) => (listed(r) || p.picked.has(r.opt && r.opt.value)) && ["notfound", "ambiguous", "group"].includes(r.status));
+    if (bad.length) h += `<p class="bad">EDV drivers not placed: ${bad.map((r) => `${nameOf(r.d)} (${esc(r.status === "notfound" ? "not in Amazon's list" : r.why)})`).join(", ")}</p>`;
+    const away = of((r) => listed(r) && r.status === "already" && r.where && r.where.svc !== p.target.el);
+    if (away.length) h += `<p class="warn">EDV drivers already on another service: ${away.map((r) => `${nameOf(r.d)} (on ${esc(r.where.where)})`).join(", ")}. To put one on an EDV row, take them off there first, then click the bookmark again.</p>`;
+    const extra = of((r) => r.status === "edvExtra" && listed(r));
+    if (extra.length) h += `<p class="muted">More EDV drivers than EDV rows — these go on Standard Parcel: ${names(extra.map((r) => r.d))}</p>`;
+    if (!final) {
+      if (p.spareAfterList > 0 && p.pool.length) {
+        const n = p.picked.size;
+        h += `<div class="wave edvpick"><p style="margin:0 0 4px"><b>${plural(p.spareAfterList, "EDV row")} still need${p.spareAfterList === 1 ? "s" : ""} a driver.</b> Not enough EDV drivers from the list are on the schedule — tick EDV-certified drivers on a route today (up to ${p.spareAfterList}):</p>`;
+        for (const r of p.pool) {
+          const on = p.picked.has(r.opt.value), full = !on && n >= p.spareAfterList;
+          h += `<label style="display:block;margin:3px 0;cursor:pointer${full ? ";opacity:.5" : ""}"><input type="checkbox" data-edv="${esc(r.opt.value)}"${on ? " checked" : ""}${full ? " disabled" : ""} style="margin-right:6px">${nameOf(r.d)} <span class="muted">(${esc(one(r.d.portal))})</span></label>`;
+        }
+        h += `</div>`;
+      } else if (p.spareAfterList > 0) {
+        h += `<p class="bad">${plural(p.spareAfterList, "EDV row")} still need${p.spareAfterList === 1 ? "s" : ""} a driver, and no other EDV-certified driver is on a route today. Fill ${p.spareAfterList === 1 ? "it" : "them"} by hand, or leave ${p.spareAfterList === 1 ? "it" : "them"} empty.</p>`;
+      }
+    }
+    const rest = of((r) => r.status === "other" || r.status === "edvPool" || (r.status === "edvExtra"));
+    if (rest.length) h += `<p class="muted">Everyone else (${plural(rest.length, "driver")}) goes on Standard Parcel next: press Save under the EDV rows, then click the bookmark again.</p>`;
+    const sk = payload.skipped || [];
+    if (sk.length && final) h += `<p class="muted">Backups and trainers don't get an Amazon row: ${sk.map((s) => esc(s.name)).join(", ")}</p>`;
+    return h;
+  }
+
+  function extraHtml(p, final) {
+    if (p.edv) return edvHtml(p, final);
     let h = "";
     for (const s of p.noWave) {
       const left = s.drivers.filter((r) => !r.movedTo);
@@ -712,7 +850,13 @@
     for (const o of p.others.filter((x) => x.sp && x.empty)) {
       h += `<p class="warn">Also ${esc(o.short)}: ${plural(o.empty, "empty row")}. Save this one first, then open that one with its + and click the bookmark again.</p>`;
     }
-    const rest = p.others.filter((x) => !x.sp);
+    // the EDV service (2026-11-24): said apart - done, or rows left for dispatch
+    const held = p.drivers.filter((r) => r.status === "edvHold");
+    if (held.length) h += `<p class="warn">Kept off Standard Parcel for the EDV rows: ${names(held.map((r) => r.d))}</p>`;
+    for (const o of p.others.filter((x) => x.ev && x.empty)) {
+      h += `<p class="warn">${esc(o.short)}: ${plural(o.empty, "EDV row")} still empty — fill ${o.empty === 1 ? "it" : "them"} by hand with an EDV driver, or click <b>Start over</b> to fill the EDV rows first.</p>`;
+    }
+    const rest = p.others.filter((x) => !x.sp && !x.ev);
     if (rest.length) h += `<p class="muted">Left for you (not filled): ${rest.map((o) => `${esc(o.short)} — ${plural(o.rows, "row")}, ${o.empty} empty`).join("; ")}</p>`;
     return h;
   }
@@ -724,16 +868,32 @@
     if (my !== runId) return;
     if (p.err || p.errHtml) { stopWith(p.errHtml || esc(p.err)); btn("Start over", run, true); return; }
     plan = p;
+    draw(my);
+  }
+  function draw(my) {
+    const p = plan;
+    clearBtns();
     const n = (payload.drivers || []).length;
     let h = ask.warn + (ap.note || "") + `<p><b>${esc(dayLabel(date))}</b> — ${plural(n, "driver")} on routes on the Live board.</p>`;
-    h += `<p>Filling <b>${esc(p.target.short)}</b>${p.opened ? " (opened it for you)" : ""}.</p>`;
+    h += p.edv ? `<p>EDV routes first: filling <b>${esc(p.target.short)}</b>${p.opened ? " (opened it for you)" : ""} with the EDV drivers.</p>`
+      : `<p>Filling <b>${esc(p.target.short)}</b>${p.opened ? " (opened it for you)" : ""}.</p>`;
     if (p.filtered) h += '<p class="warn">⚠ Set the Filter (Start Time / Associate Name) back to All so every row shows.</p>';
     if (!p.anyEmpty) h += '<p class="warn">Every row already has the right associate — there is nothing to fill.</p>';
-    h += p.lines.map((l) => waveHtml(l, false)).join("") + extraHtml(p);
+    h += p.lines.map((l) => waveHtml(l, false)).join("") + extraHtml(p, false);
     h += `<p><b>Nothing has been changed on Amazon's page yet.</b> Amazon keeps nothing until you press <b>Save</b> under the rows.</p>`;
     say(h);
+    // the EDV pick list: a tick re-places the drivers and redraws (2026-11-24)
+    for (const cb of box.querySelectorAll("input[data-edv]")) {
+      cb.onchange = () => {
+        const v = cb.getAttribute("data-edv");
+        if (cb.checked) p.picked.add(v); else p.picked.delete(v);
+        assignEdv(p);
+        draw(my);
+      };
+    }
     const label = [p.total ? `Fill ${plural(p.total, "row")}` : "", p.clears ? `take ${p.clears} off` : ""].filter(Boolean).join(", ");
     if (p.total || p.clears) btn(label.charAt(0).toUpperCase() + label.slice(1), () => fill(my));
+    if (p.edv) btn("Skip EDV — fill Standard Parcel", () => { skipEdv = true; showPreview(my); }, true);
     btn("Start over", run, true);
   }
 
@@ -834,13 +994,13 @@
     const fresh = readWaves(plan.target.el);
     for (const l of plan.lines) { const w = fresh.find((x) => x.key === l.w.key); if (w) l.w.rows = w.rows; }
     const svcs = readServices();
-    plan.others = svcs.filter((s) => s.el !== plan.target.el)
-      .map((s) => ({ short: s.short, sp: s.sp, rows: s.rows.length, empty: s.rows.filter(isEmpty).length }));
+    plan.others = othersOf(svcs, plan.target);
     let h = (ap.note || "") + `<p><b>${stopped ? "Stopped. " : ""}Filled ${placed} of ${plural(total, "row")}.</b></p>`;
     if (plan.lost) h += '<p class="bad">The Standard Parcel rows were closed (or the day changed) during the fill.</p>';
-    h += plan.lines.map((l) => waveHtml(l, true)).join("") + extraHtml(plan);
+    h += plan.lines.map((l) => waveHtml(l, true)).join("") + extraHtml(plan, true);
     if (mv.list && mv.list.length) h += '<div class="lvmoves"></div>';
     h += `<p style="margin-top:8px"><b>Nothing is saved yet. Check the screen, then press Save (under the ${esc(plan.target.short)} rows) yourself.</b></p>`;
+    if (plan.edv) h += `<p><b>Then click the bookmark again</b> to fill the Standard Parcel rows.</p>`;
     say(h);
     renderMoves();
     btn("Start over", run, true);

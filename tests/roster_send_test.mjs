@@ -1,6 +1,7 @@
 // rosterForDay (public/app/roster-send.js): who goes in Amazon's DA boxes for a day.
 //   node tests/roster_send_test.mjs
-import { rosterForDay, rosterHashDate, dayLabel, checkApplyMsg } from '../public/app/roster-send.js';
+import { rosterForDay, rosterHashDate, dayLabel, checkApplyMsg, tagEdv, edvMatcher } from '../public/app/roster-send.js';
+import { certIndex } from '../public/app/lib/van-certs.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -71,6 +72,23 @@ ok('apply: unknown kind refused', !!A([{ kind: 'delete', name: 'Ann' }]).error);
 ok('apply: empty refused', !!A([]).error);
 ok('apply: blank name refused', !!A([{ kind: 'route', name: '  ' }]).error);
 ok('apply: wrong type refused', !!checkApplyMsg({ type: 'x', date: '2026-10-10', picks: [] }, '2026-10-10').error);
+
+// EDV routes (Jose 2026-11-24): the Assigner's EDV list + Amazon's certifications -> edv tags
+{
+  const ds = [{ name: 'Alex Christopher Keller', tid: 'T1' }, { name: 'Mark Barker', tid: 'T2' }, { name: 'Eva Cert', tid: 'T3' },
+    { name: 'Ron Reg', tid: 'T4' }, { name: 'Tina Trainee', tid: 'T5', trainee: true }, { name: 'Nell New', tid: '' }];
+  const certOf = certIndex({ 'Alex Keller': { tid: 'T1', cert: 'EDV' }, 'Mark Barker': { tid: 'T2', cert: 'CDV' },
+    'Eva Cert': { tid: 'T3', cert: 'EDV' }, 'Ron Reg': { tid: 'T4', cert: '' }, 'Tina Trainee': { tid: 'T5', cert: 'EDV' } });
+  const names = ['Alex Keller', 'Mark Barker', 'Tina Trainee', 'Nell New'];
+  const tag = (n, c) => tagEdv(ds, n, c).map((d) => d.edv);
+  eq('edv: list + cert', tag(names, certOf), ['list', 'nocert', 'cert', '', '', 'list']);   // Nell: not on Amazon's list -> trust the EDV list
+  eq('edv: no cert data -> the list as it is', tag(names, null), ['list', 'list', '', '', '', 'list']);
+  eq('edv: list unreadable -> certified only', tag(null, certOf), ['cert', '', 'cert', '', '', '']);
+  ok('edv: first + last matches', edvMatcher(['Alex Keller'])('Alex Christopher Keller'));
+  ok('edv: two list names share first + last -> no guess', !edvMatcher(['Sam A Lee', 'Sam B Lee'])('Sam Lee'));
+  ok('edv: accents / case', edvMatcher(['José Núñez'])('jose nunez'));
+  eq('edv: keeps the other fields', tagEdv([{ name: 'Eva Cert', tid: 'T3', portal: '10:45 AM' }], [], certOf)[0], { name: 'Eva Cert', tid: 'T3', portal: '10:45 AM', edv: 'cert' });
+}
 
 console.log(`${pass}/${pass + fail} passed`);
 if (fail) { console.log(fails.join('\n')); process.exit(1); }

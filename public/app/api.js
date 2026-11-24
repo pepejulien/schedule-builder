@@ -282,6 +282,28 @@ export function activeListOnce(ms = 6000, settle = 1500) {
   });
 }
 
+// The EDV drivers list (Jose 2026-11-24): the Vehicle Assigner's Fleet tab list of who may drive the
+// EDVs — Firestore assigner/edv {names, by, at}; before that doc existed it sat in the owner's van
+// settings (assigner/vans .vans.edvDrivers.names). -> [name] | null (couldn't read either doc).
+function docOnce(path, ms) {
+  return new Promise((resolve) => {
+    let done = false, un = null;
+    const finish = (d) => { if (done) return; done = true; clearTimeout(t); setTimeout(() => un && un(), 0); resolve(d); };
+    const t = setTimeout(() => finish(undefined), ms);
+    un = window.JAJB.watch(path, finish);
+  });
+}
+export async function edvListOnce(ms = 6000) {
+  if (!canActual()) return null;
+  const names = (a) => a.filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim());
+  const d = await docOnce('assigner/edv', ms);
+  if (d && Array.isArray(d.names)) return names(d.names);
+  const v = await docOnce('assigner/vans', ms);
+  const e = v && v.vans && v.vans.edvDrivers;
+  if (e && Array.isArray(e.names)) return names(e.names);
+  return v ? [] : null;                                   // vans read but no list = nobody listed
+}
+
 // A published week's summary doc on its own, kept current (2026-10-08): {json, rev} | null. Another
 // dispatcher's save reaches the Live board's grid through this — no need to read the week (and its
 // big engine state) again before showing it. Same generic watch as actual_hours.
