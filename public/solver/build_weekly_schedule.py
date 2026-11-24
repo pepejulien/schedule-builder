@@ -1145,8 +1145,14 @@ def build_schedule(cfg, prev_hook=None):
     def _place_locks():
         for lk in cfg.get('locked_days') or []:
             d = lk.get('day')
-            row = dict(name=str(lk.get('name') or ''), day=d, training=bool(lk.get('training')),
-                       trainer=lk.get('trainer') or None, note=str(lk.get('note') or ''), why=None)
+            # shift (2026-11-24): 'route' (default) | 'meeting' | 'dispatch'; time = 'h:mm AM' (a
+            # meeting's time, or the wave a route is asked for: honored when that wave has room);
+            # label = the meeting's name. A meeting / dispatch lock is a do-not-touch day like a
+            # pre-entered meeting or dispatch duty: no route that day, counts as a day worked.
+            shift = lk.get('shift') if lk.get('shift') in ('meeting', 'dispatch') else 'route'
+            row = dict(name=str(lk.get('name') or ''), day=d, training=bool(lk.get('training')) and shift == 'route',
+                       trainer=lk.get('trainer') or None, note=str(lk.get('note') or ''), why=None,
+                       shift=shift, time=str(lk.get('time') or ''), label=str(lk.get('label') or ''))
             LOCKS.append(row)
             h = resolve(row['name'], rnames)
             i = idx.get(h[0]) if len(h) == 1 else None
@@ -1156,6 +1162,38 @@ def build_schedule(cfg, prev_hook=None):
                 dr = roster[i]
                 row['name'] = dr['name']
                 dr.setdefault('locked', set()).add(d)
+                if shift != 'route':
+                    if d in dr['prim'] or d in dr['helper']:
+                        row['why'] = 'already on a route'
+                    elif d in dr['extra'] or d in dr['meet']:
+                        continue
+                    elif d not in DATEALL:
+                        row['why'] = 'not a day of this week'
+                    else:
+                        PREFS_OFF[0] = True
+                        try:
+                            ok = runok(dr, DATEALL[d])
+                        finally:
+                            PREFS_OFF[0] = False
+                        if not ok:
+                            row['why'] = 'days in a row'
+                        else:
+                            dr['unav_why'].pop(d, None)
+                            dr['unav'].add(d)          # no route / backup that day
+                            if shift == 'meeting':
+                                lab = row['label'].strip() or 'Meeting'
+                                if 'meeting' not in lab.lower():
+                                    lab += ' Meeting'
+                                dr['meet'].add(d)
+                                dr['meet_txt'][d] = (row['time'] + ' ' + lab).strip()
+                            else:
+                                dr['extra'].add(d)
+                            continue
+                    notes.append(f'LOCKED, NOT PLACED: {row["name"]} {d} -- {row["why"]}')
+                    continue
+                mins = parse_wave_time(row['time'])
+                if mins is not None:
+                    dr['seed_time'][d] = mins     # the asked-for wave, when it has room
                 if d in dr['prim'] or d in dr['helper'] or d in dr['extra'] or d in dr['meet']:
                     if d in dr['prim']:
                         LOCKED.add((i, d))     # e.g. their locked training day

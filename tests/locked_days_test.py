@@ -214,6 +214,38 @@ for bad in ([{'name': 'Ann Avery', 'day': 'Funday'}], {'Ann Avery': 'Mon'}, [{'d
     except B.ScheduleConfigError:
         ok(True, f'{bad!r} refused')
 
+print('L13 a locked meeting at a time: the cell says it, no route that day, counts as a day worked')
+cfg = synth_week(NAMES, 6, 'l13', unav={'Lou Lane': ['Tue']}, exact_days={'Ann Avery': 3},
+                 locked_days=[{'name': 'Ann Avery', 'day': 'Mon', 'shift': 'meeting', 'time': '9:00 AM', 'label': 'Safety'},
+                              {'name': 'Lou Lane', 'day': 'Tue', 'shift': 'meeting', 'time': '1:00 PM'}])
+res, chk = build(cfg)
+a, m = drv(res, 'Ann Avery'), drv(res, 'Lou Lane')
+ok('Mon' in a['meet'] and a['meet_txt']['Mon'] == '9:00 AM Safety Meeting', f"Ann's Mon: {a['meet_txt']}")
+ok('Mon' not in days_on(a), 'no route on the meeting day')
+ok(m['meet_txt'].get('Tue') == '1:00 PM Meeting' and 'Tue' not in m['unav_why'], f"Lou's meeting beats the day off: {m['meet_txt']}")
+ok(all(lk['why'] is None for lk in res.LOCKS), f'both placed: {res.LOCKS}')
+ok(not [e for e in chk['errors'] if e.startswith(HARD + ('MEETING',))], f"no hard errors: {chk['errors']}")
+rep = run(cfg)
+ok(all(lk['working'] for lk in rep['locks']), f"report: {rep['locks']}")
+row = next(r for r in rep['drivers'] if r['name'] == 'Ann Avery')
+ok(row['cells']['Mon'] == '9:00 AM Safety Meeting' if 'cells' in row else True, f"runner cell: {row.get('cells')}")
+
+print('L14 a locked dispatch day: Dispatch, no route')
+cfg = synth_week(NAMES, 6, 'l14', locked_days=[{'name': 'Ben Brooks', 'day': 'Wed', 'shift': 'dispatch'}])
+res, chk = build(cfg)
+b = drv(res, 'Ben Brooks')
+ok('Wed' in b['extra'] and 'Wed' not in days_on(b), f"Ben dispatches Wed: extra={b['extra']}")
+ok(lock_of(res, 'Ben Brooks', 'Wed')['why'] is None, 'placed')
+
+print('L15 a locked route at a set time gets that wave when it has room')
+cfg = synth_week(NAMES, 6, 'l15', waves={d: {'10:25 AM': 3, '10:45 AM': 3} for d in ALL},
+                 locked_days=[{'name': 'Cal Chen', 'day': 'Thu', 'time': '10:45 AM'}])
+rep = run(cfg)
+c = next(r for r in rep['drivers'] if r['name'] == 'Cal Chen')
+res = runner._STATE['res'] if runner._STATE.get('res') else None
+ok(res is not None and 'Thu' in drv(res, 'Cal Chen')['prim'], 'Cal drives Thu')
+ok(c['cells']['Thu'] == '10:45 AM', f"Cal's Thu is the asked-for wave: {c['cells']['Thu']}")
+
 print('L12 random sweep: a placed lock is never moved, the hard rules always hold')
 rng = random.Random(1120)
 bad = 0

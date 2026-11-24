@@ -4,7 +4,8 @@
 // them. The weekly build places every lock first and never moves it (solver locked_days); the lock wins over
 // the driver's unavailable days for that date only — their saved preferences and time-off records stay as
 // they are. Pure helpers here, shared by the future-week grid, the Live board and the build.
-//   lock = {driverKey, date (YYYY-MM-DD), note, training (bool), trainer ('' = the builder picks), by, at}
+//   lock = {driverKey, date (YYYY-MM-DD), note, training (bool), trainer ('' = the builder picks), by, at,
+//           shift ('route' | 'meeting' | 'dispatch', 2026-11-24), time ('' = any | 'h:mm AM'), label (meeting name)}
 //   locks = {"<date>|<driverKey>": lock}
 import { matchName } from './names.js';
 
@@ -13,6 +14,29 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const fold = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 
 export const lockId = (date, name) => `${date}|${name}`;
+
+// What a lock has them come in for (2026-11-24): 'route' (default) | 'meeting' | 'dispatch'.
+export const lockShift = (l) => (l && (l.shift === 'meeting' || l.shift === 'dispatch') ? l.shift : 'route');
+// "9:00 AM Safety Meeting" — the meeting's cell, as the board and the build write it (always says "Meeting")
+export function meetingText(l) {
+  const lab = String((l && l.label) || '').trim() || 'Meeting';
+  return `${(l && l.time) || ''} ${/meeting/i.test(lab) ? lab : lab + ' Meeting'}`.trim();
+}
+// Short words for a lock: "Meeting 9:00 AM", "Dispatch", "Route 8:20 AM", "Training", "Working".
+export function lockShort(l) {
+  const k = lockShift(l);
+  if (k === 'meeting') return meetingText(l);
+  if (k === 'dispatch') return 'Dispatch';
+  return `${l && l.training ? 'Training' : l && l.time ? 'Route' : 'Working'}${l && l.time ? ' ' + l.time : ''}`;
+}
+// "Locked: meeting at 9:00 AM" etc., the longer line
+export function lockLine(l) {
+  const k = lockShift(l);
+  if (k === 'meeting') return `Locked: ${meetingText(l).replace(/^\S+ [AP]M /, '')} at ${l.time}`;
+  if (k === 'dispatch') return 'Locked: Dispatch';
+  if (l && l.training) return `Locked training day${l.time ? ' at ' + l.time : ''}`;
+  return l && l.time ? `Locked: route at ${l.time}` : 'Locked: working this day';
+}
 
 // "Tue 11/24" for a YYYY-MM-DD
 export function dayText(iso) {
@@ -90,9 +114,14 @@ export function locksForBuild(locks, weekISO, roster, aliases = {}) {
     const day = weekday(l.date);
     const trainer = l.training && l.trainer ? toRoster(l.trainer) : null;
     if (!name) out.unmatched.push(String(l.driverKey));
-    out.locked_days.push({ name: name || String(l.driverKey), day, training: !!l.training,
-      trainer: trainer || (l.training && l.trainer ? String(l.trainer) : null), note: String(l.note || '') });
-    if (!name || !l.training) continue;
+    const shift = lockShift(l);
+    const row = { name: name || String(l.driverKey), day, training: shift === 'route' && !!l.training,
+      trainer: trainer || (l.training && l.trainer ? String(l.trainer) : null), note: String(l.note || '') };
+    if (shift !== 'route') row.shift = shift;                       // the solver's default is a route
+    if (shift !== 'dispatch' && l.time) row.time = String(l.time);
+    if (shift === 'meeting') row.label = meetingText(l).replace(/^\S+ [AP]M /, '');
+    out.locked_days.push(row);
+    if (!name || !l.training || shift !== 'route') continue;
     if (l.trainer && !trainer) out.unmatched.push(String(l.trainer));   // their trainer isn't on this week: the builder picks
     if (trainer && trainer !== name) out.pairs.push({ trainer, trainee: name, day, manual: true });
     else out.autos.push({ trainee: name, day });
@@ -102,13 +131,13 @@ export function locksForBuild(locks, weekISO, roster, aliases = {}) {
 
 // The 🔒's hover text on a published week (read-only there).
 export function lockTip(l) {
-  return `Locked: working this day${l.training ? ` (training${l.trainer ? ' with ' + l.trainer : ''})` : ''}${
+  return `${lockLine(l)}${l.training ? ` (training${l.trainer ? ' with ' + l.trainer : ''})` : ''}${
     l.by ? ' — by ' + l.by : ''}${l.note ? ` · “${l.note}”` : ''}. Locks can't be changed once the week is published.`;
 }
 
 // One line per lock the build reported (runner _lock_rows): 'ok' | 'off' (taken off by hand) | 'flag' (not placed).
 export function lockState(l) {
-  if (l.working) return { kind: 'ok', text: l.training ? 'Locked training day' : 'Locked: working this day' };
+  if (l.working) return { kind: 'ok', text: lockLine(l) };
   if (l.why) return { kind: 'flag', text: l.why === 'no route' ? 'locked, no route' : `locked, not placed — ${l.why}` };
   return { kind: 'off', text: 'locked, taken off by hand' };
 }

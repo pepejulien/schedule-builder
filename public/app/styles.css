@@ -764,6 +764,13 @@ table.lv-grid { font-size: 12.5px; }
 .lk-check { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-weight: 500; }
 .lk-check input { width: auto; margin: 0; }
 .lk-trainer { width: 100%; margin: 0 0 8px; }
+/* what a lock has them come in for (2026-11-24): Route / Meeting / Dispatch, the time */
+.lk-shift { display: flex; margin: 2px 0 4px; }
+.lk-shift button { flex: 1; }
+.lk-time { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 2px; font-weight: 500; }
+.fw-menu-form .lk-time input { width: auto; margin: 0; }
+.lk-time .muted { font-weight: 400; font-size: 12px; }
+.lv-blk.b-lock.b-lock-meet { background: #F4E3F2; border-color: #C99AC3; color: #5a2c55; }
 @media (max-width: 700px) { .lk-x { font-size: 18px; padding: 0 4px; } }
 
 /* ---- Live board on a phone (2026-10-11): live/day-list.js + a slimmer Week grid ---- */

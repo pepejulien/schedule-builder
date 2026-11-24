@@ -9,7 +9,7 @@ import { Spinner } from '../ui.js';
 import { canTimeoff, watchTimeoff, saveTimeoff, clearTimeoff, canEditLocks, watchLocks, saveLock, clearLock,
   canReviews, watchReviews, storeGet } from '../api.js';
 import { loadDriverPrefs, loadDriverRoster, saveDriverPref, weekUnavailable, WHY_LABEL, prefSummary, prefHasLimit } from '../lib/driver-prefs.js';
-import { lockOf, lockConflicts, conflictLine, conflictQuestion } from '../lib/locks.js';
+import { lockOf, lockConflicts, conflictLine, conflictQuestion, lockShift, lockShort, lockLine } from '../lib/locks.js';
 import { LockMark } from './lock-mark.js';
 import { DAYS } from '../lib/waves.js';
 import { parseISODate, toISODate, addDays } from '../lib/weeks.js';
@@ -43,10 +43,19 @@ function clashes(name, date, trainer, src) {
   return [...own, ...tr];
 }
 
-// "Lock: working this day" (2026-11-20, lib/locks.js): the note, the optional training day and its trainer;
-// a clash with time off asks first and keeps the time-off record as it is.
+// <input type="time"> "13:05" <-> the schedule's "1:05 PM"
+const to12 = (v) => { const m = String(v || '').match(/^(\d{1,2}):(\d{2})/); if (!m) return '';
+  const h = Number(m[1]); return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`; };
+const SHIFTS = [['route', 'Route'], ['meeting', 'Meeting'], ['dispatch', 'Dispatch']];
+
+// "Lock: working this day" (2026-11-20, lib/locks.js): what they come in for (2026-11-24: a route — any
+// time or a set time —, a meeting at a time, or dispatch), the note, the optional training day and its
+// trainer; a clash with time off asks first and keeps the time-off record as it is.
 function LockForm({ week, name, date, dayTxt, trainers, src, onDone, onCancel }) {
   const first = name.split(/\s+/)[0];
+  const [shift, setShift] = useState('route');
+  const [time, setTime] = useState('');            // "HH:MM" from the time box, '' = any time
+  const [label, setLabel] = useState('');          // the meeting's name
   const [note, setNote] = useState('');
   const [training, setTraining] = useState(false);
   const [trainer, setTrainer] = useState('');
@@ -55,12 +64,16 @@ function LockForm({ week, name, date, dayTxt, trainers, src, onDone, onCancel })
   const pick = (trainers || []).filter((t) => nkey(t) !== nkey(name));
   const save = async (sure) => {
     if (saving) return;
-    const q = conflictQuestion(clashes(name, date, training ? trainer : '', src), date);
+    if (shift === 'meeting' && !time) { toast('Pick the meeting time.', 'err'); return; }
+    const isTrain = shift === 'route' && training;
+    const q = conflictQuestion(clashes(name, date, isTrain ? trainer : '', src), date);
     if (q && !sure) { setAsk(q); return; }
     setSaving(true);
     try {
-      await saveLock(week, { driverKey: name, date, note: note.trim().slice(0, 300), training, trainer: training ? trainer : '' });
-      toast(`🔒 ${first} locked in on ${dayTxt}${training ? ' (training)' : ''}`);
+      const lk = { driverKey: name, date, note: note.trim().slice(0, 300), training: isTrain, trainer: isTrain ? trainer : '',
+        shift, time: shift === 'dispatch' ? '' : to12(time), label: shift === 'meeting' ? label.trim().slice(0, 60) : '' };
+      await saveLock(week, lk);
+      toast(`🔒 ${first} locked in on ${dayTxt}: ${lockShort(lk)}`);
       onDone();
     } catch { toast(SAVE_ERR, 'err'); setSaving(false); }
   };
@@ -75,11 +88,21 @@ function LockForm({ week, name, date, dayTxt, trainers, src, onDone, onCancel })
   }
   return html`<div class="fw-menu-form">
     <div class="fw-menu-title">🔒 Lock ${first} working ${dayTxt}</div>
+    <div class="seg lk-shift" role="group" aria-label="Coming in for">
+      ${SHIFTS.map(([k, t]) => html`<button type="button" class=${shift === k ? 'on' : ''} aria-pressed=${shift === k}
+        disabled=${saving} onClick=${() => setShift(k)}>${t}</button>`)}
+    </div>
+    ${shift === 'meeting' ? html`<input type="text" maxlength="60" placeholder="Meeting name (optional, e.g. Safety)" value=${label}
+      disabled=${saving} aria-label="Meeting name" onInput=${(e) => setLabel(e.target.value)} />` : ''}
+    ${shift !== 'dispatch' ? html`<label class="lk-time">${shift === 'meeting' ? 'Time' : 'Time (optional)'}
+      <input type="time" value=${time} disabled=${saving} aria-label=${shift === 'meeting' ? 'Meeting time' : 'Route time (optional)'}
+        onInput=${(e) => setTime(e.target.value)} />
+      ${shift === 'route' ? html`<span class="muted">${time ? 'gets this wave if it has room' : 'blank = any wave'}</span>` : ''}</label>` : ''}
     <input type="text" maxlength="300" placeholder="Note (optional)" value=${note} disabled=${saving}
       aria-label="Note (optional)" onInput=${(e) => setNote(e.target.value)} />
-    <label class="lk-check"><input type="checkbox" checked=${training} disabled=${saving}
-      onChange=${(e) => setTraining(e.target.checked)} /> Training day</label>
-    ${training ? html`<select class="lk-trainer" value=${trainer} disabled=${saving} aria-label="Trainer"
+    ${shift === 'route' ? html`<label class="lk-check"><input type="checkbox" checked=${training} disabled=${saving}
+      onChange=${(e) => setTraining(e.target.checked)} /> Training day</label>` : ''}
+    ${shift === 'route' && training ? html`<select class="lk-trainer" value=${trainer} disabled=${saving} aria-label="Trainer"
         onChange=${(e) => setTrainer(e.target.value)}>
         <option value="">Trainer: the builder picks</option>
         ${pick.map((t) => html`<option value=${t}>${t}</option>`)}
@@ -159,7 +182,7 @@ function DayMenu({ week, m, canEdit, prefs, onPrefs, onClose, lock, canLock, tra
   return html`<div class="fw-menu" role="dialog" aria-label=${`${name}, ${dayTxt}`} style=${m.style}>
     ${head}
     ${lock ? html`<div class="fw-menu-info lk-info">
-      <div><b>🔒 ${lock.training ? 'Locked training day' : 'Locked: working this day'}</b>
+      <div><b>🔒 ${lockLine(lock)}</b>
         <span class="muted"> · by ${lock.by || '—'}, ${when(lock.at)}</span></div>
       ${lock.training ? html`<div>Trainer: ${lock.trainer || 'the builder picks'}</div>` : ''}
       ${lock.note ? html`<div class="fw-menu-note">“${lock.note}”</div>` : ''}
@@ -344,14 +367,14 @@ export function FutureWeek({ week, label }) {
                 const lk = lockOf(weekLocks, name, d.date);
                 const clash = lk ? clashes(name, d.date, lk.training ? lk.trainer : '', src) : [];
                 const warn = clash.map((c) => conflictLine(c, d.date, c.who)).join('. ');
-                const tip = (lk ? `🔒 ${lk.training ? `Locked training day${lk.trainer ? ' with ' + lk.trainer : ''}` : 'Locked: working this day'}${
+                const tip = (lk ? `🔒 ${lockLine(lk)}${lk.training && lk.trainer ? ' with ' + lk.trainer : ''}${
                   lk.note ? ' — ' + lk.note : ''}${warn ? '\n⚠ ' + warn : ''}\n` : '')
                   + (past ? 'This day is over' : off ? `${WHY_LABEL.timeoff}${x.note ? ' — ' + x.note : ''}`
                     : x ? `${WHY_LABEL[x.why]} — from their preferences` : lk ? 'Click for the lock' : 'Click to mark a day off');
                 return html`<td class=${'lv-cell fw-cell k-' + (lk ? 'lock' : off ? 'off' : 'empty') + (d.date === today ? ' today' : '') + (past ? ' fw-past' : '')}
                   title=${tip} onClick=${past ? undefined : (e) => open(e, name, d)}>${lk
-                    ? html`<div class="lv-blk b-lock"><span>${lk.training ? 'Training' : 'Working'}</span><${LockMark}
-                      st=${{ kind: 'ok', text: lk.training ? 'Locked training day' : 'Locked: working this day' }} warn=${warn}
+                    ? html`<div class=${'lv-blk b-lock' + (lockShift(lk) === 'meeting' ? ' b-lock-meet' : '')}><span>${lockShort(lk)}</span><${LockMark}
+                      st=${{ kind: 'ok', text: lockLine(lk) }} warn=${warn}
                       busy=${unlocking} onUnlock=${canLock && !past ? () => unlock(lk) : undefined} /></div>`
                     : off
                     ? html`<div class="lv-blk b-off" style=${`background:${SHIFT_COLORS.off}`}><span>${WHY_LABEL.timeoff}</span></div>${

@@ -259,6 +259,7 @@
       const k = String(l.date) + '|' + String(l.driverKey);
       all[k] = { driverKey: String(l.driverKey).slice(0, 120), date: String(l.date).slice(0, 10),
         note: String(l.note || '').trim().slice(0, 300), training: !!l.training, trainer: l.training ? String(l.trainer || '').slice(0, 120) : '',
+        shift: ['meeting', 'dispatch'].includes(l.shift) ? l.shift : 'route', time: String(l.time || ''), label: String(l.label || '').slice(0, 60),
         by: name, at: now() };
       put('locks/' + week, all); fire();
     },

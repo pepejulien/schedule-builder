@@ -64,7 +64,7 @@
 > open. `app/steps/build-editor.js`; test: `python tests/build_edits_test.py`.
 
 > **Locked days (2026-11-20, Firebase only; card #1360):** on a week not published yet (built or not), click a
-> driver's day on the Live board → **🔒 Lock: working this day** (note, optional *Training day* + trainer). Stored
+> driver's day on the Live board → **🔒 Lock: working this day** (note, optional *Training day* + trainer). Stored The lock can say what they come in for (2026-11-24): **Route** (any time, or a set time = that wave when it has room), **Meeting** at a time (with an optional name, e.g. "9:00 AM Safety Meeting"), or **Dispatch** — a meeting / dispatch lock is a do-not-touch day in the build.
 > on their own in Firestore `schedule_locks/{weekStart}/days/{id}` through `jajb.js` (`watchScheduleLocks`,
 > `saveScheduleLock`, `deleteScheduleLock` — the contract is in `app/api.js`; hidden while the hub's `jajb.js`
 > doesn't have them), so a rebuild keeps them. The build places every lock first (solver `locked_days`; a training

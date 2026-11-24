@@ -105,7 +105,7 @@ export function Step8Review() {
           ...config.auto_training.map((p) => `Auto (next up: ${p.pool.slice(0, 3).join(', ') || 'no trainers marked'}) → ${p.trainee}${p.day ? ` (🔒 ${p.day})` : ''}`)]
           .join('; ')}</p>` : ''}
       ${(config.locked_days || []).length ? html`<h3>Locked days</h3>
-        <p>${config.locked_days.map((l) => `🔒 ${l.name} ${l.day}${l.training ? ` (training${l.trainer ? ' with ' + l.trainer : ''})` : ''}`).join('; ')}</p>
+        <p>${config.locked_days.map((l) => `🔒 ${l.name} ${l.day}${l.shift === 'meeting' ? ` (${l.time} ${l.label || 'Meeting'})` : l.shift === 'dispatch' ? ' (Dispatch)' : l.time ? ` (${l.time})` : ''}${l.training ? ` (training${l.trainer ? ' with ' + l.trainer : ''})` : ''}`).join('; ')}</p>
         <p class="hint">Placed before anyone else and never moved. Set or removed on the Live board, under this week.</p>` : ''}
       ${warnings.map((w) => html`<${Banner} kind="warn">${w}<//>`)}
       ${Object.keys(config.extra_worked_days).length ? html`<h3>Dispatch duty</h3>

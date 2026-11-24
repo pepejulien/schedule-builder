@@ -5,7 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { lockId, dayText, lockList, lockOf, locksByDriver, lockConflicts, conflictQuestion, locksForBuild, lockState, lockTip }
+import { lockId, dayText, lockList, lockOf, locksByDriver, lockConflicts, conflictQuestion, locksForBuild, lockState, lockTip,
+  lockShort, lockLine, meetingText }
   from '../public/app/lib/locks.js';
 import { assembleConfig, LOCKS_FAILED_MSG } from '../public/app/lib/config-assemble.js';
 
@@ -102,6 +103,21 @@ if (rep) {
   ok('Bianca trains Thu, trainer from the rotation', rep.pairlog.some((p) => p[1] === 'Bianca Cole' && p[2] === 'Thu'), JSON.stringify(rep.pairlog));
   ok('every lock placed', rep.locks.length === 3 && rep.locks.every((l) => l.working), JSON.stringify(rep.locks));
   ok('no rule errors', !rep.check.errors.filter((e) => /^(UNAVAIL|CONSEC|DAYS7|DUP)/.test(e)).length, rep.check.errors.join('; '));
+}
+
+// shift / time / label (2026-11-24)
+{
+  const L = { 'a': { driverKey: 'Aaron Bell', date: '2026-11-24', shift: 'meeting', time: '9:00 AM', label: 'Safety' },
+    'b': { driverKey: 'Bianca Cole', date: '2026-11-25', shift: 'dispatch', time: '9:00 AM' },
+    'c': { driverKey: 'Jessica Jett', date: '2026-11-26', time: '10:45 AM' } };
+  const fb2 = locksForBuild(L, '2026-11-22', ['Aaron Bell', 'Bianca Cole', 'Jessica Jett']);
+  const by = (n) => fb2.locked_days.find((l) => l.name === n);
+  ok('meeting row', by('Aaron Bell').shift === 'meeting' && by('Aaron Bell').time === '9:00 AM' && by('Aaron Bell').label === 'Safety Meeting', JSON.stringify(by('Aaron Bell')));
+  ok('dispatch row, no time', by('Bianca Cole').shift === 'dispatch' && !('time' in by('Bianca Cole')), JSON.stringify(by('Bianca Cole')));
+  ok('timed route row', !('shift' in by('Jessica Jett')) && by('Jessica Jett').time === '10:45 AM', JSON.stringify(by('Jessica Jett')));
+  ok('short words', [lockShort(L.a), lockShort(L.b), lockShort(L.c), lockShort({})].join('|') === '9:00 AM Safety Meeting|Dispatch|Route 10:45 AM|Working');
+  ok('meeting text adds the word once', meetingText({ time: '1:00 PM', label: 'Team meeting' }) === '1:00 PM Team meeting');
+  ok('lockLine', lockLine(L.a) === 'Locked: Safety Meeting at 9:00 AM', lockLine(L.a));
 }
 
 console.log(`locks: ${pass} passed, ${fail} failed`);
