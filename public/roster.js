@@ -192,16 +192,41 @@
       return { el, sel, time, key: waveKey(time) };
     });
   }
+  // Amazon's own route counts (Jose 2026-11-24). When Amazon moves a route to another start time after
+  // the day was rostered, the rostered row stays at the old time ("over assigned") and an empty row
+  // shows at the new one, so there are more rows than routes (41 rows for 38 routes). The header's
+  // "N Confirmed" and the "Confirmed Routes" list (one .schedule per start time, its route count) are
+  // the real numbers. caps = Map(start time -> routes), or null when it can't be read or doesn't add
+  // up to the Confirmed number - then every row counts as a route, as before.
+  const firstNum = (s) => { const m = /\d+/.exec(String(s || "")); return m ? +m[0] : null; };
+  function readCaps(el, confirmed) {
+    const m = new Map();
+    for (const sc of el.querySelectorAll(".schedule")) {
+      const t = /(\d{1,2}:\d{2}\s*[ap]m)/i.exec((sc.querySelector(".data.first") || sc).textContent || "");
+      const ds = sc.querySelectorAll(".data");
+      const n = ds.length > 1 ? firstNum(ds[1].textContent) : null;
+      if (!t || n == null) return null;
+      const k = waveKey(t[1]);
+      m.set(k, (m.get(k) || 0) + n);
+    }
+    if (!m.size || confirmed == null) return null;
+    return [...m.values()].reduce((a, b) => a + b, 0) === confirmed ? m : null;
+  }
   // the services Amazon shows for the day (hidden 0-confirmed ones left out), page order
   function readServices() {
     return [...document.querySelectorAll("#confirmedServiceRequestSection .withRosterView > div.row")]
       .filter((el) => getComputedStyle(el).display !== "none")
       .map((el) => {
         const heading = one((el.querySelector(".rowHeader span") || {}).textContent);
+        const confirmed = firstNum((el.querySelector(".rowHeaderData span") || {}).textContent);
         return { el, heading, short: shortSvc(heading), sp: SP_RE.test(heading) && !ELECTRIC_RE.test(heading),
-          ev: ELECTRIC_RE.test(heading), rows: readRows(el) };
+          ev: ELECTRIC_RE.test(heading), rows: readRows(el), confirmed, caps: readCaps(el, confirmed) };
       });
   }
+  // the routes at one start time of a service (every row when Amazon's counts can't be read)
+  const capOf = (svc, w) => (svc.caps ? svc.caps.get(w.key) || 0 : w.rows.length);
+  // a start time holding more drivers than Amazon has routes there (Amazon moved some away)
+  const overAt = (svc, w) => Math.max(0, w.rows.filter((r) => r.sel.value).length - capOf(svc, w));
   const shown = (row) => one((row.el.querySelector(".chosen-single span") || {}).textContent);
   // the name in a row (Amazon's option text), or null when empty
   function currentDA(row) {
@@ -377,11 +402,13 @@
     if (auto) { if (open()) waiting(); else blocked(); }
   }
 
-  // Amazon's associate rows for the day, every service (Standard Parcel, Electric, Nursery, Hub…):
-  // how many drivers on routes the Live board should have (Jose 2026-11-12). null when unreadable.
+  // Amazon's routes for the day, every service (Standard Parcel, Electric, Nursery, Hub…): how many
+  // drivers on routes the Live board should have (Jose 2026-11-12). Each service's "N Confirmed"
+  // (2026-11-24: not its rows - a route Amazon moved to another time leaves an extra row behind);
+  // its rows only when that number can't be read. null when unreadable.
   function amazonRows() {
     const svcs = readServices();
-    return svcs.length ? svcs.reduce((n, s) => n + s.rows.length, 0) : null;
+    return svcs.length ? svcs.reduce((n, s) => n + (s.confirmed != null ? s.confirmed : s.rows.length), 0) : null;
   }
 
   function onMessage(e) {
@@ -593,6 +620,35 @@
   const othersOf = (svcs, target) => svcs.filter((s) => s.el !== target.el)
     .map((s) => ({ short: s.short, sp: s.sp, ev: s.ev, rows: s.rows.length, empty: s.rows.filter(isEmpty).length }));
 
+  // The target service's start times, Amazon's route count each (2026-11-24): [{w, routes, held,
+  // empty, stale, free, leaving}]. Where Amazon moved routes away (more drivers than routes at a time),
+  // the extra drivers leave that time (`leaving`, status "match" + r.mover = {value, from}): they go
+  // into a free row at their own Live board time, else the nearest one, and their old row is emptied
+  // during the fill. Who leaves: someone the Live board has at another time first, then the last rows.
+  // free = rows a driver can go into here (empty or stale), never more than the routes left here.
+  function waveLines(target, drivers, keep) {
+    const isStale = (row) => !!row.sel.value && !row.sel.disabled && !keep.has(row.sel.value);
+    const byOpt = new Map(drivers.filter((r) => r.opt).map((r) => [r.opt.value, r]));
+    return readWaves(target.el).map((w) => {
+      const routes = capOf(target, w);
+      const empty = w.rows.filter(isEmpty).length;
+      const staleRows = w.rows.filter(isStale);
+      const held = w.rows.filter((row) => row.sel.value && !isStale(row));
+      const over = Math.max(0, held.length - routes);
+      const cand = held.map((row, i) => ({ row, i, r: byOpt.get(row.sel.value) }))
+        .filter((x) => x.r && x.r.status === "already" && x.r.where && x.r.where.svc === target.el)
+        .sort((a, b) => (waveKey(a.r.d.portal) === w.key) - (waveKey(b.r.d.portal) === w.key) || b.i - a.i);
+      const leaving = cand.slice(0, over).map((x) => {
+        x.r.status = "match"; x.r.mover = { value: x.row.sel.value, from: w.label };
+        return x.r;
+      });
+      const stay = held.length - leaving.length;
+      const stale = staleRows.map((row) => ({ value: row.sel.value, name: currentDA(row) }));
+      const free = Math.max(0, Math.min(empty + stale.length, routes - stay));
+      return { w, s: null, routes, held: stay, empty, stale, free, leaving, ds: [], toFill: [], moved: [] };
+    });
+  }
+
   /* ---------- EDV rows (Jose 2026-11-24) ----------
    * The EDV service is filled first while it has an empty row and the Live board has an EDV driver who
    * isn't on Amazon yet (payload.drivers[].edv, roster-send.js tagEdv: 'list' = on the Assigner's EDV
@@ -601,14 +657,16 @@
    * Rows still free after that: dispatch ticks EDV-certified drivers who are on a route that day. */
   function edvWanted(svcs) {
     const taken = takenNow(svcs);
-    return (payload.drivers || []).some((d) => (d.edv === "list" || d.edv === "cert") && !(d.tid && taken.has(d.tid)));
+    // or an EDV driver sits on a row Amazon moved to another time (2026-11-24)
+    const moved = svcs.some((s) => s.ev && readWaves(s.el).some((w) => overAt(s, w)));
+    return moved || (payload.drivers || []).some((d) => (d.edv === "list" || d.edv === "cert") && !(d.tid && taken.has(d.tid)));
   }
   // (re)places the list drivers, then the ticked ones (plan.picked: Set of option values), on the EDV rows
   function assignEdv(p) {
     for (const l of p.lines) { l.ds = []; l.toFill = []; l.moved = []; }
     for (const r of p.drivers) {
       delete r.movedTo; delete r.movedFrom;
-      if (["match", "edvExtra", "edvPool", "other"].includes(r.status)) r.status = "match";
+      if (["match", "edvExtra", "edvPool", "other", "overStay"].includes(r.status)) r.status = "match";
     }
     const spare = (l) => l.free - l.toFill.length;
     const place = (rs) => {
@@ -621,13 +679,14 @@
         const mins = waveMins(waveKey(r.d.portal));
         const l = p.lines.filter((x) => spare(x) > 0)
           .sort((a, b) => Math.abs(waveMins(a.w.key) - mins) - Math.abs(waveMins(b.w.key) - mins) || waveMins(b.w.key) - waveMins(a.w.key))[0];
-        if (!l) { r.status = "edvExtra"; continue; }
-        r.movedTo = l.w.label; r.movedFrom = one(r.d.portal);
+        if (!l) { r.status = r.mover ? "overStay" : "edvExtra"; continue; }
+        r.movedTo = l.w.label; r.movedFrom = r.mover ? r.mover.from : one(r.d.portal);
         l.toFill.push(r); l.moved.push(r);
       }
     };
     const ok = (r) => r.status === "match";
-    place(p.drivers.filter((r) => ok(r) && r.d.edv === "list"));
+    place(p.drivers.filter((r) => ok(r) && r.mover));          // already on an EDV row Amazon moved away
+    place(p.drivers.filter((r) => ok(r) && !r.mover && r.d.edv === "list"));
     p.pool = p.drivers.filter((r) => ok(r) && r.d.edv === "cert");
     p.spareAfterList = p.lines.reduce((n, l) => n + spare(l), 0);
     place(p.pool.filter((r) => p.picked.has(r.opt.value)));
@@ -648,12 +707,7 @@
     if (o.err || o.errHtml) return o;
     const taken = takenNow(svcs);
     const { drivers, keep } = matchDrivers(o.opts, taken);
-    const isStale = (row) => !!row.sel.value && !row.sel.disabled && !keep.has(row.sel.value);
-    const lines = readWaves(target.el).map((w) => {
-      const empty = w.rows.filter(isEmpty).length;
-      const stale = w.rows.filter(isStale).map((row) => ({ value: row.sel.value, name: currentDA(row) }));
-      return { w, s: null, routes: w.rows.length, empty, stale, free: empty + stale.length, ds: [], toFill: [], moved: [] };
-    });
+    const lines = waveLines(target, drivers, keep);
     const filtered = [...target.el.querySelectorAll(".DAFilter select")].some((x) => x.value);
     const p = { edv: true, target, opened: o.opened, lines, noWave: [], drivers, keep, filtered, picked: new Set(),
       others: othersOf(svcs, target), anyEmpty: target.rows.some(isEmpty) || lines.some((l) => l.stale.length) };
@@ -686,9 +740,12 @@
     if (svcs.some((s) => s.ev && s.rows.some(isEmpty))) {
       for (const r of drivers) if (r.status === "match" && r.d.edv === "list") r.status = "edvHold";
     }
+    // per Amazon start time, page order, with Amazon's route count there; stale rows: [{value, name}] -
+    // who's there now but not on a route on the Live board (re-run, Jose 2026-11-12); drivers on a row
+    // Amazon moved to another time leave it (waveLines, 2026-11-24)
+    const lines = waveLines(target, drivers, keep);
+    const byKey = new Map(lines.map((l) => [l.w.key, l.w]));
     // line schedule waves up with Amazon start times
-    const waves = readWaves(target.el);
-    const byKey = new Map(waves.map((w) => [w.key, w]));
     const sched = [];                                          // [{key, label, sched, drivers: [r]}] payload order
     for (const r of drivers) {
       const k = waveKey(r.d.portal);
@@ -696,18 +753,14 @@
       if (!s) { s = { key: k, label: one(r.d.portal), sched: r.d.sched, drivers: [] }; sched.push(s); }
       s.drivers.push(r);
     }
-    const isStale = (row) => !!row.sel.value && !row.sel.disabled && !keep.has(row.sel.value);
-    const lines = [];                                          // per Amazon start time, page order
-    for (const w of waves) {
-      const s = sched.find((x) => x.key === w.key);
-      const empty = w.rows.filter(isEmpty).length;
-      // stale rows: [{value, name}] - who's there now (re-run, Jose 2026-11-12)
-      const stale = w.rows.filter(isStale).map((row) => ({ value: row.sel.value, name: currentDA(row) }));
-      const free = empty + stale.length;
-      const ds = s ? s.drivers : [];
-      const fill = ds.filter((r) => r.status === "match");
-      fill.forEach((r, i) => { if (i >= free) r.status = "leftover"; });
-      lines.push({ w, s, routes: w.rows.length, empty, stale, free, ds, toFill: fill.filter((r) => r.status === "match") });
+    for (const l of lines) {
+      const s = l.s = sched.find((x) => x.key === l.w.key) || null;
+      l.ds = s ? s.drivers : [];
+      // someone leaving this time can't take a row here again
+      const fill = l.ds.filter((r) => r.status === "match" && !(r.mover && r.mover.from === l.w.label));
+      fill.forEach((r, i) => { if (i >= l.free) r.status = "leftover"; });
+      for (const r of l.ds) if (r.status === "match" && r.mover && r.mover.from === l.w.label) r.status = "leftover";
+      l.toFill = fill.filter((r) => r.status === "match");
     }
     const noWave = sched.filter((s) => !byKey.has(s.key));
     for (const s of noWave) for (const r of s.drivers) if (r.status === "match" || r.status === "leftover") r.status = "nowave";
@@ -729,6 +782,8 @@
       to.toFill.push(x.r);
       (to.moved || (to.moved = [])).push(x.r);
     }
+    // on a row Amazon moved away, but no free row anywhere: they stay where they are (2026-11-24)
+    for (const r of drivers) if (r.mover && (r.status === "leftover" || r.status === "nowave")) r.status = "overStay";
     // which stale rows get a Live board driver (the empty rows fill first) and which are emptied
     for (const l of lines) {
       const into = Math.max(0, l.toFill.length - l.empty);
@@ -754,7 +809,14 @@
     const out = [];
     // moves read one way (Jose 2026-11-14): the sending time says "more drivers than rows - these go to X",
     // the receiving time says "more rows than drivers - these come from Y"; it's the same people, once
-    const gone = l.ds.filter((r) => r.movedTo);
+    const gone = l.ds.filter((r) => r.movedTo && !r.mover);
+    // Amazon moved routes off this time after it was rostered (2026-11-24): the extra drivers leave it
+    const lv = (l.leaving || []).filter((r) => r.status !== "overStay");
+    if (lv.length) out.push(`<li class="warn">Amazon moved ${plural(lv.length, "route")} off this time, so ${lv.length === 1 ? "this driver goes" : "these drivers go"} to the new time: ${lv.map((r) => `${nameOf(r.d)} → <b>${esc(r.movedTo || one(r.d.portal))}</b>`).join(", ")}</li>`);
+    const os = (l.leaving || []).filter((r) => r.status === "overStay");
+    if (os.length) out.push(`<li class="bad">Amazon moved ${plural(os.length, "route")} off this time, but there's no free row at another time for ${names(os.map((r) => r.d))} — they stay on this row. Fix it by hand.</li>`);
+    const inn = (l.toFill || []).filter((r) => r.mover && !r.movedTo);
+    if (inn.length) out.push(`<li class="muted">Back at their Live board time (Amazon moved their route here): ${inn.map((r) => `${nameOf(r.d)} <span class="muted">(was on ${esc(r.mover.from)})</span>`).join(", ")}</li>`);
     for (const to of [...new Set(gone.map((r) => r.movedTo))]) {
       const g = gone.filter((r) => r.movedTo === to);
       out.push(`<li class="warn">${plural(g.length, "more driver")} than Amazon has rows here, so ${g.length === 1 ? "this driver goes" : "these drivers go"} to <b>${esc(to)}</b> instead: ${names(g.map((r) => r.d))}</li>`);
@@ -762,8 +824,11 @@
     if (plan.edv && (l.moved || []).length) {
       out.push(`<li class="warn">From another start time (the Live board follows): ${l.moved.map((r) => `${nameOf(r.d)} <span class="muted">(${esc(r.movedFrom)})</span>`).join(", ")}</li>`);
     } else if ((l.moved || []).length) {
-      const from = [...new Set(l.moved.map((r) => r.movedFrom))].join(" / ");
-      out.push(`<li class="warn">Amazon has ${plural(l.moved.length, "more row")} here than drivers, so ${l.moved.length === 1 ? "this driver comes" : "these drivers come"} over from <b>${esc(from)}</b>: ${names(l.moved.map((r) => r.d))}</li>`);
+      // Amazon moved a route here (2026-11-24): the driver comes with it, the Live board follows
+      const mv = l.moved.filter((r) => r.mover), rest = l.moved.filter((r) => !r.mover);
+      if (mv.length) out.push(`<li class="warn">Amazon moved ${plural(mv.length, "route")} here — ${mv.length === 1 ? "this driver comes" : "these drivers come"} with it (the Live board follows): ${mv.map((r) => `${nameOf(r.d)} <span class="muted">(was on ${esc(r.mover.from)})</span>`).join(", ")}</li>`);
+      const from = [...new Set(rest.map((r) => r.movedFrom))].join(" / ");
+      if (rest.length) out.push(`<li class="warn">Amazon has ${plural(rest.length, "more row")} here than drivers, so ${rest.length === 1 ? "this driver comes" : "these drivers come"} over from <b>${esc(from)}</b>: ${names(rest.map((r) => r.d))}</li>`);
     }
     const nf = by("notfound"); if (nf.length) out.push(`<li class="bad">Not in Amazon's associate list: ${names(nf.map((r) => r.d))}</li>`);
     const am = by("ambiguous"); if (am.length) out.push(`<li class="bad">More than one match in Amazon's list — not placed: ${am.map((r) => `${nameOf(r.d)} (${esc(r.why)})`).join(", ")}</li>`);
@@ -777,8 +842,9 @@
       const sw = (l.swapped || []); if (sw.length) out.push(`<li class="warn">Replaced (no longer on a route on the Live board): ${nm(sw)}</li>`);
       const cl = (l.cleared || []); if (cl.length) out.push(`<li class="warn">Taken off, row left empty (no longer on a route on the Live board): ${nm(cl)}</li>`);
       const cf = (l.clearFailed || []); if (cf.length) out.push(`<li class="bad">Couldn't take off — do it by hand: ${nm(cf)}</li>`);
-      const still = l.w.rows.filter(isEmpty).length;
-      if (still) out.push(`<li class="warn">${plural(still, "row")} still empty</li>`);
+      // routes here without a driver (an old row emptied for a moved route isn't one)
+      const still = Math.max(0, l.routes - l.w.rows.filter((r) => r.sel.value).length);
+      if (still) out.push(`<li class="warn">${plural(still, "route")} still without a driver</li>`);
       const flagged = l.w.rows.filter((r) => errMark(r));
       if (flagged.length) out.push(`<li class="bad">Amazon shows a red ! on ${plural(flagged.length, "row")} at this time — check them</li>`);
     } else {
@@ -788,15 +854,17 @@
       if (stay > 0) out.push(plan.edv ? `<li class="warn">${plural(stay, "EDV row")} without a driver yet</li>`
         : `<li class="bad">${plural(stay, "row")} will still be empty after the fill — not enough drivers</li>`);
     }
-    if (!l.s && !plan.edv) out.push(`<li class="warn">Nobody on the Live board at this start time</li>`);
+    if (!l.s && !plan.edv && !(l.moved || []).length) out.push(`<li class="warn">Nobody on the Live board at this start time</li>`);
     // the header compares Amazon's rows with the Live board's drivers at this time (Jose 2026-11-14:
     // "18 empty rows" read as 18 short when it was 6) - rows already holding someone are named apart
-    const had = l.routes - l.empty;
+    // Amazon's routes here (2026-11-24: its own count, not the rows - a moved route leaves a row behind)
+    const had = Math.min(l.routes, l.held + l.stale.length);
+    const amz = `${plural(l.routes, plan.edv ? "EDV route" : "route")}${l.w.rows.length !== l.routes ? ` (${plural(l.w.rows.length, "row")})` : ""}`;
     const head = final
-      ? `<b>${esc(l.w.label)}</b> — Amazon: ${plural(l.routes, "row")} · ${l.placed || 0} filled just now`
+      ? `<b>${esc(l.w.label)}</b> — Amazon: ${amz} · ${l.placed || 0} filled just now`
       : plan.edv
-        ? `<b>${esc(l.w.label)}</b> — Amazon: ${plural(l.routes, "EDV row")}${had ? ` (${had} already ${had === 1 ? "has" : "have"} someone)` : ""} · going in: ${l.toFill.length}`
-        : `<b>${esc(l.w.label)}</b> — Amazon: ${plural(l.routes, "row")}${had ? ` (${had} already ${had === 1 ? "has" : "have"} someone)` : ""} · Live board: ${plural(l.ds.length, "driver")}`;
+        ? `<b>${esc(l.w.label)}</b> — Amazon: ${amz}${had ? ` (${had} already ${had === 1 ? "has" : "have"} someone)` : ""} · going in: ${l.toFill.length}`
+        : `<b>${esc(l.w.label)}</b> — Amazon: ${amz}${had ? ` (${had} already ${had === 1 ? "has" : "have"} someone)` : ""} · Live board: ${plural(l.ds.length, "driver")}`;
     const who = !final && l.toFill.length
       ? `<details><summary>Who goes in (${l.toFill.length})</summary><ol>${l.toFill.map((r) => `<li>${nameOf(r.d)}</li>`).join("")}</ol></details>` : "";
     return `<div class="wave">${head}${out.length ? `<ul>${out.join("")}</ul>` : ""}${who}</div>`;
@@ -925,6 +993,16 @@
     return { ok: true };
   }
 
+  // a moved driver whose new row didn't take them goes back on an empty row at the old time (2026-11-24)
+  async function putBack(r, from) {
+    const w = readWaves(plan.target.el).find((x) => x.label === from);
+    const row = w && w.rows.find(isEmpty);
+    const o = row && [...row.sel.options].find((x) => x.value === r.opt.value);
+    let ok = false;
+    if (o) { try { ok = await setRow(row, o.index, () => row.sel.value === r.opt.value); } catch (err) { ok = false; } }
+    return ok ? `put back on ${from}` : `taken off ${from} and NOT put back: pick them again by hand, or press Cancel`;
+  }
+
   const stillHere = () => !!plan && plan.target.el.isConnected && isOpen(plan.target.el) && pageDate() === date;
 
   async function fill(my) {
@@ -953,18 +1031,37 @@
         if (stopped || my !== runId) break outer;
         if (!stillHere()) { stopped = true; plan.lost = true; break outer; }
         status();
+        // on a row Amazon moved away (2026-11-24): that row is emptied first, so Amazon doesn't see
+        // them twice; if the new row won't take them, they go back on the old time
+        let backTo = null;
+        if (r.mover) {
+          const old = readRows(plan.target.el).find((row) => row.sel.value === r.mover.value && !row.sel.disabled);
+          if (old) {
+            let ok = false;
+            try { ok = await emptyRow(old); } catch (err) { ok = false; }
+            if (!ok) { r.status = "failed"; r.why = `couldn't take them off ${r.mover.from}`; done++; progress(done / steps); continue; }
+            backTo = r.mover.from;
+          }
+        }
         const w = fresh();                                     // fresh rows: the page may have re-drawn
         // an empty row first, else a row whose associate isn't on a route on the Live board (re-run)
         let idx = w ? w.rows.findIndex((row, i) => !bad.has(i) && isEmpty(row)) : -1;
         if (idx < 0 && w) idx = w.rows.findIndex((row, i) => !bad.has(i) && !row.sel.disabled && left.has(row.sel.value));
-        if (idx < 0) { r.status = "leftover"; done++; progress(done / steps); continue; }
+        if (idx < 0) {
+          if (backTo) { r.status = "failed"; r.why = await putBack(r, backTo); }
+          else r.status = "leftover";
+          done++; progress(done / steps); continue;
+        }
         const was = isEmpty(w.rows[idx]) ? null : w.rows[idx].sel.value;
         let res;
         try { res = await placeOne(w.rows[idx], r.opt, was); } catch (err) { res = { ok: false, why: "error: " + (err && err.message || err) }; }
         if (res.ok) {
           r.status = "placed"; placed++; l.placed++;
           if (was) { l.swapped.push(left.get(was)); left.delete(was); }
-        } else { r.status = "failed"; r.why = res.why; if (res.rowBad || was) bad.add(idx); }
+        } else {
+          r.status = "failed"; r.why = res.why; if (res.rowBad || was) bad.add(idx);
+          if (backTo) r.why += " — " + await putBack(r, backTo);
+        }
         done++;
         progress(done / steps);
       }

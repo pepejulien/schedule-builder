@@ -146,7 +146,17 @@
     // + Olga Pre (not on the Live board) on an 11:25 row and one more empty row: Skip the checklist,
     // Fill -> Casey in Daniel's place, Grace in the empty row, Olga's row emptied
     rerun2: [["11:05 am", 2, { 0: "A0010", 1: "A0001" }], ["11:25 am", 3, { 0: "A0006", 1: "A-OLGA" }]] }[VARIANT] || [["11:05 am", 2], ["11:25 am", 2]];
-  const SVC = EDV ? [
+  // ?set=edv&moved=1 (Jose 2026-11-24): the day was rostered, then Amazon moved one 10:25 route to 11:05 -
+  // the 10:25 rows keep 3 drivers for 2 routes ("over assigned") and an empty 11:05 row shows: 9 rows,
+  // 8 routes (s.routes = Amazon's route count per start time, the "Confirmed Routes" list)
+  const MOVED = params.get("moved") === "1";
+  const SVC = EDV && MOVED ? [
+    { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours",
+      rows: rows([["10:25 am", 3, { 0: "A-EVA", 1: "A-RON", 2: "A-RITA" }], ["10:45 am", 2, { 0: "A-MARK", 1: "A-ROB" }], ["11:05 am", 1]]),
+      routes: { "10:25 am": 2, "10:45 am": 2, "11:05 am": 1 } },
+    { heading: "Standard Parcel Electric - Rivian MEDIUM - Default as station - 10 Hours",
+      rows: rows([["10:45 am", 3, { 0: "A-ALEX", 1: "A-CHRIS", 2: "A-ED" }]]) },
+  ] : EDV ? [
     { heading: "Standard Parcel - Extra Large Van - US - Default as station - 10 Hours", rows: rows([["10:25 am", 3], ["10:45 am", 3]]) },
     { heading: "Standard Parcel Electric - Rivian MEDIUM - Default as station - 10 Hours", rows: rows([["10:45 am", 3]]) },
   ] : ENGINE ? [
@@ -245,7 +255,7 @@
     const sch = el.querySelector(".schedules");
     for (const t of times(s)) {
       const d = document.createElement("div"); d.className = "schedule";
-      d.innerHTML = `<div class="data first"><span class="floatLeft">${t}</span> <button class="bulkImportDaButton">Bulk Import Associates</button></div><div class="data"><span>${s.rows.filter((r) => r.time === t).length}</span></div><div class="data"><a href="javascript:void(0);">Modify DSP Capacity to decline routes</a></div>`;
+      d.innerHTML = `<div class="data first"><span class="floatLeft">${t}</span> <button class="bulkImportDaButton">Bulk Import Associates</button></div><div class="data"><span>${s.routes ? s.routes[t] || 0 : s.rows.filter((r) => r.time === t).length}</span></div><div class="data"><a href="javascript:void(0);">Modify DSP Capacity to decline routes</a></div>`;
       d.querySelector("button").onclick = () => note("BULK IMPORT");
       d.querySelector("a").onclick = () => note("MODIFY DSP CAPACITY");
       sch.appendChild(d);
@@ -356,7 +366,7 @@
       if (!s.el) continue;
       s.el.classList.toggle("open", s.open);
       s.el.querySelector(".rowData").style.display = s.open ? "" : "none";
-      s.el.querySelector(".nConf").textContent = s.rows.length;
+      s.el.querySelector(".nConf").textContent = s.routes ? Object.values(s.routes).reduce((x, y) => x + y, 0) : s.rows.length;
       s.el.querySelector(".nRos").textContent = s.rows.filter((r) => r.saved).length;
       drawRows(s);
     }

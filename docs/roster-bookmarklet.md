@@ -219,3 +219,16 @@ EDV service first:
    else (EDV drivers are "already on Amazon").
 "Skip EDV — fill Standard Parcel" goes straight to Standard Parcel; list drivers are then kept off it
 while the EDV service has an empty row. Mock: `tests/roster_mock/seed-edv.js` + `scheduling-legacy.html?set=edv`.
+
+## Routes Amazon moved to another time (Jose 2026-11-24)
+
+When a day is rostered early and Amazon later moves a route to another start time, the rostered row
+stays at the old time ("Over assigned" in the week view) and an empty row shows at the new one: more
+rows than routes (Wed Nov 25: 41 rows, 38 routes). So the bookmark counts routes from Amazon's own
+numbers, not rows: each service header's "N Confirmed" for the Live board check, and the "Confirmed
+Routes" list (one `.schedule` per start time with its route count) per start time (`readCaps`; used only
+when it adds up to the Confirmed number, else every row counts as before). At a start time holding more
+drivers than routes, the extra drivers (someone the Live board has at another time first, then the last
+rows) leave: their old row is emptied and they go into a free row at their own Live board time, else the
+nearest one (the Live board follows, like any move). If the new row won't take them they're put back.
+Mock: `scheduling-legacy.html?set=edv&moved=1` with `seed-edv.js` (Rita Reg 10:25 → 11:05).
