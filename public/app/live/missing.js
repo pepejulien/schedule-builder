@@ -14,10 +14,12 @@ const ROUTES_URL = '/routes/';
 const dayName = (iso) => parseISODate(iso).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 const shift = (cell) => (/Backup/.test(cell) ? `${cell.replace(/ Backup$/, '')} backup` : cell === 'Dispatch' ? 'dispatch' : `${cell} route`);
 
-export function MissingCheck({ week, missing }) {
+// hideWorked: the "Worked, but…" list is hidden on this screen; onHide: its Hide button (owner + HR,
+// alert-cards.js) — the open questions above it always show
+export function MissingCheck({ week, missing, hideWorked, onHide }) {
   const [busy, setBusy] = useState('');
   const open = (missing || []).filter((m) => !m.answer);
-  const worked = (missing || []).filter((m) => m.answer === 'worked');
+  const worked = hideWorked ? [] : (missing || []).filter((m) => m.answer === 'worked');
   if (!open.length && !worked.length) return '';
   const answer = async (m, a, excused) => {
     setBusy(m.date + m.name);
@@ -42,7 +44,9 @@ export function MissingCheck({ week, missing }) {
       </div>
     </div>`)}` : ''}
     ${worked.length ? html`<div class="ms-worked-list">
-      <b>Worked, but the out time is missing in Route Tracker:</b>
+      <div class="ms-top"><b>Worked, but the out time is missing in Route Tracker:</b>
+        ${onHide ? html`<button class="link ms-hide" title="Hide this card on your screen — it comes back when a new one shows up"
+          onClick=${onHide}>Hide</button>` : ''}</div>
       ${worked.map((m) => html`<div class="ms-row">
         <div class="ms-who">${m.name} <span class="muted">· ${dayName(m.date)} — ${m.auto ? 'on a route, no out time entered' : `answered by ${m.by || '—'}`};
           counted as ${m.hours}h until it's in</span></div>

@@ -58,6 +58,12 @@ export function whoAmI() {
   return me ? (me.name || window.JAJB.user()?.email || '') : null;
 }
 
+// The Live board's Hide button on the Route Tracker alert cards (2026-11-25): the owner and HR
+// logins only (the hub's own checks: isOwner, apps.hr). The login's uid keeps each one's own.
+export const canHideAlerts = () => onFirebase() && !!window.JAJB.user()
+  && (!!(window.JAJB.isOwner && window.JAJB.isOwner()) || window.JAJB.has('hr'));
+export const myUid = () => (onFirebase() && window.JAJB.user()?.uid) || '';
+
 // ----------------------------------------------------------------- settings --
 // The keys the app has always used, and where each lives in Firestore.
 const FB_DOCS = {

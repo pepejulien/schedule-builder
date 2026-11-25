@@ -3,11 +3,14 @@
 // blank days by itself; these need a person. The rows come from limits.js rtMismatches().
 import { html } from '../preact-setup.js';
 
-export function RtCheck({ rows, onOpen }) {
+// onHide: the Hide button (owner + HR, alert-cards.js)
+export function RtCheck({ rows, onOpen, onHide }) {
   if (!(rows || []).length) return '';
   return html`<div class="card ms-card">
     <div class="ms-head">
-      <b>Route Tracker and the schedule don't match (${rows.length})</b>
+      <div class="ms-top"><b>Route Tracker and the schedule don't match (${rows.length})</b>
+        ${onHide ? html`<button class="link ms-hide" title="Hide this card on your screen — it comes back when a new one shows up"
+          onClick=${onHide}>Hide</button>` : ''}</div>
       <div class="muted">Route Tracker shows what really happened. Fix the schedule or Route Tracker so they agree.</div>
     </div>
     ${rows.map((r) => html`<div class="ms-row">

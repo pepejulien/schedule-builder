@@ -19,9 +19,8 @@ import { canLive, liveWeeks, liveWeek, watchLiveWeek, watchLiveLog, watchActualH
 import { lockOf, lockTip } from '../lib/locks.js';
 import { certIndex, canDrive, certLabel } from '../lib/van-certs.js';
 import { inactiveIndex, isWorkCell, leftTip } from '../lib/inactive.js';
-import { MissingCheck } from './missing.js';
+import { AlertCards } from './alert-cards.js';
 import { routeDays, backupDays, rtMismatches, rtBackupShown } from './limits.js';
-import { RtCheck } from './rt-check.js';
 import { HoursCheck } from './hours-check.js';
 import { driverCsv } from '../lib/driver-csv.js';
 import { parseISODate, weekLabel } from '../lib/weeks.js';
@@ -1532,8 +1531,9 @@ function Board() {
   return html`<div>
     ${eng.status === 'error' ? html`<${Banner} kind="err">The rules engine didn't load: ${eng.error}
       <div><button class="small" onClick=${() => openWeek(sel)}>Try again</button></div><//>` : ''}
-    <${MissingCheck} week=${sel} missing=${missingDays(data.summary, actList, confirms, today)} />
-    <${RtCheck} rows=${rtMismatches(view, actList, today)} onOpen=${(c) => { setPop(null); setCell(c); }} />
+    <${AlertCards} week=${sel} missing=${missingDays(data.summary, actList, confirms, today)}
+      rows=${rtMismatches(view, actList, today)} onOpen=${(c) => { setPop(null); setCell(c); }}
+      loaded=${'cur' in actDocs && 'prev' in actDocs} />
     <${HoursCheck} view=${view} viewRT=${viewRT} />
 
     <div class="card" id="lv-gridcard">

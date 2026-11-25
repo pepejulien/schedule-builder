@@ -682,6 +682,10 @@ table.lv-grid { font-size: 12.5px; }
 .ms-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ms-worked { background: var(--accent-bg); }
 .ms-worked-list { margin-top: 10px; font-size: 14px; }
+/* the Hide button (owner + HR, 2026-11-25) in a card's top-right, and "Show hidden (N)" */
+.ms-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+button.ms-hide { flex-shrink: 0; font-size: 13px; }
+button.ms-showhidden { display: block; margin: 0 0 10px; font-size: 13px; font-weight: 500; color: var(--ink2); }
 .btnlink { display: inline-block; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; text-decoration: none; }
 
 /* ---- Drivers page (standing preferences) ---- */
