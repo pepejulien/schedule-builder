@@ -99,8 +99,10 @@ export function editRequest(op, payload, slot = 'build') {
       if (e.data && e.data.type === 'edit-result' && e.data.id === id) finish(e.data);
     };
     w.addEventListener('message', handler);
-    // opening a week may first have to load the engine (slow on a cold start)
-    const wait = op === 'load_state' ? LOAD_TIMEOUT_MS : EDIT_TIMEOUT_MS;
+    // opening a week may first have to load the engine (slow on a cold start).
+    // Live board calls get the long wait too (2026-11-25): on the slow dispatch computer the roster
+    // bookmark's roster_apply missed 30 s while Amazon's page was busy ("Donald … NOT changed").
+    const wait = op === 'load_state' || slot === 'live' ? LOAD_TIMEOUT_MS : EDIT_TIMEOUT_MS;
     timer = setTimeout(() => finish({ ok: false, error: {
       kind: 'timeout', message: 'The engine did not answer in time. Try again, or reload the page.' } }), wait);
     // the engine's "today" is this computer's date (Pyodide's own clock can be UTC = tomorrow at night) (2026-10-08)

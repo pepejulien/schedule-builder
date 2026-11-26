@@ -274,6 +274,12 @@
     }
     return m;
   }
+  // takenNow().get(id) for one driver, cheap (2026-11-25): a plain look at every box's value first;
+  // the full read (styles + Amazon's route counts, slow on the dispatch computer) only on a match
+  function takenOne(id) {
+    const hit = [...document.querySelectorAll("#confirmedServiceRequestSection " + SEL)].some((s) => s.value === id);
+    return hit ? takenNow().get(id) : undefined;
+  }
 
   const norm = (s) => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
     .replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
@@ -392,7 +398,7 @@
         clearBtns();
         say(`${warn}<p class="bad">Didn't hear back from the Live board. If its window is open and signed in, try again.</p>`);
         btn("Try again", () => { if (open()) waiting(); else blocked(); });
-      }, 90000);
+      }, 180000);            // 3 min: the slow dispatch computer (2026-11-25)
     };
     const blocked = () => {
       clearBtns();
@@ -542,7 +548,7 @@
       if (ap.my !== runId || ap.res) return;
       stopWith("No answer from the Live board window. Check the Live board, then click the bookmark again.");
       btn("Start over", run, true);
-    }, 90000);
+    }, 180000);            // 3 min: the slow dispatch computer (2026-11-25)
   }
   function onApplied(e) {
     const d = e.data;
@@ -975,7 +981,7 @@
     if (sel.disabled) return { ok: false, why: "Amazon has that row locked", rowBad: true };
     const o = [...sel.options].find((x) => x.value === opt.value);
     if (!o) return { ok: false, why: "not in Amazon's list for that row" };
-    const other = takenNow().get(opt.value);
+    const other = takenOne(opt.value);
     if (other) return { ok: false, why: `Amazon now shows them on ${other.where}` };
     const back = was ? [...sel.options].find((x) => x.value === was) : null;
     const undo = () => (back ? setRow(row, back.index, () => sel.value === was) : emptyRow(row));
