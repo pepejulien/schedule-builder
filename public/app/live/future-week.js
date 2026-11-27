@@ -343,7 +343,7 @@ export function FutureWeek({ week, label }) {
     </div>
 
     <div class="fw-wrap" ref=${wrap}>
-      <div class="scroll-x lv-wrap" onScroll=${() => menu && setMenu(null)}><table class="lv-grid">
+      <div class="scroll-x lv-wrap" onScroll=${() => menu && setMenu(null)}><table class="lv-grid fw-grid">
         <thead><tr>
           <th class="lv-namecol">Driver</th>
           ${days.map((x) => html`<th class=${x.date === today ? 'today' : x.date < today ? 'past' : ''}>

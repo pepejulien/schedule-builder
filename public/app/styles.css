@@ -740,6 +740,10 @@ button.ms-showhidden { display: block; margin: 0 0 10px; font-size: 13px; font-w
 .fw-badge { vertical-align: middle; margin-left: 6px; }
 .fw-wrap { position: relative; }
 .fw-pref { font-size: 11.5px; font-weight: 500; color: var(--muted2); }
+/* the 7 days all the same width (2026-11-27): a long lock ("11:45 AM EDV Upgrade Meeting") wraps in its
+   cell instead of stretching that day's column */
+.fw-grid thead th:not(.lv-namecol) { width: 14%; }
+.fw-grid td.lv-cell { white-space: normal; }
 .lv-cell.fw-past { cursor: default; opacity: .55; }
 .lv-cell.fw-past:hover { outline: none; }
 .fw-menu { position: absolute; z-index: 40; max-width: calc(100% - 8px); background: var(--card); border: 1px solid var(--line);
