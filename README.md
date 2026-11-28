@@ -41,6 +41,10 @@
 > `saveScheduleOffer`, `closeScheduleOffer`, `watchOfferTakes`, `decideCounter`); the card hides itself when
 > the hub's `jajb.js` doesn't have them yet. Route counts never change. `app/live/offers.js` (+ the pure
 > `offers-model.js`); test: `node tests/offers_test.mjs`; the mock has them too (`JAJB.__mock.takeOffer` plays a driver).
+> **Past days (2026-11-27, card #2968):** an offer whose day is over (New York date, `todayNY`) is **expired** — status
+> `expired` (the hub's hourly sweep sets it, closedBy `auto (day passed)`, never deleted), or still `open` but dated
+> before today (`isExpired`). It shows a grey "expired" chip with its taken count, no Edit / Cancel / counter Yes-No,
+> no phone day dot, and is never in the Requests page's open list.
 
 > **Drivers' trades (2026-10-15, Firebase only; Driver App SPEC-v3, plan task 36):** a read-only **Trades** strip
 > under the VET / VTO strip lists the shown week's shift giveaways and trades drivers make in the Driver App

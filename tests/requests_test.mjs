@@ -114,6 +114,10 @@ eq('offerLine fcfs (offer count)', offerLine(offers[0]), '1 of 3 taken · open �
 eq('offerLine takes', offerLine(offers[0], [{ status: 'approved' }, { status: 'applied' }, { status: 'waiting' }]), '2 of 3 taken · open · first come');
 eq('offerLine window', offerLine(offers[1], []), '0 of 2 taken · open · picks at Fri 6 PM');
 eq('offerLine full / cancelled', [offerLine(offers[4]), offerLine(offers[2])], ['2 of 2 taken · full · first come', '0 of 1 taken · cancelled · first come']);
+// card #2968: a past day's open offer says expired; status expired is never in the open list
+eq('offerLine past day', [offerLine(offers[0], undefined, '2026-10-22'), offerLine(offers[0], undefined, '2026-10-21')],
+  ['1 of 3 taken · expired · first come', '1 of 3 taken · open · first come']);
+eq('expired offers are past', offerLists([{ ...offers[0], status: 'expired' }], T).closed.map((o) => o.id), ['a']);
 eq('takeTone', ['approved', 'applied', 'waiting', 'pending', 'refused', 'declined', 'x'].map((s) => takeTone({ status: s })),
   ['ok', 'ok', 'wait', 'wait', 'gray', 'gray', 'gray']);
 

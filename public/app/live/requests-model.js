@@ -147,12 +147,12 @@ export function conflictsOf(offByWeek, smByWeek, today, reviews) {
 
 // --- VET / VTO offers (schedule_offers rows as watchScheduleOffers(null) hands them over)
 
-// {open: not closed and dated today or later (earliest first), closed: closed or past (latest first)}
+// {open: not closed / expired and dated today or later (earliest first), closed: closed, expired or past (latest first)}
 export function offerLists(rows, today) {
   const open = [], closed = [];
   for (const o of rows || []) {
     if (!o) continue;
-    (o.status !== 'closed' && String(o.date || '') >= today ? open : closed).push(o);
+    (o.status !== 'closed' && o.status !== 'expired' && String(o.date || '') >= today ? open : closed).push(o);
   }
   const at = (a, b) => (Number(a.at) || 0) - (Number(b.at) || 0);
   open.sort((a, b) => String(a.date).localeCompare(String(b.date)) || at(a, b));
@@ -167,9 +167,10 @@ export function offerRole(o) {
 }
 
 // "2 of 3 taken · open · first come" / "0 of 1 taken · open · picks at Fri 6 PM" (takes as offerCounts reads them)
-export function offerLine(o, takes) {
+// today: a past day's open offer says expired (stripStatus)
+export function offerLine(o, takes, today) {
   const c = offerCounts(o, takes);
-  const st = stripStatus(o, c).word;
+  const st = stripStatus(o, c, today).word;
   const how = o.mode === 'window' ? (o.decideAt ? `picks at ${timeLabel(o.decideAt)}` : 'waits, then picks') : 'first come';
   return `${c.taken} of ${c.offered} taken · ${st} · ${how}`;
 }
@@ -223,7 +224,7 @@ export function driverMatch(name, driver) {
 }
 
 const PENDING = new Set(['waiting', 'pending']);   // a counter is a 'pending' take too
-const offerDone = (o, c) => o.status === 'closed' || o.status === 'filled' || (c.offered > 0 && c.taken >= c.offered);
+const offerDone = (o, c) => o.status === 'closed' || o.status === 'filled' || o.status === 'expired' || (c.offered > 0 && c.taken >= c.offered);
 
 // --- Day-off reviews (Driver App SPEC-v4, Jose 2026-10-19): a day off the Driver app refused (the day was
 // full, or requests closed) that the driver sent for review. timeoff_reviews rows as jajb.js

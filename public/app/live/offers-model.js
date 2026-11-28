@@ -3,7 +3,7 @@
 // words the card shows. No app imports, so node tests/offers_test.mjs can load it.
 //
 // schedule_offers/{id} as jajb.js watchScheduleOffers hands it over: {id, v, kind: vet|vto, week, date,
-// day, role (vet: road|backup), wave ('10:45 AM' | '' = any), slots, status: open|filled|closed, taken,
+// day, role (vet: road|backup), wave ('10:45 AM' | '' = any), slots, status: open|filled|closed|expired, taken,
 // audience: {tiers, maxWeekHours (older offers: under N h before the shift), maxAfterHours? (VET "no overtime": week hours
 // + this shift <= N), maxDays? (VET: N days or fewer this week before this shift)}, mode: fcfs|window, windowHours, decideAt (ms), priority, note, by,
 // at (ms), closedBy?, closedAt?, editedBy?, editedAt? (ms)}. status closed = cancelled ("Cancel offer",
@@ -175,6 +175,15 @@ export function upcomingGroups(rows, today, dates, withCancelled = false) {
 
 // status closed = cancelled
 export const isCancelled = (o) => !!o && o.status === 'closed';
+
+// Past days (team idea, card #2968, 2026-11-27): an offer whose day is over can't be taken any more. The hub's
+// hourly sweep marks it status expired (closedBy 'auto (day passed)'; never deleted); until it runs, an open
+// one dated before today counts as expired too. today = 'YYYY-MM-DD' (left out: only the status counts).
+// The station's today (New York), whatever this computer's clock says.
+export const todayNY = (ms = Date.now()) => new Intl.DateTimeFormat('en-CA',
+  { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+export const isExpired = (o, today) => !!o && (o.status === 'expired'
+  || (!!today && o.status === 'open' && /^\d{4}-\d{2}-\d{2}$/.test(String(o.date || '')) && o.date < today));
 // offers -> {live (not cancelled), cancelled}, order kept
 export function splitCancelled(offers) {
   const live = [], cancelled = [];
@@ -315,10 +324,12 @@ export function offerCounts(o, takes) {
 // "3 offered · 1 approved · 1 waiting" ("· 0 waiting" left out); same word as the day headers
 export const countsLabel = (c) => `${c.offered} offered · ${c.taken} approved${c.waiting ? ` · ${c.waiting} waiting` : ''}`;
 
-// The strip's chip: {word, chip}: cancelled (grey), full (grey: filled, or every spot taken), else open (green).
-export function stripStatus(o, c) {
+// The strip's chip: {word, chip}: cancelled (grey), full (grey: filled, or every spot taken), expired (grey: the day
+// passed, isExpired), else open (green).
+export function stripStatus(o, c, today) {
   if (o.status === 'closed') return { word: 'cancelled', chip: 'gray' };
   if (o.status === 'filled' || (c && c.offered > 0 && c.taken >= c.offered)) return { word: 'full', chip: 'gray' };
+  if (isExpired(o, today)) return { word: 'expired', chip: 'gray' };
   return { word: 'open', chip: 'green' };
 }
 
@@ -347,5 +358,6 @@ export function daySummary(rows, date, takesById) {
 // "VET 3 · 1 approved" / "VTO 2 · 2 approved · 1 waiting"
 export const daySummaryLabel = (s) => `${s.kind === 'vto' ? 'VTO' : 'VET'} ${s.offered} · ${s.approved} approved${s.waiting ? ` · ${s.waiting} waiting` : ''}`;
 
-// The phone's day pills: a dot when that date has an open offer.
-export const hasOpenOffer = (rows, date) => (rows || []).some((o) => o && o.date === date && o.status === 'open');
+// The phone's day pills: a dot when that date has an open offer (none on a past day when today is given).
+export const hasOpenOffer = (rows, date, today) => (rows || []).some((o) => o && o.date === date && o.status === 'open'
+  && !isExpired(o, today));

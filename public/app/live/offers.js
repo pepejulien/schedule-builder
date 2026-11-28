@@ -14,7 +14,7 @@ import { toISODate } from '../lib/weeks.js';
 import {
   TIERS, defaultForm, offerDays, offerWaves, buildOfferFields, takeStatus, timeLabel, dayLabel,
   dayOffers, upcomingGroups, stripHead, offerCounts, countsLabel, stripStatus, daySummary, daySummaryLabel, hasOpenOffer,
-  isCancelled, cancelledToggle, canDelete, deleteBlocked, cancelConfirm, deleteConfirm, postedLine, editForm, buildEditFields,
+  isCancelled, isExpired, todayNY, cancelledToggle, canDelete, deleteBlocked, cancelConfirm, deleteConfirm, postedLine, editForm, buildEditFields,
   previewFields, previewLabel, daysHint, offerSummary, audienceLines, driverLine,
 } from './offers-model.js';
 import { offerRole, offerLine, takeTone } from './requests-model.js';
@@ -83,7 +83,7 @@ export function OfferDayLine({ date, onPick }) {
 // The phone's day pill dot: that date has an open offer.
 export function OfferDot({ date }) {
   const rows = useOffers();
-  return hasOpenOffer(rows, date) ? html`<i class="of-dot" aria-label="Open VET / VTO"></i>` : '';
+  return hasOpenOffer(rows, date, todayNY()) ? html`<i class="of-dot" aria-label="Open VET / VTO"></i>` : '';
 }
 
 function TierChecks({ list, onChange, name, disabled }) {
@@ -319,7 +319,7 @@ function TakesList({ o, takes }) {
       <b>${t.name || t.tid}</b>
       <span class="muted">${timeLabel(t.at)}</span>
       <span>${st.text}</span>
-      ${st.ask && canDecideCounter() && !isCancelled(o) ? html`
+      ${st.ask && canDecideCounter() && !isCancelled(o) && !isExpired(o, todayNY()) ? html`
         <button class="small" disabled=${!!busy} onClick=${() => answer(t, true)}>Yes</button>
         <button class="small" disabled=${!!busy} onClick=${() => answer(t, false)}>No</button>` : ''}
     </li>`;
@@ -337,10 +337,12 @@ export function OfferRow({ o, look = 'strip', expanded, onToggle, uid = 'r' }) {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const c = offerCounts(o, takes);
-  const st = stripStatus(o, c);
+  const today = todayNY();
+  const st = stripStatus(o, c, today);
   const cancelled = isCancelled(o);
+  const expired = isExpired(o, today);           // the day passed: kept as the record, nothing to cancel
   const can = canEditOffers();
-  const canEdit = can && !cancelled && String(o.date || '') >= toISODate(new Date());
+  const canEdit = can && !cancelled && !expired && String(o.date || '') >= toISODate(new Date());
   const del = can && canDelete(o, takes);
   const kept = cancelled ? deleteBlocked(o, takes) : '';
 
@@ -369,7 +371,7 @@ export function OfferRow({ o, look = 'strip', expanded, onToggle, uid = 'r' }) {
     ${kept ? html`<div class="muted">${kept}</div>` : ''}
     ${editing ? html`<div class="of-strip-form"><${OfferForm} offer=${o} uid=${uid + '-' + o.id}
       onDone=${() => setEditing(false)} onCancel=${() => setEditing(false)} /></div>`
-      : !cancelled ? html`<div class="row">
+      : !cancelled && !expired ? html`<div class="row">
         ${canEdit ? html`<button class="small" disabled=${busy} onClick=${() => setEditing(true)}>Edit…</button>` : ''}
         <button class="small" disabled=${busy} onClick=${cancel}>Cancel offer</button></div>` : ''}
   </div>` : '';
@@ -379,7 +381,7 @@ export function OfferRow({ o, look = 'strip', expanded, onToggle, uid = 'r' }) {
       <div class="rq-of1"><button class="link rq-oftog" aria-expanded=${expanded} onClick=${onToggle}>${arrow}
         <span class=${'chip ' + (o.kind === 'vto' ? 'amber' : 'green')}>${o.kind === 'vto' ? 'VTO' : 'VET'}</span>
         <b>${dayLabel(o.date)}</b><span>${offerRole(o)}</span></button>${delBtn}</div>
-      <div class="muted rq-of2">${offerLine(o, takes)}</div>
+      <div class="muted rq-of2">${offerLine(o, takes, today)}</div>
       ${!expanded && Array.isArray(takes) && takes.length ? html`<div class="rq-of3">${takes.map((t, i) => html`${i ? ' · ' : ''}<span class="rq-taker">${t.name || t.tid}${' '}<span
         class=${'rq-tk ' + takeTone(t)}>${lc1(takeStatus(t, o).text)}</span></span>`)}</div>` : ''}
       ${more}

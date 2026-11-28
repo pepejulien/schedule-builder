@@ -3,7 +3,7 @@
 import {
   TIERS, defaultForm, dayLabel, timeLabel, offerDays, offerWaves, buildOfferFields, offerWhat, offerLabel,
   takeStatus, whyText, dayOffers, upcomingGroups, headCounts, daySummary, daySummaryLabel, hasOpenOffer, stripHead, offerCounts, countsLabel, stripStatus,
-  isCancelled, splitCancelled, cancelledToggle, canDelete, deleteBlocked, cancelConfirm, deleteConfirm, postedLine, editForm,
+  isCancelled, isExpired, todayNY, splitCancelled, cancelledToggle, canDelete, deleteBlocked, cancelConfirm, deleteConfirm, postedLine, editForm,
   buildEditFields, previewFields, previewLabel, daysHint, offerSummary, audienceLines, driverLine,
 } from '../public/app/live/offers-model.js';
 
@@ -251,6 +251,18 @@ eq('daySummary none', daySummary(null, '2026-10-13'), []);
 eq('daySummaryLabel', daySummaryLabel({ kind: 'vet', offered: 3, approved: 1, waiting: 0 }), 'VET 3 · 1 approved');
 eq('daySummaryLabel waiting', daySummaryLabel({ kind: 'vto', offered: 2, approved: 2, waiting: 1 }), 'VTO 2 · 2 approved · 1 waiting');
 eq('hasOpenOffer', [hasOpenOffer(hdr, '2026-10-13'), hasOpenOffer(hdr, '2026-10-14'), hasOpenOffer(null, '2026-10-13')], [true, false, false]);
+
+// --- past days (card #2968): a past day's open offer is expired — no dot, grey chip; filled / cancelled keep their word
+eq('hasOpenOffer past day', [hasOpenOffer(hdr, '2026-10-13', '2026-10-14'), hasOpenOffer(hdr, '2026-10-13', '2026-10-13')], [false, true]);
+eq('isExpired', [isExpired({ status: 'expired', date: '2026-10-20' }, '2026-10-14'), isExpired({ status: 'open', date: '2026-10-13' }, '2026-10-14'),
+  isExpired({ status: 'open', date: '2026-10-14' }, '2026-10-14'), isExpired({ status: 'filled', date: '2026-10-13' }, '2026-10-14'),
+  isExpired({ status: 'open', date: '2026-10-13' }), isExpired({ status: 'open' }, '2026-10-14')], [true, true, false, false, false, false]);
+eq('stripStatus expired', [stripStatus({ status: 'open', date: '2026-10-13' }, { offered: 2, taken: 1 }, '2026-10-14'),
+  stripStatus({ status: 'expired', date: '2026-10-13' }, { offered: 2, taken: 0 })], [{ word: 'expired', chip: 'gray' }, { word: 'expired', chip: 'gray' }]);
+eq('stripStatus past but full / cancelled', [stripStatus({ status: 'filled', date: '2026-10-13' }, { offered: 1, taken: 1 }, '2026-10-14').word,
+  stripStatus({ status: 'closed', date: '2026-10-13' }, { offered: 1, taken: 0 }, '2026-10-14').word], ['full', 'cancelled']);
+eq('stripStatus today stays open', stripStatus({ status: 'open', date: '2026-10-14' }, { offered: 2, taken: 1 }, '2026-10-14').word, 'open');
+eq('todayNY', [todayNY(Date.UTC(2026, 10, 27, 3, 0)), todayNY(Date.UTC(2026, 10, 27, 6, 0))], ['2026-11-26', '2026-11-27']);
 
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { for (const f of fails) console.log('FAIL ' + f); process.exit(1); }
